@@ -94,4 +94,15 @@ lazy_static! {
         "基尼奇",
         "希诺宁",
     ]);
+
+    // OCR 常见误识别别名 -> 规范中文名映射
+    pub static ref CHARACTER_ALIASES: std::collections::HashMap<&'static str, &'static str> = {
+        use std::collections::HashMap;
+        let mut m = HashMap::new();
+        // 常见 OCR 错误映射（把错误识别的名字映射到规范名字）
+        m.insert("柯菜", "柯莱");
+        // 在这里可以继续添加更多别名映射，例如：
+        // m.insert("某错识别", "规范名");
+        m
+    };
 }
