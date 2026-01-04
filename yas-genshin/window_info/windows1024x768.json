@@ -1,0 +1,160 @@
+{
+    "current_resolution": {
+        "width": 1024,
+        "height": 768
+    },
+    "platform": "Windows",
+    "ui": "Desktop",
+    "data": {
+        "genshin_artifact_offset": {
+            "Size": {
+                "width": 0,
+                "height": 31.2
+            }
+        },
+        "genshin_repository_panel_rect": {
+            "Rect": {
+                "top": 64.0,
+                "left": 697.6,
+                "width": 262.4,
+                "height": 640.0
+            }
+        },
+        "genshin_repository_flag_pos": {
+            "Pos": {
+                "x": 174.5,
+                "y": 57.7
+            }
+        },
+        "genshin_repository_item_gap_size": {
+            "Size": {
+                "width": 12.0,
+                "height": 12.0
+            }
+        },
+        "genshin_repository_item_size": {
+            "Size": {
+                "width": 65.6,
+                "height": 80.8
+            }
+        },
+        "genshin_repository_scan_margin_pos": {
+            "Pos": {
+                "x": 63.2,
+                "y": 64.8
+            }
+        },
+        "genshin_repository_pool_rect": {
+            "Rect": {
+                "top": 74.6,
+                "left": 730.2,
+                "width": 12.0,
+                "height": 255.4
+            }
+        },
+        "genshin_repository_item_row": {
+            "InvariantInt": 7
+        },
+        "genshin_repository_item_col": {
+            "InvariantInt": 8
+        },
+        "genshin_repository_lock_pos": {
+            "Pos": {
+                "x": 7.2,
+                "y": 8.0
+            }
+        },
+        "genshin_artifact_item_count_rect": {
+            "Rect": {
+                "top": 18.3,
+                "left": 846.9,
+                "height": 14.8,
+                "width": 115.0
+            }
+        },
+        "genshin_artifact_star_pos": {
+            "Pos": {
+                "x": 940.3,
+                "y": 76.6
+            }
+        },
+        "genshin_artifact_lock_pos": {
+            "Pos": {
+                "x": 928.0,
+                "y": 228.8
+            }
+        },
+        "genshin_artifact_main_stat_name_rect": {
+            "Rect": {
+                "top": 144.8,
+                "left": 711.6,
+                "height": 15.0,
+                "width": 86.8
+            }
+        },
+        "genshin_artifact_main_stat_value_rect": {
+            "Rect": {
+                "top": 159.8,
+                "left": 711.6,
+                "height": 26.9,
+                "width": 86.8
+            }
+        },
+        "genshin_artifact_level_rect": {
+            "Rect": {
+                "top": 230.4,
+                "left": 715.2,
+                "height": 11.2,
+                "width": 26.4
+            }
+        },
+        "genshin_artifact_item_equip_rect": {
+            "Rect": {
+                "top": 679.8,
+                "left": 739.5,
+                "height": 16.2,
+                "width": 133.1
+            }
+        },
+        "genshin_artifact_sub_stat1_rect": {
+            "Rect": {
+                "top": 254.6,
+                "left": 723.4,
+                "height": 19.3,
+                "width": 157.0
+            }
+        },
+        "genshin_artifact_sub_stat2_rect": {
+            "Rect": {
+                "top": 273.8,
+                "left": 723.4,
+                "height": 21.7,
+                "width": 157.0
+            }
+        },
+        "genshin_artifact_sub_stat3_rect": {
+            "Rect": {
+                "top": 295.5,
+                "left": 723.4,
+                "height": 20.7,
+                "width": 157.0
+            }
+        },
+        "genshin_artifact_sub_stat4_rect": {
+            "Rect": {
+                "top": 316.2,
+                "left": 723.4,
+                "height": 20.2,
+                "width": 157.0
+            }
+        },
+        "genshin_artifact_title_rect": {
+            "Rect": {
+                "top": 68.0,
+                "left": 711.6,
+                "height": 21.4,
+                "width": 164.2
+            }
+        }
+    }
+}
