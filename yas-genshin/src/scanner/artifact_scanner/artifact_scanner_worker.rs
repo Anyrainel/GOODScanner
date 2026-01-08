@@ -1,10 +1,3 @@
-/// 去除副词条中的“（”及其后内容
-fn clean_stat_text(s: &str) -> String {
-    match s.find('（') {
-        Some(idx) => s[..idx].trim_end().to_string(),
-        None => s.trim().to_string(),
-    }
-}
 use std::collections::{HashSet, BTreeMap};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread::JoinHandle;
@@ -27,54 +20,6 @@ use crate::scanner::artifact_scanner::artifact_scanner_window_info::ArtifactScan
 use crate::scanner::artifact_scanner::GenshinArtifactScannerConfig;
 use crate::scanner::artifact_scanner::message_items::SendItem;
 use crate::scanner::artifact_scanner::scan_result::GenshinArtifactScanResult;
-
-fn parse_level(s: &str) -> Result<i32> {
-    // 自动容错：将 o/O 替换为 0，只保留数字和正负号
-    let replaced = s.replace(['o', 'O'], "0");
-    let cleaned: String = replaced.chars().filter(|c| c.is_ascii_digit() || *c == '-' || *c == '+').collect();
-    let cleaned = cleaned.trim_start_matches('+');
-    if cleaned.is_empty() {
-        return Ok(0);
-    }
-    match cleaned.parse::<i32>() {
-        Ok(level) => Ok(level),
-        Err(e) => {
-            log::warn!("parse_level 解析失败: 原始内容='{}', o/O->0后='{}', 错误: {}，自动返回0", s, cleaned, e);
-            Ok(0)
-        }
-    }
-}
-
-fn get_image_to_text(backend: &str) -> Result<Box<dyn ImageToText<RgbImage> + Send + Sync>> {
-    match backend.to_lowercase().as_str() {
-        "paddle" | "ppocrv5" => {
-            // PaddleOCR v5模型，内嵌模型和字典
-            let model_bytes = include_bytes!("./models/PP-OCRv5_mobile_rec.onnx");
-            let dict_str = include_str!("./models/ppocrv5_dict.txt");
-            let mut dict_vec: Vec<String> = dict_str.lines().map(|l| l.trim().to_string()).collect();
-            // PaddleOCR 字典需要在末尾添加空格字符
-            dict_vec.push(String::from(" "));
-            let model = PPOCRModel::new(model_bytes, dict_vec)?;
-            Ok(Box::new(model))
-        },
-        "paddlev3" | "ppocrv3" => {
-            // PaddleOCR v3模型，内嵌模型和字典
-            let model_bytes = include_bytes!("./models/ch_PP-OCRv3_rec_infer.onnx");
-            let dict_str = include_str!("./models/ppocr_keys_v1.txt");
-            let mut dict_vec: Vec<String> = dict_str.lines().map(|l| l.trim().to_string()).collect();
-            // PaddleOCR 字典需要在末尾添加空格字符
-            dict_vec.push(String::from(" "));
-            let model = PPOCRModel::new(model_bytes, dict_vec)?;
-            Ok(Box::new(model))
-        },
-        _ => {
-            let model: Box<dyn ImageToText<RgbImage> + Send + Sync> = Box::new(
-                yas_ocr_model!("./models/model_training.onnx", "./models/index_2_word.json")?
-            );
-            Ok(model)
-        }
-    }
-}
 
 /// Save image for debugging purposes
 fn save_debug_image(image: &RgbImage, artifact_index: usize, region_tag: &str) -> Result<()> {
@@ -132,11 +77,37 @@ impl ArtifactScannerWorker {
             }
         }
     }
+
+    fn parse_level(s: &str) -> Result<i32> {
+        // 自动容错：将 o/O 替换为 0，只保留数字和正负号
+        let replaced = s.replace(['o', 'O'], "0");
+        let cleaned: String = replaced.chars().filter(|c| c.is_ascii_digit() || *c == '-' || *c == '+').collect();
+        let cleaned = cleaned.trim_start_matches('+');
+        if cleaned.is_empty() {
+            return Ok(0);
+        }
+        match cleaned.parse::<i32>() {
+            Ok(level) => Ok(level),
+            Err(e) => {
+                log::warn!("parse_level 解析失败: 原始内容='{}', o/O->0后='{}', 错误: {}，自动返回0", s, cleaned, e);
+                Ok(0)
+            }
+        }
+    }
+
+    /// 处理词条文本，去除“（”及其后内容，如果包含“（”则视为包含预览词条，标记为 true
+    fn process_stat_text(s: &str) -> (String, bool) {
+        match s.find('（') {
+            Some(idx) => (s[..idx].trim_end().to_string(), true),
+            None => (s.trim().to_string(), false),
+        }
+    }
+
     pub fn new(
         window_info: ArtifactScannerWindowInfo,
         config: GenshinArtifactScannerConfig,
     ) -> Result<Self> {
-        let model = get_image_to_text(&config.ocr_backend)?;
+        let model = Self::get_model_for_backend(&config.ocr_backend)?;
         
         // paddle_model 用于 title 识别,始终加载以确保 title 使用 PaddleOCR v5
         let paddle_model = Some(Self::get_model_for_backend("paddle")?);
@@ -314,10 +285,18 @@ impl ArtifactScannerWorker {
         let sub_stat_4_rect = self.window_info.sub_stat_4.translate(Pos { x: 0.0, y: shift_offset });
         let level_rect = self.window_info.level_rect.translate(Pos { x: 0.0, y: shift_offset });
         
-        let str_sub_stat0 = clean_stat_text(&self.model_inference(sub_stat_1_rect, image, artifact_index, "substat1")?);
-        let str_sub_stat1 = clean_stat_text(&self.model_inference(sub_stat_2_rect, image, artifact_index, "substat2")?);
+        let mut has_unactivated = false;
 
-        let str_sub_stat3 = if !self.config.substat4_ocr_backend.is_empty() {
+        let (str_sub_stat0, u0) = Self::process_stat_text(&self.model_inference(sub_stat_1_rect, image, artifact_index, "substat1")?);
+        has_unactivated |= u0;
+
+        let (str_sub_stat1, u1) = Self::process_stat_text(&self.model_inference(sub_stat_2_rect, image, artifact_index, "substat2")?);
+        has_unactivated |= u1;
+
+        let (str_sub_stat2, u2) = Self::process_stat_text(&self.model_inference(sub_stat_3_rect, image, artifact_index, "substat3")?);
+        has_unactivated |= u2;
+
+        let (str_sub_stat3, u3) = if !self.config.substat4_ocr_backend.is_empty() {
             let backend = self.config.substat4_ocr_backend.to_lowercase();
             let model: &Box<dyn ImageToText<RgbImage> + Send + Sync> = match backend.as_str() {
                 "paddle" | "ppocrv5" => self.paddle_model.as_ref().expect("paddle_model should be initialized"),
@@ -340,12 +319,13 @@ impl ArtifactScannerWorker {
             }
             
             let raw = model.image_to_text(&raw_img, false)?;
-            clean_stat_text(&raw)
+            Self::process_stat_text(&raw)
         } else {
             let raw = self.model_inference(sub_stat_4_rect, image, artifact_index, "substat4")?;
-            clean_stat_text(&raw)
+            Self::process_stat_text(&raw)
         };
-        let str_sub_stat2 = clean_stat_text(&self.model_inference(sub_stat_3_rect, image, artifact_index, "substat3")?);
+        has_unactivated |= u3;
+
         let str_level = self.model_inference(level_rect, image, artifact_index, "level")?;
         let str_equip = {
             // 使用 PaddleOCR v5 模型识别装备者，减少繁/简体和错字识别差异
@@ -381,7 +361,13 @@ impl ArtifactScannerWorker {
                 str_sub_stat2,
                 str_sub_stat3,
             ],
-            level: parse_level(&str_level)?,
+            level: {
+                let mut lv = Self::parse_level(&str_level)?;
+                if has_unactivated {
+                    lv = 4;
+                }
+                lv
+            },
             equip: str_equip,
             star: item.star as i32,
             lock,
