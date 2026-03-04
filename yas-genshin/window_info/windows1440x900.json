@@ -155,6 +155,164 @@
         "height": 30.1,
         "width": 268
       }
+    },
+
+    "genshin_weapon_title_rect": {
+      "Rect": {
+        "top": 106.6,
+        "left": 1000.6,
+        "height": 33.0,
+        "width": 275.3
+      }
+    },
+    "genshin_weapon_level_rect": {
+      "Rect": {
+        "top": 292.0,
+        "left": 1003.5,
+        "height": 28.0,
+        "width": 139.5
+      }
+    },
+    "genshin_weapon_refinement_rect": {
+      "Rect": {
+        "top": 332.0,
+        "left": 1003.5,
+        "height": 28.0,
+        "width": 99.0
+      }
+    },
+    "genshin_weapon_item_equip_rect": {
+      "Rect": {
+        "top": 762.6,
+        "left": 1039.4,
+        "height": 25.2,
+        "width": 219.2
+      }
+    },
+    "genshin_weapon_star_pos": {
+      "Pos": {
+        "x": 1322.5,
+        "y": 123.9
+      }
+    },
+    "genshin_weapon_item_count_rect": {
+      "Rect": {
+        "top": 27.1,
+        "left": 1183.4,
+        "height": 25.8,
+        "width": 170.8
+      }
+    },
+
+    "genshin_character_name_rect": {
+      "Rect": {
+        "top": 12.5,
+        "left": 95.7,
+        "height": 56.3,
+        "width": 309.4
+      }
+    },
+    "genshin_character_level_rect": {
+      "Rect": {
+        "top": 168.8,
+        "left": 1080.0,
+        "height": 35.0,
+        "width": 185.7
+      }
+    },
+    "genshin_character_tab_attributes_pos": {
+      "Pos": {
+        "x": 270.0,
+        "y": 62.5
+      }
+    },
+    "genshin_character_tab_constellation_pos": {
+      "Pos": {
+        "x": 540.0,
+        "y": 62.5
+      }
+    },
+    "genshin_character_tab_talents_pos": {
+      "Pos": {
+        "x": 675.0,
+        "y": 62.5
+      }
+    },
+    "genshin_character_constellation_1_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 225.0
+      }
+    },
+    "genshin_character_constellation_2_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 318.8
+      }
+    },
+    "genshin_character_constellation_3_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 412.5
+      }
+    },
+    "genshin_character_constellation_4_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 506.3
+      }
+    },
+    "genshin_character_constellation_5_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 600.0
+      }
+    },
+    "genshin_character_constellation_6_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 693.8
+      }
+    },
+    "genshin_character_constellation_activate_rect": {
+      "Rect": {
+        "top": 831.3,
+        "left": 78.8,
+        "height": 37.5,
+        "width": 33.8
+      }
+    },
+    "genshin_character_talent_auto_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 137.5
+      }
+    },
+    "genshin_character_talent_skill_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 212.5
+      }
+    },
+    "genshin_character_talent_burst_pos": {
+      "Pos": {
+        "x": 1271.2,
+        "y": 287.5
+      }
+    },
+    "genshin_character_talent_level_rect": {
+      "Rect": {
+        "top": 159.0,
+        "left": 0.5,
+        "height": 56.3,
+        "width": 421.9
+      }
+    },
+    "genshin_character_next_pos": {
+      "Pos": {
+        "x": 1406.2,
+        "y": 450.0
+      }
     }
   }
 }

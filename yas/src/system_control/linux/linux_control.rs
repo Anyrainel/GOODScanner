@@ -1,4 +1,4 @@
-use enigo::{Enigo, MouseButton, MouseControllable};
+use enigo::{Enigo, Key, KeyboardControllable, MouseButton, MouseControllable};
 
 pub struct LinuxControl {
     enigo: Enigo,
@@ -26,6 +26,11 @@ impl LinuxControl {
     pub fn mouse_scroll(&mut self, amount: i32, _try_find: bool) -> anyhow::Result<()> {
         self.enigo.mouse_scroll_y(amount);
 
+        anyhow::Ok(())
+    }
+
+    pub fn key_press(&mut self, key: Key) -> anyhow::Result<()> {
+        self.enigo.key_click(key);
         anyhow::Ok(())
     }
 }

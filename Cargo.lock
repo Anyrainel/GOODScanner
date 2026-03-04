@@ -4005,6 +4005,7 @@ dependencies = [
  "clap",
  "csv",
  "edit-distance",
+ "enigo",
  "env_logger",
  "image",
  "indicatif",

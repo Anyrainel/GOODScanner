@@ -1,10 +1,10 @@
 use clap::{command, Command};
 use yas::utils::press_any_key_to_continue;
-use yas_genshin::application::ArtifactScannerApplication;
+use yas_genshin::application::CombinedScannerApplication;
 use yas_starrail::application::RelicScannerApplication;
 
 fn get_genshin_command() -> Command {
-    let cmd = ArtifactScannerApplication::build_command();
+    let cmd = CombinedScannerApplication::build_command();
     cmd.name("genshin")
 }
 
@@ -28,7 +28,7 @@ pub fn main() {
 
     let res = if let Some((subcommand_name, matches)) = arg_matches.subcommand() {
         if subcommand_name == "genshin" {
-            let application = ArtifactScannerApplication::new(matches.clone());
+            let application = CombinedScannerApplication::new(matches.clone());
             application.run()
         } else if subcommand_name == "starrail" {
             let application = RelicScannerApplication::new(matches.clone());

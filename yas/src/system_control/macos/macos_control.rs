@@ -1,4 +1,4 @@
-use enigo::{Enigo, MouseControllable};
+use enigo::{Enigo, Key, KeyboardControllable, MouseControllable};
 
 use crate::system_control::system_control::SystemControl;
 use crate::utils;
@@ -61,5 +61,10 @@ impl MacOSControl {
     
     pub fn mac_scroll_slow(length: i32) {
         mac_scroll(length, 4, 5);
+    }
+
+    pub fn key_press(&mut self, key: Key) -> anyhow::Result<()> {
+        self.enigo.key_click(key);
+        anyhow::Ok(())
     }
 }

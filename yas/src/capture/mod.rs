@@ -23,8 +23,14 @@ pub use winapi_capturer::WinapiCapturer;
 pub use windows_capturer::WindowsCapturer;
 
 // linux
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "capturer_libwayshot"))]
 mod libwayshot_capturer;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "capturer_libwayshot"))]
 pub use libwayshot_capturer::LibwayshotCapturer;
+
+#[cfg(all(target_os = "linux", feature = "capturer_screenshots"))]
+mod screenshots_capturer;
+
+#[cfg(all(target_os = "linux", feature = "capturer_screenshots"))]
+pub use screenshots_capturer::ScreenshotsCapturer;

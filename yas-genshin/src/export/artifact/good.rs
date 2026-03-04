@@ -4,6 +4,10 @@ use serde::Serialize;
 use crate::artifact::{
     ArtifactSetName, ArtifactSlot, ArtifactStat, ArtifactStatName, GenshinArtifact,
 };
+use crate::character::GenshinCharacter;
+use crate::weapon::GenshinWeapon;
+use crate::weapon::weapon_name_to_good;
+use crate::character::zh_cn_to_good_key;
 
 struct GOODArtifact<'a> {
     artifact: &'a GenshinArtifact,
@@ -266,12 +270,79 @@ fn equip_from_zh_cn(equip: Option<&str>) -> &'static str {
     }
 }
 
+struct GOODCharacter<'a> {
+    character: &'a GenshinCharacter,
+}
+
+impl<'a> Serialize for GOODCharacter<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let c = &self.character;
+
+        let mut root = serializer.serialize_map(Some(5))?;
+        root.serialize_entry("key", &c.name)?;
+        root.serialize_entry("level", &c.level)?;
+        root.serialize_entry("constellation", &c.constellation)?;
+        root.serialize_entry("ascension", &c.ascension)?;
+
+        #[derive(Serialize)]
+        struct Talent {
+            auto: i32,
+            skill: i32,
+            burst: i32,
+        }
+        root.serialize_entry("talent", &Talent {
+            auto: c.talent_auto,
+            skill: c.talent_skill,
+            burst: c.talent_burst,
+        })?;
+        root.end()
+    }
+}
+
+struct GOODWeapon<'a> {
+    weapon: &'a GenshinWeapon,
+}
+
+impl<'a> Serialize for GOODWeapon<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let w = &self.weapon;
+
+        let mut root = serializer.serialize_map(Some(6))?;
+        root.serialize_entry("key", &w.name)?;
+        root.serialize_entry("level", &w.level)?;
+        root.serialize_entry("ascension", &w.ascension)?;
+        root.serialize_entry("refinement", &w.refinement)?;
+
+        let location = match &w.equip {
+            Some(name) => {
+                let good_key = zh_cn_to_good_key(name);
+                if good_key.is_empty() { "" } else { good_key }
+            },
+            None => "",
+        };
+        root.serialize_entry("location", location)?;
+        root.serialize_entry("lock", &w.lock)?;
+        root.end()
+    }
+}
+
 #[derive(Serialize)]
 pub struct GOODFormat<'a> {
     format: &'a str,
     version: u32,
     source: &'a str,
-    artifacts: Vec<GOODArtifact<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifacts: Option<Vec<GOODArtifact<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    characters: Option<Vec<GOODCharacter<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    weapons: Option<Vec<GOODWeapon<'a>>>,
 }
 
 impl<'a> GOODFormat<'a> {
@@ -284,7 +355,24 @@ impl<'a> GOODFormat<'a> {
             format: "GOOD",
             version: 1,
             source: "yas",
-            artifacts,
+            artifacts: Some(artifacts),
+            characters: None,
+            weapons: None,
+        }
+    }
+
+    pub fn new_v3(
+        artifacts: Option<&'a [GenshinArtifact]>,
+        characters: Option<&'a [GenshinCharacter]>,
+        weapons: Option<&'a [GenshinWeapon]>,
+    ) -> GOODFormat<'a> {
+        GOODFormat {
+            format: "GOOD",
+            version: 3,
+            source: "yas",
+            artifacts: artifacts.map(|a| a.iter().map(|artifact| GOODArtifact { artifact }).collect()),
+            characters: characters.map(|c| c.iter().map(|character| GOODCharacter { character }).collect()),
+            weapons: weapons.map(|w| w.iter().map(|weapon| GOODWeapon { weapon }).collect()),
         }
     }
 }

@@ -7,4 +7,5 @@ pub mod export;
 pub mod scanner;
 pub mod artifact;
 pub mod character;
+pub mod weapon;
 pub mod application;
