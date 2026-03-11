@@ -56,6 +56,48 @@ lazy_static! {
     static ref DOT_LETTER_REGEX: Regex = Regex::new(r"(\d+\.)([a-zA-Z])(\d*)").unwrap();
 }
 
+/// Pre-clean OCR text: normalize decimal separators, strip bullets, fix common errors.
+fn clean_ocr_text(text: &str) -> String {
+    let text = text
+        .replace(',', "")
+        .replace('\u{FF0E}', ".")
+        .replace('\u{3002}', ".")
+        .replace('\u{00B7}', ".")
+        .replace('\u{2022}', "")
+        .replace('\u{2027}', "");
+    let text = SPACE_DOT_REGEX.replace_all(&text, "${d1}.${d2}");
+    DOT_LETTER_REGEX.replace_all(&text, |caps: &regex::Captures| {
+        let prefix = &caps[1];
+        let letter = &caps[2];
+        let suffix = &caps[3];
+        let fixed = match letter {
+            "e" | "E" => "6",
+            "a" | "A" => "4",
+            "o" | "O" => "0",
+            "n" => "0",
+            "l" | "I" | "i" => "1",
+            "s" | "S" => "5",
+            "b" | "B" => "8",
+            "t" | "T" => "7",
+            "g" | "q" => "9",
+            "z" | "Z" => "2",
+            _ => letter,
+        };
+        format!("{}{}{}", prefix, fixed, suffix)
+    }).into_owned()
+}
+
+/// Try to extract a numeric value from text, with OCR digit fixup fallback.
+fn try_extract_value(text: &str) -> Option<f64> {
+    if let Some(caps) = NUM_REGEX.captures(text) {
+        if let Ok(v) = caps[1].parse::<f64>() {
+            return Some(v);
+        }
+    }
+    let fixed = fix_ocr_digits(text);
+    NUM_REGEX.captures(&fixed).and_then(|c| c[1].parse::<f64>().ok())
+}
+
 /// Artifact slot mapping: Chinese slot name → GOOD slot key
 pub const SLOT_KEY_MAP: &[(&str, &str)] = &[
     ("\u{751F}\u{4E4B}\u{82B1}", "flower"),  // 生之花
@@ -75,36 +117,7 @@ pub fn parse_stat_from_text(text: &str) -> Option<ParsedStat> {
         return None;
     }
 
-    // Pre-clean OCR text: normalize decimal separators, strip bullet chars
-    let text = text
-        .replace(',', "")
-        .replace('\u{FF0E}', ".") // fullwidth period ．→ ASCII .
-        .replace('\u{3002}', ".") // Chinese period 。→ ASCII .
-        .replace('\u{00B7}', ".") // middle dot · → ASCII .
-        .replace('\u{2022}', "")  // bullet •
-        .replace('\u{2027}', ""); // hyphenation point ‧
-    // Remove spaces around decimal points: "4 .7" or "4. 7" → "4.7"
-    let text = SPACE_DOT_REGEX.replace_all(&text, "${d1}.${d2}");
-    // Fix OCR-corrupted digits after decimal: "6.e%" → "6.6%", "10.a%" → "10.4%"
-    let text = DOT_LETTER_REGEX.replace_all(&text, |caps: &regex::Captures| {
-        let prefix = &caps[1]; // "6." or "10."
-        let letter = &caps[2]; // corrupted digit char
-        let suffix = &caps[3]; // trailing digits (usually empty)
-        let fixed = match letter {
-            "e" | "E" => "6",
-            "a" | "A" => "4",
-            "o" | "O" => "0",
-            "n" => "0",
-            "l" | "I" | "i" => "1",
-            "s" | "S" => "5",
-            "b" | "B" => "8",
-            "t" | "T" => "7",
-            "g" | "q" => "9",
-            "z" | "Z" => "2",
-            _ => letter,
-        };
-        format!("{}{}{}", prefix, fixed, suffix)
-    });
+    let text = clean_ocr_text(text);
     let text = text.trim();
 
     // Try direct match first
@@ -163,16 +176,7 @@ fn parse_stat_suffix(text: &str) -> Option<ParsedStat> {
         let is_inactive = text.contains("\u{5F85}\u{6FC0}\u{6D3B}"); // 待激活
         let has_percent = text.contains('%');
 
-        let value = if let Some(caps) = NUM_REGEX.captures(text) {
-            caps[1].parse::<f64>().unwrap_or(0.0)
-        } else {
-            let fixed = fix_ocr_digits(text);
-            if let Some(caps) = NUM_REGEX.captures(&fixed) {
-                caps[1].parse::<f64>().unwrap_or(0.0)
-            } else {
-                0.0
-            }
-        };
+        let value = try_extract_value(text).unwrap_or(0.0);
 
         let key = match entry {
             StatKeyEntry::Simple(k) => k.to_string(),
@@ -215,18 +219,7 @@ fn parse_stat_inner(text: &str) -> Option<ParsedStat> {
         let is_inactive = text.contains("\u{5F85}\u{6FC0}\u{6D3B}"); // 待激活
         let has_percent = text.contains('%');
 
-        // Extract numeric value, with OCR digit error correction
-        let value = if let Some(caps) = NUM_REGEX.captures(text) {
-            caps[1].parse::<f64>().unwrap_or(0.0)
-        } else {
-            // Try fixing OCR digit errors (n→0, a→4, etc.)
-            let fixed = fix_ocr_digits(text);
-            if let Some(caps) = NUM_REGEX.captures(&fixed) {
-                caps[1].parse::<f64>().unwrap_or(0.0)
-            } else {
-                0.0
-            }
-        };
+        let value = try_extract_value(text).unwrap_or(0.0);
 
         // Look up the key
         let key = STAT_KEY_ENTRIES
@@ -256,38 +249,8 @@ fn parse_stat_inner(text: &str) -> Option<ParsedStat> {
 /// Extract a numeric value from text, applying OCR digit fixups.
 /// Used for retry OCR on just the number portion of a substat line.
 pub fn extract_number(text: &str) -> Option<f64> {
-    let text = text
-        .replace(',', "")
-        .replace('\u{FF0E}', ".")
-        .replace('\u{3002}', ".")
-        .replace('\u{00B7}', ".");
-    let text = SPACE_DOT_REGEX.replace_all(&text, "${d1}.${d2}");
-    let text = DOT_LETTER_REGEX.replace_all(&text, |caps: &regex::Captures| {
-        let prefix = &caps[1];
-        let letter = &caps[2];
-        let suffix = &caps[3];
-        let fixed = match letter {
-            "e" | "E" => "6",
-            "a" | "A" => "4",
-            "o" | "O" => "0",
-            "n" => "0",
-            "l" | "I" | "i" => "1",
-            "s" | "S" => "5",
-            "b" | "B" => "8",
-            "t" | "T" => "7",
-            "g" | "q" => "9",
-            "z" | "Z" => "2",
-            _ => letter,
-        };
-        format!("{}{}{}", prefix, fixed, suffix)
-    });
-
-    if let Some(caps) = NUM_REGEX.captures(&text) {
-        caps[1].parse::<f64>().ok()
-    } else {
-        let fixed = fix_ocr_digits(&text);
-        NUM_REGEX.captures(&fixed).and_then(|c| c[1].parse::<f64>().ok())
-    }
+    let cleaned = clean_ocr_text(text);
+    try_extract_value(cleaned.trim())
 }
 
 /// Convert a flat stat key to its percent variant for main stat context.

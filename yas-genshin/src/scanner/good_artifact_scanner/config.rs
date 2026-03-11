@@ -48,4 +48,8 @@ pub struct GoodArtifactScannerConfig {
     /// Dump OCR region images for debugging
     #[arg(long = "good-artifact-dump-images", default_value_t = false)]
     pub dump_images: bool,
+
+    /// Max artifacts to scan (0 = unlimited)
+    #[arg(id = "good-artifact-max-count", long = "good-artifact-max-count", default_value_t = 0)]
+    pub max_count: usize,
 }

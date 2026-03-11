@@ -984,6 +984,10 @@ impl GoodCharacterScanner {
             }
 
             viewed_count += 1;
+            if self.config.max_count > 0 && characters.len() >= self.config.max_count {
+                info!("[character] reached max_count={}, stopping", self.config.max_count);
+                break;
+            }
             if viewed_count > 3 && characters.is_empty() {
                 error!("[character] viewed {} but no results, stopping", viewed_count);
                 break;

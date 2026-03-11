@@ -43,4 +43,8 @@ pub struct GoodWeaponScannerConfig {
     /// Dump OCR region images for debugging
     #[arg(long = "good-weapon-dump-images", default_value_t = false)]
     pub dump_images: bool,
+
+    /// Max weapons to scan (0 = unlimited)
+    #[arg(id = "good-weapon-max-count", long = "good-weapon-max-count", default_value_t = 0)]
+    pub max_count: usize,
 }

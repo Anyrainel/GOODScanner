@@ -451,7 +451,15 @@ impl GoodWeaponScanner {
             warn!("[weapon] no weapons in backpack");
             return Ok(Vec::new());
         }
-        info!("[weapon] total: {}", total_count);
+
+        let total_count = if self.config.max_count > 0 {
+            let capped = (total_count as usize).min(self.config.max_count + start_at) as i32;
+            info!("[weapon] total: {} (capped to {} by max_count={})", total_count, capped, self.config.max_count);
+            capped
+        } else {
+            info!("[weapon] total: {}", total_count);
+            total_count
+        };
 
         let scaler = bp.scaler().clone();
 

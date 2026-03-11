@@ -21,7 +21,57 @@ use crate::scanner::good_common::ocr_pool::OcrPool;
 use crate::scanner::good_common::pixel_utils;
 use crate::scanner::good_common::scan_worker::{self, WorkItem};
 use crate::scanner::good_common::roll_solver::{self, OcrCandidate, SolverInput};
-use crate::scanner::good_common::stat_parser::{self, ParsedStat};
+use crate::scanner::good_common::stat_parser;
+
+lazy_static::lazy_static! {
+    /// Regex for parsing level text like "+20", "+ 12", "0"
+    static ref LEVEL_REGEX: Regex = Regex::new(r"\+?\s*(\d+)").unwrap();
+}
+
+/// Count Chinese characters (CJK Unified Ideographs) in a string.
+fn cn_char_count(s: &str) -> usize {
+    s.chars().filter(|&c| c >= '\u{4E00}' && c <= '\u{9FFF}').count()
+}
+
+/// Crop a sub-region from an image using base-resolution coordinates.
+/// Returns `None` if the resulting region has zero width or height.
+fn crop_region(
+    image: &RgbImage,
+    rect: (f64, f64, f64, f64),
+    y_shift: f64,
+    scaler: &CoordScaler,
+) -> Option<RgbImage> {
+    let (bx, by, bw, bh) = rect;
+    let x = (scaler.x(bx) as u32).min(image.width().saturating_sub(1));
+    let y = (scaler.y(by + y_shift) as u32).min(image.height().saturating_sub(1));
+    let w = (scaler.x(bw) as u32).min(image.width().saturating_sub(x));
+    let h = (scaler.y(bh) as u32).min(image.height().saturating_sub(y));
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(image.view(x, y, w, h).to_image())
+}
+
+/// Pick the best OCR candidate from a set (used when solver fails).
+/// Same-key candidates: prefer decimal value, then larger value.
+/// Different-key candidates: prefer first (primary engine).
+fn pick_best_candidate(candidates: &[OcrCandidate]) -> Option<&OcrCandidate> {
+    if candidates.len() <= 1 {
+        return candidates.first();
+    }
+    if candidates.iter().all(|c| c.key == candidates[0].key) {
+        // All same key — prefer candidate with decimal, then larger value
+        candidates.iter().max_by(|a, b| {
+            let a_dec = a.value.fract().abs() > 0.001;
+            let b_dec = b.value.fract().abs() > 0.001;
+            a_dec.cmp(&b_dec)
+                .then(a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal))
+        })
+    } else {
+        // Different keys — prefer first (primary engine)
+        Some(&candidates[0])
+    }
+}
 
 /// Computed OCR regions for artifact card (at 1920x1080 base).
 ///
@@ -119,29 +169,16 @@ impl GoodArtifactScanner {
         rect: (f64, f64, f64, f64),
         scaler: &CoordScaler,
     ) -> Result<String> {
-        let (bx, by, bw, bh) = rect;
-        let x = scaler.x(bx) as u32;
-        let y = scaler.y(by) as u32;
-        let w = scaler.x(bw) as u32;
-        let h = scaler.y(bh) as u32;
-
-        let x = x.min(image.width().saturating_sub(1));
-        let y = y.min(image.height().saturating_sub(1));
-        let w = w.min(image.width().saturating_sub(x));
-        let h = h.min(image.height().saturating_sub(y));
-
-        if w == 0 || h == 0 {
-            return Ok(String::new());
-        }
-
-        let sub = image.view(x, y, w, h).to_image();
+        let sub = match crop_region(image, rect, 0.0, scaler) {
+            Some(img) => img,
+            None => return Ok(String::new()),
+        };
         let text = ocr.image_to_text(&sub, false)?;
         Ok(text.trim().to_string())
     }
 
     /// OCR a sub-region after converting to high-contrast grayscale.
-    /// Uses Otsu-like adaptive thresholding to produce clear black text on
-    /// white background, which helps with colored text (green set names).
+    /// Tries grayscale then green-channel extraction for colored text (green set names).
     fn ocr_image_region_grayscale(
         ocr: &dyn ImageToText<RgbImage>,
         image: &RgbImage,
@@ -149,35 +186,19 @@ impl GoodArtifactScanner {
         scaler: &CoordScaler,
         mappings: &MappingManager,
     ) -> Result<String> {
-        let (bx, by, bw, bh) = rect;
-        let x = scaler.x(bx) as u32;
-        let y = scaler.y(by) as u32;
-        let w = scaler.x(bw) as u32;
-        let h = scaler.y(bh) as u32;
+        let sub = match crop_region(image, rect, 0.0, scaler) {
+            Some(img) => img,
+            None => return Ok(String::new()),
+        };
 
-        let x = x.min(image.width().saturating_sub(1));
-        let y = y.min(image.height().saturating_sub(1));
-        let w = w.min(image.width().saturating_sub(x));
-        let h = h.min(image.height().saturating_sub(y));
-
-        if w == 0 || h == 0 {
-            return Ok(String::new());
-        }
-
-        let sub = image.view(x, y, w, h).to_image();
-
-        // Convert to grayscale and compute min/max for adaptive threshold
-        let mut gray_vals: Vec<u8> = Vec::with_capacity((sub.width() * sub.height()) as usize);
+        // Convert to grayscale
         let gray_img = RgbImage::from_fn(sub.width(), sub.height(), |px, py| {
             let p = sub.get_pixel(px, py);
             let g = (0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64) as u8;
-            gray_vals.push(g);
             image::Rgb([g, g, g])
         });
 
-        // Try simple grayscale first
-        let text_gray = ocr.image_to_text(&gray_img, false)?;
-        let text_gray = text_gray.trim().to_string();
+        let text_gray = ocr.image_to_text(&gray_img, false)?.trim().to_string();
         if Self::find_set_key_in_text(&text_gray, mappings).is_some() {
             return Ok(text_gray);
         }
@@ -191,22 +212,18 @@ impl GoodArtifactScanner {
             let g = p[1] as i32;
             let b = p[2] as i32;
             let green_excess = (g - r.max(b)).max(0);
-            // Invert: high green_excess (text) → dark, low → light
             let v = (255 - (green_excess * 4).min(255)) as u8;
             image::Rgb([v, v, v])
         });
-        let text_green = ocr.image_to_text(&green_extracted, false)?;
-        let text_green = text_green.trim().to_string();
+        let text_green = ocr.image_to_text(&green_extracted, false)?.trim().to_string();
         if Self::find_set_key_in_text(&text_green, mappings).is_some() {
             return Ok(text_green);
         }
 
         // Return whichever has more Chinese characters
-        let cn = |s: &str| s.chars().filter(|c| *c >= '\u{4E00}' && *c <= '\u{9FFF}').count();
-        let best = [text_gray, text_green].into_iter()
-            .max_by_key(|s| cn(s))
-            .unwrap_or_default();
-        Ok(best)
+        Ok([text_gray, text_green].into_iter()
+            .max_by_key(|s| cn_char_count(s))
+            .unwrap_or_default())
     }
 
     /// OCR a sub-region with Y-offset and left-side icon masking.
@@ -219,29 +236,19 @@ impl GoodArtifactScanner {
         y_shift: f64,
         scaler: &CoordScaler,
     ) -> Result<String> {
-        let (bx, by, bw, bh) = rect;
-        let x = scaler.x(bx) as u32;
-        let y = scaler.y(by + y_shift) as u32;
-        let w = scaler.x(bw) as u32;
-        let h = scaler.y(bh) as u32;
+        let mut sub = match crop_region(image, rect, y_shift, scaler) {
+            Some(img) => img,
+            None => return Ok(String::new()),
+        };
 
-        let x = x.min(image.width().saturating_sub(1));
-        let y = y.min(image.height().saturating_sub(1));
-        let w = w.min(image.width().saturating_sub(x));
-        let h = h.min(image.height().saturating_sub(y));
-
-        if w == 0 || h == 0 {
-            return Ok(String::new());
-        }
-
-        let mut sub = image.view(x, y, w, h).to_image();
+        let w = sub.width();
+        let h = sub.height();
 
         // Mask the first ~18 pixels (stat icon area) with background color.
         // Sample background color from the right side of the image.
         let mask_width = 18u32.min(w);
         let sample_x = (w * 3 / 4).min(w.saturating_sub(1));
-        let bg_color = if h > 0 {
-            // Average a few pixels from the right side
+        let bg_color = {
             let mut r_sum = 0u32;
             let mut g_sum = 0u32;
             let mut b_sum = 0u32;
@@ -254,8 +261,6 @@ impl GoodArtifactScanner {
                 count += 1;
             }
             image::Rgb([(r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8])
-        } else {
-            image::Rgb([0, 0, 0])
         };
 
         for px in 0..mask_width {
@@ -268,10 +273,6 @@ impl GoodArtifactScanner {
         Ok(text.trim().to_string())
     }
 
-    /// OCR just the right portion (number area) of a substat line.
-    /// Used as a retry when the full line OCR truncates the decimal value.
-    /// By cropping to just the number, each character gets more pixels in the
-    /// model's fixed-width input, improving decimal point recognition.
     /// OCR the number portion of a substat line with configurable crop.
     /// `left_frac` is how much of the left side to skip (0.0-1.0).
     /// Upscales 2x before OCR for better digit recognition on small text.
@@ -284,28 +285,15 @@ impl GoodArtifactScanner {
         left_frac: f64,
     ) -> Result<String> {
         let (bx, by, bw, bh) = rect;
-        let num_x = bx + bw * left_frac;
-        let num_w = bw * (1.0 - left_frac);
-        let x = scaler.x(num_x) as u32;
-        let y = scaler.y(by + y_shift) as u32;
-        let w = scaler.x(num_w) as u32;
-        let h = scaler.y(bh) as u32;
-
-        let x = x.min(image.width().saturating_sub(1));
-        let y = y.min(image.height().saturating_sub(1));
-        let w = w.min(image.width().saturating_sub(x));
-        let h = h.min(image.height().saturating_sub(y));
-
-        if w == 0 || h == 0 {
-            return Ok(String::new());
-        }
-
-        let sub = image.view(x, y, w, h).to_image();
-        // Upscale 2x for better OCR on small text
+        let num_rect = (bx + bw * left_frac, by, bw * (1.0 - left_frac), bh);
+        let sub = match crop_region(image, num_rect, y_shift, scaler) {
+            Some(img) => img,
+            None => return Ok(String::new()),
+        };
         let scaled = image::imageops::resize(
             &sub,
-            w * 2,
-            h * 2,
+            sub.width() * 2,
+            sub.height() * 2,
             image::imageops::FilterType::Lanczos3,
         );
         let text = ocr.image_to_text(&scaled, false)?;
@@ -437,57 +425,6 @@ impl GoodArtifactScanner {
         String::new()
     }
 
-    /// Merge dual-engine OCR results for a single substat line.
-    ///
-    /// Returns (chosen_text, chosen_parsed).
-    /// - If only one engine parsed, use that.
-    /// - If both parsed to the same stat key: prefer the one with a decimal
-    ///   (more complete format for percent stats), or the larger value.
-    /// - If they disagree on stat key, prefer engine 1 (primary).
-    fn merge_dual_ocr_stats<'a>(
-        text1: &'a str,
-        parsed1: Option<ParsedStat>,
-        text2: &'a str,
-        parsed2: Option<ParsedStat>,
-    ) -> (&'a str, Option<ParsedStat>) {
-        match (parsed1, parsed2) {
-            (Some(p1), Some(p2)) => {
-                if p1.key == p2.key {
-                    // Same stat key — pick better value
-                    let has_dec1 = p1.value != (p1.value as i64) as f64;
-                    let has_dec2 = p2.value != (p2.value as i64) as f64;
-                    if has_dec1 && !has_dec2 {
-                        // Engine 1 has decimal, engine 2 doesn't → prefer 1
-                        (text1, Some(p1))
-                    } else if has_dec2 && !has_dec1 {
-                        // Engine 2 has decimal, engine 1 doesn't → prefer 2
-                        (text2, Some(p2))
-                    } else {
-                        // Both have decimals or both don't → pick larger value
-                        if p2.value > p1.value {
-                            (text2, Some(p2))
-                        } else {
-                            (text1, Some(p1))
-                        }
-                    }
-                } else {
-                    // Different stat keys — prefer engine 1 (primary)
-                    (text1, Some(p1))
-                }
-            }
-            (Some(p1), None) => (text1, Some(p1)),
-            (None, Some(p2)) => (text2, Some(p2)),
-            (None, None) => {
-                // Neither parsed — return whichever has more content
-                if text2.len() > text1.len() {
-                    (text2, None)
-                } else {
-                    (text1, None)
-                }
-            }
-        }
-    }
-
     /// OCR one substat line with both engines and return candidates.
     ///
     /// Each engine tries direct OCR first, then icon-masked fallback.
@@ -515,8 +452,7 @@ impl GoodArtifactScanner {
             if stat_parser::parse_stat_from_text(&masked).is_some() {
                 return masked;
             }
-            let cn = |s: &str| s.chars().filter(|c| *c >= '\u{4E00}' && *c <= '\u{9FFF}').count();
-            if cn(&masked) > cn(&text) { masked } else { text }
+            if cn_char_count(&masked) > cn_char_count(&text) { masked } else { text }
         };
 
         let text1 = ocr_with_fallback(substat_ocr);
@@ -650,9 +586,8 @@ impl GoodArtifactScanner {
         let _ = dump; // suppress unused warning for now
 
         // 4. Level — dual-engine OCR, collect both for solver
-        let re = Regex::new(r"\+?\s*(\d+)").unwrap();
         let parse_level = |text: &str| -> i32 {
-            re.captures(text)
+            LEVEL_REGEX.captures(text)
                 .and_then(|c| c[1].parse::<i32>().ok())
                 .filter(|&v| v <= 20)
                 .unwrap_or(-1)
@@ -793,7 +728,7 @@ impl GoodArtifactScanner {
         }
 
         // Build substats from solver result or fall back to heuristic merge
-        let (mut substats, mut unactivated_substats, total_rolls) = if let Some(ref result) = solved {
+        let (substats, unactivated_substats, total_rolls) = if let Some(ref result) = solved {
             let mut subs = Vec::new();
             let mut unact = Vec::new();
             for s in &result.substats {
@@ -818,37 +753,17 @@ impl GoodArtifactScanner {
             }
             (subs, unact, Some(result.total_rolls))
         } else {
-            // Phase 4: Fall back to heuristic merge (pick best from each line)
+            // Phase 4: Fall back to heuristic — pick best candidate from each line.
+            // Reuses Phase 1 candidates (same image + OCR → identical to re-OCRing).
             if config.verbose {
-                warn!("[artifact] solver failed, using heuristic merge");
+                warn!("[artifact] solver failed, using heuristic fallback");
             }
             let mut subs = Vec::new();
             let mut unact = Vec::new();
-            for i in 0..4 {
-                let (sub_x, sub_y, sub_w, sub_h) = ocr_regions.substat_lines[i];
-                let sub_rect = (sub_x, sub_y, sub_w, sub_h);
-
-                // OCR both engines with fallback
-                let ocr_with_fb = |engine: &dyn ImageToText<RgbImage>| -> String {
-                    let text = Self::ocr_image_region_shifted(engine, image, sub_rect, y_shift, scaler)
-                        .unwrap_or_default();
-                    if stat_parser::parse_stat_from_text(&text).is_some() { return text; }
-                    let masked = Self::ocr_image_region_shifted_masked(engine, image, sub_rect, y_shift, scaler)
-                        .unwrap_or_default();
-                    if stat_parser::parse_stat_from_text(&masked).is_some() { return masked; }
-                    let cn = |s: &str| s.chars().filter(|c| *c >= '\u{4E00}' && *c <= '\u{9FFF}').count();
-                    if cn(&masked) > cn(&text) { masked } else { text }
-                };
-                let text1 = ocr_with_fb(substat_ocr);
-                let text2 = ocr_with_fb(ocr);
-                let parsed1 = stat_parser::parse_stat_from_text(text1.trim());
-                let parsed2 = stat_parser::parse_stat_from_text(text2.trim());
-                let (line, merged) = Self::merge_dual_ocr_stats(text1.trim(), parsed1, text2.trim(), parsed2);
-                if line.len() < 2 { continue; }
-                if line.contains("2\u{4EF6}\u{5957}") { break; }
-                if let Some(parsed) = merged {
-                    let sub = GoodSubStat { key: parsed.key, value: parsed.value, initial_value: None };
-                    if parsed.inactive { unact.push(sub); } else { subs.push(sub); }
+            for cands in &non_empty_candidates {
+                if let Some(best) = pick_best_candidate(cands) {
+                    let sub = GoodSubStat { key: best.key.clone(), value: best.value, initial_value: None };
+                    if best.inactive { unact.push(sub); } else { subs.push(sub); }
                 }
             }
             (subs, unact, None)
@@ -888,8 +803,7 @@ impl GoodArtifactScanner {
                     text_gray
                 } else {
                     // Neither matched — use whichever has more Chinese characters
-                    let cn_count = |s: &str| s.chars().filter(|c| *c >= '\u{4E00}' && *c <= '\u{9FFF}').count();
-                    if cn_count(&text_rgb) >= cn_count(&text_gray) { text_rgb } else { text_gray }
+                    if cn_char_count(&text_rgb) >= cn_char_count(&text_gray) { text_rgb } else { text_gray }
                 }
             };
             if config.verbose {
@@ -1033,7 +947,15 @@ impl GoodArtifactScanner {
             warn!("[artifact] no artifacts in backpack");
             return Ok(Vec::new());
         }
-        info!("[artifact] total: {}", total_count);
+
+        let total_count = if self.config.max_count > 0 {
+            let capped = (total_count as usize).min(self.config.max_count + start_at) as i32;
+            info!("[artifact] total: {} (capped to {} by max_count={})", total_count, capped, self.config.max_count);
+            capped
+        } else {
+            info!("[artifact] total: {}", total_count);
+            total_count
+        };
 
         // Clone scaler so callback doesn't conflict with BackpackScanner's borrow
         let scaler = bp.scaler().clone();
@@ -1272,8 +1194,7 @@ impl GoodArtifactScanner {
         let level_text = Self::ocr_image_region_shifted(ocr, image, self.ocr_regions.level, y_shift, scaler)
             .unwrap_or_default();
         let level = {
-            let re = Regex::new(r"\+?\s*(\d+)").unwrap();
-            re.captures(&level_text)
+            LEVEL_REGEX.captures(&level_text)
                 .and_then(|c| c[1].parse::<i32>().ok())
                 .unwrap_or(0)
         };

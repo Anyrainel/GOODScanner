@@ -510,9 +510,9 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.9 }],
-                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8 }],
-                vec![OcrCandidate { key: "atk_".into(), value: 5.8 }],
+                vec![OcrCandidate { key: "critRate_".into(), value: 3.9, inactive: false }],
+                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8, inactive: false }],
+                vec![OcrCandidate { key: "atk_".into(), value: 5.8, inactive: false }],
             ],
         };
         let result = solve(&input);
@@ -536,11 +536,11 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.9 }],
-                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8 }],
+                vec![OcrCandidate { key: "critRate_".into(), value: 3.9, inactive: false }],
+                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8, inactive: false }],
                 vec![
-                    OcrCandidate { key: "atk_".into(), value: 58.0 },
-                    OcrCandidate { key: "atk_".into(), value: 5.8 },
+                    OcrCandidate { key: "atk_".into(), value: 58.0, inactive: false },
+                    OcrCandidate { key: "atk_".into(), value: 5.8, inactive: false },
                 ],
             ],
         };
