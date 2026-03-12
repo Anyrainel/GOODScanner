@@ -18,27 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all tags for version dedup
           lfs: true
 
       - name: Extract version
         run: |
           $date = Get-Date -Format "yyyy.MM.dd"
           $tag = "v$date"
-          # Check if tag already exists; append .N suffix if so
-          $existing = git tag -l "$tag*" | Sort-Object
-          if ($existing) {
-              $maxSuffix = 1
-              foreach ($t in $existing) {
-                  if ($t -match "^v\d{4}\.\d{2}\.\d{2}\.(\d+)$") {
-                      $s = [int]$Matches[1]
-                      if ($s -ge $maxSuffix) { $maxSuffix = $s + 1 }
-                  } elseif ($t -eq $tag) {
-                      if ($maxSuffix -lt 2) { $maxSuffix = 2 }
-                  }
-              }
-              $tag = "$tag.$maxSuffix"
-          }
           "VERSION=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Setup Toolchain
@@ -52,9 +37,13 @@ jobs:
               './genshin/Cargo.toml'
               './application/Cargo.toml'
           )
-          # Cargo semver forbids leading zeros, so strip them (2026.03.12 -> 2026.3.12)
+          # Convert calver v2026.03.12 to valid semver 2026.312.0
+          # Encode month+day as minor (MM*100+DD), patch=0
           $parts = $env:VERSION.TrimStart('v').Split('.')
-          $ver = ($parts | ForEach-Object { [int]$_ }) -join '.'
+          $year = [int]$parts[0]
+          $month = [int]$parts[1]
+          $day = [int]$parts[2]
+          $ver = "$year.$($month * 100 + $day).0"
           [regex]$pattern = '(?<=version = ").*(?=")'
           foreach ($file in $files) {
               $pattern.Replace((Get-Content -Raw $file), $ver, 1) | Out-File -FilePath $file
@@ -68,6 +57,11 @@ jobs:
         with:
           name: GOODScanner_${{ env.VERSION }}
           path: target/release/GOODScanner.exe
+
+      - name: Delete existing release if any
+        run: gh release delete $env:VERSION --yes --cleanup-tag 2>$null; $true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
