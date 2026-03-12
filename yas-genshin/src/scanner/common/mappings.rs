@@ -50,7 +50,8 @@ struct MappingsFile {
 #[derive(Deserialize)]
 struct CharacterEntry {
     id: String,
-    names: LocalizedNames,
+    #[serde(alias = "names")]
+    n: LocalizedNames,
     c3: Option<String>,
     c5: Option<String>,
 }
@@ -58,14 +59,17 @@ struct CharacterEntry {
 #[derive(Deserialize)]
 struct WeaponEntry {
     id: String,
-    names: LocalizedNames,
+    #[serde(alias = "names")]
+    n: LocalizedNames,
 }
 
 #[derive(Deserialize)]
 struct ArtifactSetEntry {
     id: String,
-    names: LocalizedNames,
-    rarity: Option<i32>,
+    #[serde(alias = "names")]
+    n: LocalizedNames,
+    #[serde(alias = "rarity")]
+    r: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -129,7 +133,7 @@ impl MappingManager {
             return Ok(());
         }
 
-        info!("\u{6B63}\u{5728}\u{83B7}\u{53D6}\u{6E38}\u{620F}\u{6570}\u{636E}\u{6620}\u{5C04}..."); // 正在获取游戏数据映射...
+        info!("正在获取游戏数据映射... / Fetching game data mappings...");
 
         // Ensure data directory exists
         if let Some(parent) = Path::new(MAPPINGS_CACHE_PATH).parent() {
@@ -148,16 +152,16 @@ impl MappingManager {
                         now_secs
                     );
                     std::fs::write(MAPPINGS_META_PATH, meta)?;
-                    info!("\u{6E38}\u{620F}\u{6570}\u{636E}\u{6620}\u{5C04}\u{5DF2}\u{66F4}\u{65B0}"); // 游戏数据映射已更新
+                    info!("游戏数据映射已更新 / Game data mappings updated");
                 } else {
                     if cache_exists {
                         warn!(
-                            "\u{83B7}\u{53D6}\u{6570}\u{636E}\u{5931}\u{8D25}\u{FF08}HTTP {}\u{FF09}\u{FF0C}\u{4F7F}\u{7528}\u{672C}\u{5730}\u{7F13}\u{5B58}",
-                            response.status()
-                        ); // 获取数据失败（HTTP {}），使用本地缓存
+                            "获取数据失败（HTTP {}），使用本地缓存 / Fetch failed (HTTP {}), using local cache",
+                            response.status(), response.status()
+                        );
                     } else {
                         bail!(
-                            "\u{83B7}\u{53D6}\u{6E38}\u{620F}\u{6570}\u{636E}\u{5931}\u{8D25}: HTTP {}",
+                            "获取游戏数据失败 / Failed to fetch game data: HTTP {}",
                             response.status()
                         );
                     }
@@ -166,12 +170,12 @@ impl MappingManager {
             Err(e) => {
                 if cache_exists {
                     warn!(
-                        "\u{83B7}\u{53D6}\u{6570}\u{636E}\u{5931}\u{8D25}\u{FF08}{}\u{FF09}\u{FF0C}\u{4F7F}\u{7528}\u{672C}\u{5730}\u{7F13}\u{5B58}",
-                        e
-                    ); // 获取数据失败（{}），使用本地缓存
+                        "获取数据失败（{}），使用本地缓存 / Fetch failed ({}), using local cache",
+                        e, e
+                    );
                 } else {
                     bail!(
-                        "\u{83B7}\u{53D6}\u{6E38}\u{620F}\u{6570}\u{636E}\u{5931}\u{8D25}\u{4E14}\u{65E0}\u{672C}\u{5730}\u{7F13}\u{5B58}: {}",
+                        "获取游戏数据失败且无本地缓存 / Failed to fetch game data (no local cache): {}",
                         e
                     );
                 }
@@ -190,7 +194,7 @@ impl MappingManager {
         let mut character_const_bonus = HashMap::new();
 
         for entry in &data.characters {
-            if let Some(zh_name) = &entry.names.zh {
+            if let Some(zh_name) = &entry.n.zh {
                 character_name_map.insert(zh_name.clone(), entry.id.clone());
             }
             if entry.c3.is_some() || entry.c5.is_some() {
@@ -206,7 +210,7 @@ impl MappingManager {
 
         let mut weapon_name_map = HashMap::new();
         for entry in &data.weapons {
-            if let Some(zh_name) = &entry.names.zh {
+            if let Some(zh_name) = &entry.n.zh {
                 weapon_name_map.insert(zh_name.clone(), entry.id.clone());
             }
         }
@@ -214,10 +218,10 @@ impl MappingManager {
         let mut artifact_set_map = HashMap::new();
         let mut artifact_set_max_rarity = HashMap::new();
         for entry in &data.artifact_sets {
-            if let Some(zh_name) = &entry.names.zh {
+            if let Some(zh_name) = &entry.n.zh {
                 artifact_set_map.insert(zh_name.clone(), entry.id.clone());
             }
-            if let Some(rarity) = entry.rarity {
+            if let Some(rarity) = entry.r {
                 artifact_set_max_rarity.insert(entry.id.clone(), rarity);
             }
         }

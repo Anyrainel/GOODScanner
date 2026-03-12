@@ -1,7 +1,7 @@
-use std::cell::RefCell;
+#[cfg(feature = "ort")]
 use std::sync::Mutex;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use anyhow::Result;
 use image::{EncodableLayout, RgbImage};
 #[cfg(feature = "tract_onnx")]
@@ -9,7 +9,6 @@ use tract_onnx::tract_hir::shapefactoid;
 use crate::ocr::ImageToText;
 use crate::ocr::paddle_paddle_model::preprocess::resize_img;
 use crate::positioning::Shape3D;
-use crate::utils::read_file_to_string;
 #[cfg(feature = "ort")]
 use ort::{session::{Session, builder::GraphOptimizationLevel}, value::Value};
 #[cfg(feature = "tract_onnx")]
@@ -194,8 +193,8 @@ impl ImageToText<RgbImage> for PPOCRModel {
             let mut max_value = -f32::INFINITY;
             for j in 0..shape_dims[2] {
                 let value = arr[[0, i, j]];
-                // println!("{}", value);
                 if value > max_value {
+                    max_value = value;
                     max_index = j;
                 }
             }

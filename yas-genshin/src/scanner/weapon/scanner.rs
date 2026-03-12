@@ -9,19 +9,19 @@ use regex::Regex;
 use yas::ocr::ImageToText;
 
 use super::GoodWeaponScannerConfig;
-use crate::scanner::good_common::backpack_scanner::{BackpackScanConfig, BackpackScanner, GridEvent, ScanAction};
-use crate::scanner::good_common::constants::*;
-use crate::scanner::good_common::coord_scaler::CoordScaler;
-use crate::scanner::good_common::fuzzy_match::fuzzy_match_map;
-use crate::scanner::good_common::game_controller::GenshinGameController;
-use crate::scanner::good_common::mappings::MappingManager;
-use crate::scanner::good_common::models::{DebugOcrField, DebugScanResult, GoodWeapon};
-use crate::scanner::good_common::navigation;
-use crate::scanner::good_common::ocr_factory;
-use crate::scanner::good_common::ocr_pool::OcrPool;
-use crate::scanner::good_common::pixel_utils;
-use crate::scanner::good_common::scan_worker::{self, WorkItem};
-use crate::scanner::good_common::stat_parser::level_to_ascension;
+use crate::scanner::common::backpack_scanner::{BackpackScanConfig, BackpackScanner, GridEvent, ScanAction};
+use crate::scanner::common::constants::*;
+use crate::scanner::common::coord_scaler::CoordScaler;
+use crate::scanner::common::fuzzy_match::fuzzy_match_map;
+use crate::scanner::common::game_controller::GenshinGameController;
+use crate::scanner::common::mappings::MappingManager;
+use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodWeapon};
+use crate::scanner::common::navigation;
+use crate::scanner::common::ocr_factory;
+use crate::scanner::common::ocr_pool::OcrPool;
+use crate::scanner::common::pixel_utils;
+use crate::scanner::common::scan_worker::{self, WorkItem};
+use crate::scanner::common::stat_parser::level_to_ascension;
 
 /// OCR regions for weapon card (at 1920x1080 base).
 ///
@@ -47,13 +47,13 @@ impl WeaponOcrRegions {
             level: (
                 card_x + (card_w * 0.060).round(),
                 card_y + (card_h * 0.367).round(),
-                (card_w * 0.262).round(),
+                (card_w * 0.272).round(),
                 (card_h * 0.035).round(),
             ),
             refinement: (
                 card_x + (card_w * 0.058).round(),
                 card_y + (card_h * 0.417).round(),
-                (card_w * 0.25).round(),
+                (card_w * 0.30).round(),
                 (card_h * 0.038).round(),
             ),
             // Equip text "CharName已装备" at bottom of card area.
@@ -144,8 +144,8 @@ impl GoodWeaponScanner {
         config: &GoodWeaponScannerConfig,
         item_index: usize,
     ) -> Result<WeaponScanResult> {
-        use crate::scanner::good_common::debug_dump::DumpCtx;
-        use super::super::good_common::constants::{WEAPON_LOCK_POS1, STAR_Y};
+        use crate::scanner::common::debug_dump::DumpCtx;
+        use super::super::common::constants::{WEAPON_LOCK_POS1, STAR_Y};
 
         // OCR weapon name
         let name_text = Self::ocr_image_region(ocr, image, ocr_regions.name, scaler)?;
@@ -511,7 +511,7 @@ impl GoodWeaponScanner {
         let scan_config = BackpackScanConfig {
             delay_grid_item: self.config.delay_grid_item,
             delay_scroll: self.config.delay_scroll,
-            delay_after_panel: 100,
+            delay_after_panel: if self.config.skip_lock_delay { 0 } else { 100 },
         };
 
         bp.scan_grid(
@@ -533,7 +533,9 @@ impl GoodWeaponScanner {
                             return ScanAction::Stop;
                         }
 
-                        if item_tx.send(WorkItem { index: idx, image, metadata: () }).is_err() {
+                        // Normalize index to 0-based so the worker's BTreeMap drain works correctly.
+                        let worker_idx = idx - start_at;
+                        if item_tx.send(WorkItem { index: worker_idx, image, metadata: () }).is_err() {
                             error!("[weapon] worker channel closed");
                             return ScanAction::Stop;
                         }

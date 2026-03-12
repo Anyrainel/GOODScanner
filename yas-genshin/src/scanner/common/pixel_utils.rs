@@ -62,38 +62,112 @@ pub fn detect_dark_icon(
 
 /// Detect weapon rarity from star pixels.
 ///
-/// Checks yellow pixels at x=1485, 1450, 1416 at y=372 (base coords).
-/// Returns 5, 4, 3, or 2.
+/// Scans the star row at y=STAR_Y. Returns 5, 4, 3, or 2.
 ///
 /// Port from GOODScanner/lib/weapon_scanner.js rarity detection
 pub fn detect_weapon_rarity(image: &RgbImage, scaler: &CoordScaler) -> i32 {
     use super::constants::STAR_Y;
-    if is_star_yellow(image, scaler, 1485.0, STAR_Y) {
+
+    // Scan horizontal band to find rightmost star pixel
+    let y_offsets: [f64; 3] = [-2.0, 0.0, 2.0];
+    let mut rightmost_star_x: f64 = 0.0;
+    let mut star_pixel_count = 0;
+
+    for &dy in &y_offsets {
+        let by = STAR_Y + dy;
+        for bx_int in (1300..=1500).step_by(2) {
+            let bx = bx_int as f64;
+            let x = scaler.x(bx) as u32;
+            let y = scaler.y(by) as u32;
+            if x < image.width() && y < image.height() {
+                let px = image.get_pixel(x, y);
+                if px[0] > 150 && px[1] > 100 && px[2] < 100 {
+                    star_pixel_count += 1;
+                    if bx > rightmost_star_x {
+                        rightmost_star_x = bx;
+                    }
+                }
+            }
+        }
+    }
+
+    if rightmost_star_x > 1470.0 {
         5
-    } else if is_star_yellow(image, scaler, 1450.0, STAR_Y) {
+    } else if rightmost_star_x > 1430.0 {
         4
-    } else if is_star_yellow(image, scaler, 1416.0, STAR_Y) {
+    } else if rightmost_star_x > 1400.0 {
         3
-    } else {
+    } else if star_pixel_count > 0 {
         2
+    } else {
+        // Fallback to original single-pixel checks
+        if is_star_yellow(image, scaler, 1485.0, STAR_Y) { 5 }
+        else if is_star_yellow(image, scaler, 1450.0, STAR_Y) { 4 }
+        else if is_star_yellow(image, scaler, 1416.0, STAR_Y) { 3 }
+        else { 2 }
     }
 }
 
 /// Detect artifact rarity from star pixels.
 ///
-/// Checks yellow pixels at x=1485, 1450 at y=372 (base coords).
-/// Returns 5, 4, or 3.
+/// Scans the star row at y=STAR_Y to count star-yellow pixels in the expected region.
+/// Uses boundary x-positions to determine rarity: 5, 4, or 3.
 ///
 /// Port from GOODScanner/lib/artifact_scanner.js rarity detection
 pub fn detect_artifact_rarity(image: &RgbImage, scaler: &CoordScaler) -> i32 {
     use super::constants::STAR_Y;
-    if is_star_yellow(image, scaler, 1485.0, STAR_Y) {
-        5
-    } else if is_star_yellow(image, scaler, 1450.0, STAR_Y) {
-        4
-    } else {
-        3
+
+    // Scan a horizontal band around STAR_Y to find yellow star pixels.
+    // Stars are in the range x ≈ [1350..1500] at base 1920x1080.
+    // We probe multiple y-offsets to be robust against slight vertical shifts.
+    let y_offsets: [f64; 3] = [-2.0, 0.0, 2.0];
+
+    // Find the rightmost x (in base coords) that has a star-yellow pixel
+    let mut rightmost_star_x: f64 = 0.0;
+    let mut star_pixel_count = 0;
+
+    for &dy in &y_offsets {
+        let by = STAR_Y + dy;
+        // Scan from x=1340 to x=1500 (covers 3-star through 5-star range)
+        for bx_int in (1340..=1500).step_by(2) {
+            let bx = bx_int as f64;
+            let x = scaler.x(bx) as u32;
+            let y = scaler.y(by) as u32;
+            if x < image.width() && y < image.height() {
+                let px = image.get_pixel(x, y);
+                if px[0] > 150 && px[1] > 100 && px[2] < 100 {
+                    star_pixel_count += 1;
+                    if bx > rightmost_star_x {
+                        rightmost_star_x = bx;
+                    }
+                }
+            }
+        }
     }
+
+    // Determine rarity from rightmost star position
+    // 5-star: rightmost star extends past x≈1470
+    // 4-star: rightmost star around x≈1440-1470
+    // 3-star: any star pixels found
+    let rarity = if rightmost_star_x > 1470.0 {
+        5
+    } else if rightmost_star_x > 1430.0 {
+        4
+    } else if star_pixel_count > 0 {
+        3
+    } else {
+        // No star pixels found at all — fall back to original single-pixel check
+        if is_star_yellow(image, scaler, 1485.0, STAR_Y) {
+            5
+        } else if is_star_yellow(image, scaler, 1450.0, STAR_Y) {
+            4
+        } else {
+            3
+        }
+    };
+
+    log::debug!("[rarity] rightmost_x={}, count={}, result={}*", rightmost_star_x, star_pixel_count, rarity);
+    rarity
 }
 
 /// Detect if a substat line region appears dimmed (inactive/unactivated).

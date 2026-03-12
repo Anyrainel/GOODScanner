@@ -16,10 +16,9 @@ Yas (Yet Another Scanner) is a Rust application that scans Genshin Impact in-gam
 
 ```
 src/
-├── application/
-│   └── good_scanner.rs       # CLI entry point, orchestrates all scanning
+├── cli.rs                     # CLI entry point, orchestrates all scanning
 ├── scanner/
-│   ├── good_common/           # Shared scanner infrastructure
+│   ├── common/                # Shared scanner infrastructure
 │   │   ├── game_controller.rs # Mouse/keyboard/capture control
 │   │   ├── backpack_scanner.rs# Grid-based inventory navigation
 │   │   ├── mappings.rs        # Remote name→GOOD key mappings (from ggartifact.com)
@@ -32,9 +31,9 @@ src/
 │   │   ├── pixel_utils.rs     # Color/pixel analysis helpers
 │   │   ├── fuzzy_match.rs     # Fuzzy string matching for OCR results
 │   │   └── navigation.rs      # Tab/page navigation helpers
-│   ├── good_character_scanner/ # Character panel OCR
-│   ├── good_weapon_scanner/    # Weapon panel OCR
-│   └── good_artifact_scanner/  # Artifact panel OCR
+│   ├── character/              # Character panel OCR
+│   ├── weapon/                 # Weapon panel OCR
+│   └── artifact/               # Artifact panel OCR
 ```
 
 ### How Scanning Works
@@ -46,9 +45,30 @@ src/
 5. OCR results are fuzzy-matched against `MappingManager` data (fetched from ggartifact.com)
 6. Results are exported as GOOD v3 JSON
 
-### Config File
+### Config File (`good_config.json`)
 
-On first run, `good_config.json` is created next to the exe. Users fill in custom in-game names for Traveler/Wanderer/Manekin/Manekina (renameable characters).
+On first run, a bilingual prompt asks for custom in-game names for Traveler/Wanderer/Manekin/Manekina (renameable characters). The JSON file is created next to the exe with these names plus all timing/delay defaults:
+
+```json
+{
+  "traveler_name": "",
+  "wanderer_name": "",
+  "manekin_name": "",
+  "manekina_name": "",
+  "char_tab_delay": 400,
+  "char_open_delay": 1200,
+  "weapon_grid_delay": 60,
+  "weapon_scroll_delay": 200,
+  "weapon_tab_delay": 400,
+  "weapon_open_delay": 1200,
+  "artifact_grid_delay": 60,
+  "artifact_scroll_delay": 200,
+  "artifact_tab_delay": 400,
+  "artifact_open_delay": 1200
+}
+```
+
+Existing config files without delay fields are loaded correctly via `#[serde(default)]` and re-saved with new defaults.
 
 ## Build & Run
 
@@ -59,30 +79,56 @@ rustup default stable
 # Build
 cargo build --release
 
-# The binary is at target/release/yas.exe
+# The binary is at target/release/GOODScanner.exe
 # Run with default (scan artifacts):
-yas.exe
+GOODScanner.exe
 
 # Scan everything:
-yas.exe --good-scan-all
+GOODScanner.exe --all
 
 # Scan specific categories:
-yas.exe --good-scan-characters --good-scan-weapons --good-scan-artifacts
+GOODScanner.exe --characters --weapons --artifacts
 ```
 
 Requires administrator privileges on Windows (for input simulation).
 
 ## CLI Flags
 
-All flags are prefixed with `--good-*` for the main scanner config, plus per-scanner flags (see `--help`).
+All help text is bilingual (Chinese + English). Flags are grouped into four sections:
 
-Key flags:
-- `--good-scan-all` / `--good-scan-characters` / `--good-scan-weapons` / `--good-scan-artifacts`
-- `--good-output-dir <DIR>` — output directory (default: `.`)
-- `--good-traveler-name` / `--good-wanderer-name` — override config file names
-- `--good-ocr-backend <ppocrv3|ppocrv4|ppocrv5>` — OCR model (default: ppocrv5)
-- `--good-debug-compare <PATH>` — compare output against groundtruth JSON
-- `--good-debug-timing` — show per-field OCR timing
+### Scan Targets
+- `--characters` / `--weapons` / `--artifacts` / `--all`
+
+### Global Options
+- `-v, --verbose` — detailed scan info
+- `--continue-on-failure` — keep scanning when individual items fail
+- `--log-progress` — log each scanned item
+- `--output-dir <DIR>` — output directory (default: `.`)
+- `--ocr-backend <NAME>` — override OCR backend globally (ppocrv4 or ppocrv5)
+- `--dump-images` — save OCR region screenshots to `debug_images/`
+
+### Scanner Config
+- `--weapon-min-rarity <N>` — min weapon rarity (default: 3)
+- `--artifact-min-rarity <N>` — min artifact rarity (default: 4)
+- `--char-max-count <N>` / `--weapon-max-count <N>` / `--artifact-max-count <N>` — max items (0 = unlimited)
+- `--weapon-skip-delay` / `--artifact-skip-delay` — skip panel delay (faster but less reliable lock/astral detection)
+- `--artifact-substat-ocr <NAME>` — substat/general OCR backend (default: ppocrv4)
+
+### Debug
+- `--debug-compare <PATH>` — groundtruth JSON comparison
+- `--debug-actual <PATH>` — offline diff (no scanning)
+- `--debug-start-at <N>` — skip to item index
+- `--debug-char-index <N>` — jump to character index
+- `--debug-timing` — per-field OCR timing
+- `--debug-rescan-pos <R,C>` — re-scan a grid position
+- `--debug-rescan-type <TYPE>` — scanner type for re-scan (default: weapon)
+- `--debug-rescan-count <N>` — re-scan iterations (0 = infinite until RMB)
+
+### Architecture Notes
+- Character names are set via first-run prompt → `good_config.json` only (no CLI flags)
+- Timing/delay settings live in `good_config.json` only (no CLI flags)
+- Per-scanner verbose/dump/continue/log flags consolidated into global flags
+- Per-scanner configs are plain structs (no clap derives); the orchestrator (`cli.rs`) populates them from global CLI flags + JSON config
 
 ## Dependencies & Platform
 
@@ -103,11 +149,13 @@ Key flags:
 
 ### Dual-Engine OCR Pipeline
 
-The artifact scanner uses two OCR backends simultaneously:
-- **Main engine** (ppocrv5): Part name, main stat, set name, equip text
-- **Substat engine** (ppocrv4): Substats and level (better for small numbers)
+The artifact scanner uses two OCR backends (based on systematic eval — v4 dominates all fields except level):
+- **Level engine** (ppocrv5, `--ocr-backend`): Only used for artifact level OCR ("+20" style text). v5 is 100% vs v4's 39.4% on level.
+- **General engine** (ppocrv4, `--artifact-substat-ocr`): Used for everything else — name, main stat, set, equip, substats. v4 is strictly better on all these fields.
 
-Both engines OCR each substat line. Results are collected as `OcrCandidate` lists per line, then validated by the roll solver.
+Level uses dual-engine (tries both, takes max valid). Substats use only the general engine (v4). Results are collected as `OcrCandidate` lists per line, then validated by the roll solver.
+
+Weapon and character scanners use a single engine (v4 by default).
 
 ### Roll Solver (`roll_solver.rs`)
 
@@ -165,7 +213,7 @@ Elixir artifacts display a purple banner ("祝圣之霜定义") that shifts all 
 - Compares scan output against groundtruth with Hungarian algorithm matching
 - Groups by `(setKey, slotKey, rarity, lock)` — rarity and lock are hard matching requirements (pixel-based, very reliable)
 - Three-tier categorization: non-stat diffs, stat-key diffs, stat-value-only diffs
-- Always run scans with `--good-dump-images` so dump images match the scan output
+- Always run scans with `--dump-images` so dump images match the scan output
 - Use `python diff_report.py <scan.json> <gt.json>` to generate `diff_report.md`
 
 ### Other Scripts

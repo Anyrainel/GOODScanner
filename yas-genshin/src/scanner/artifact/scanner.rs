@@ -9,19 +9,19 @@ use regex::Regex;
 use yas::ocr::ImageToText;
 
 use super::GoodArtifactScannerConfig;
-use crate::scanner::good_common::backpack_scanner::{BackpackScanConfig, BackpackScanner, GridEvent, ScanAction};
-use crate::scanner::good_common::constants::*;
-use crate::scanner::good_common::coord_scaler::CoordScaler;
-use crate::scanner::good_common::fuzzy_match::fuzzy_match_map;
-use crate::scanner::good_common::game_controller::GenshinGameController;
-use crate::scanner::good_common::mappings::MappingManager;
-use crate::scanner::good_common::models::{DebugOcrField, DebugScanResult, GoodArtifact, GoodSubStat};
-use crate::scanner::good_common::ocr_factory;
-use crate::scanner::good_common::ocr_pool::OcrPool;
-use crate::scanner::good_common::pixel_utils;
-use crate::scanner::good_common::scan_worker::{self, WorkItem};
-use crate::scanner::good_common::roll_solver::{self, OcrCandidate, SolverInput};
-use crate::scanner::good_common::stat_parser;
+use crate::scanner::common::backpack_scanner::{BackpackScanConfig, BackpackScanner, GridEvent, ScanAction};
+use crate::scanner::common::constants::*;
+use crate::scanner::common::coord_scaler::CoordScaler;
+use crate::scanner::common::fuzzy_match::fuzzy_match_map;
+use crate::scanner::common::game_controller::GenshinGameController;
+use crate::scanner::common::mappings::MappingManager;
+use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodArtifact, GoodSubStat};
+use crate::scanner::common::ocr_factory;
+use crate::scanner::common::ocr_pool::OcrPool;
+use crate::scanner::common::pixel_utils;
+use crate::scanner::common::scan_worker::{self, WorkItem};
+use crate::scanner::common::roll_solver::{self, OcrCandidate, SolverInput};
+use crate::scanner::common::stat_parser;
 
 lazy_static::lazy_static! {
     /// Regex for parsing level text like "+20", "+ 12", "0"
@@ -336,14 +336,18 @@ impl GoodArtifactScanner {
             .trim_end_matches(';')
             .trim();
 
+        log::debug!("[find_set_key] text={:?} cleaned={:?} map_size={}", text, cleaned, mappings.artifact_set_map.len());
+
         // Try cleaned text first
         if let Some(key) = fuzzy_match_map(cleaned, &mappings.artifact_set_map) {
+            log::debug!("[find_set_key] matched cleaned={:?} → {:?}", cleaned, key);
             return Some(key);
         }
 
         // Try full text (in case cleaning removed something needed)
         if cleaned != text.trim() {
             if let Some(key) = fuzzy_match_map(text.trim(), &mappings.artifact_set_map) {
+                log::debug!("[find_set_key] matched full text={:?} → {:?}", text.trim(), key);
                 return Some(key);
             }
         }
@@ -358,10 +362,12 @@ impl GoodArtifactScanner {
                 continue;
             }
             if let Some(key) = fuzzy_match_map(line, &mappings.artifact_set_map) {
+                log::debug!("[find_set_key] matched line={:?} → {:?}", line, key);
                 return Some(key);
             }
         }
 
+        log::debug!("[find_set_key] NO MATCH for text={:?}", text);
         None
     }
 
@@ -431,14 +437,19 @@ impl GoodArtifactScanner {
         String::new()
     }
 
-    /// OCR one substat line with both engines and return candidates.
+    /// OCR one substat line and return candidates.
     ///
-    /// Each engine tries direct OCR first, then icon-masked fallback.
-    /// Returns (candidates, stop_marker_hit, raw_texts) where stop_marker_hit is true
-    /// if "2件套" was detected. raw_texts contains the best OCR text from each engine
-    /// for diagnostic logging and rescue attempts.
+    /// Uses only the substat engine (ppocrv4) for substats. Evaluation on 9236
+    /// substat lines showed ppocrv4 at 98.55% accuracy vs ppocrv5 at 55.36%,
+    /// with zero cases where v5 was correct and v4 wasn't. Using v5 for substats
+    /// only adds noise that can cause the solver to pick wrong values.
+    ///
+    /// Tries direct OCR first, then icon-masked fallback.
+    /// Returns (candidates, stop_marker_hit, raw_text) where stop_marker_hit is true
+    /// if "2件套" was detected. raw_text contains the best OCR text for diagnostic
+    /// logging and rescue attempts.
     fn ocr_substat_line_candidates(
-        ocr: &dyn ImageToText<RgbImage>,
+        _ocr: &dyn ImageToText<RgbImage>,
         substat_ocr: &dyn ImageToText<RgbImage>,
         image: &RgbImage,
         sub_rect: (f64, f64, f64, f64),
@@ -447,40 +458,36 @@ impl GoodArtifactScanner {
     ) -> (Vec<OcrCandidate>, bool, [String; 2]) {
         let mut candidates = Vec::new();
 
-        // Helper: best OCR text from one engine (direct + masked fallback)
-        let ocr_with_fallback = |engine: &dyn ImageToText<RgbImage>| -> String {
-            let text = Self::ocr_image_region_shifted(engine, image, sub_rect, y_shift, scaler)
+        // Best OCR text from substat engine (direct + masked fallback)
+        let text1 = {
+            let text = Self::ocr_image_region_shifted(substat_ocr, image, sub_rect, y_shift, scaler)
                 .unwrap_or_default();
             if stat_parser::parse_stat_from_text(&text).is_some() {
-                return text;
+                text
+            } else {
+                let masked = Self::ocr_image_region_shifted_masked(substat_ocr, image, sub_rect, y_shift, scaler)
+                    .unwrap_or_default();
+                if stat_parser::parse_stat_from_text(&masked).is_some() {
+                    masked
+                } else if cn_char_count(&masked) > cn_char_count(&text) {
+                    masked
+                } else {
+                    text
+                }
             }
-            let masked = Self::ocr_image_region_shifted_masked(engine, image, sub_rect, y_shift, scaler)
-                .unwrap_or_default();
-            if stat_parser::parse_stat_from_text(&masked).is_some() {
-                return masked;
-            }
-            if cn_char_count(&masked) > cn_char_count(&text) { masked } else { text }
         };
+        // text2 slot kept empty — main engine not used for substats
+        let text2 = String::new();
 
-        let text1 = ocr_with_fallback(substat_ocr);
-        let text2 = ocr_with_fallback(ocr);
-
-        // Check for stop marker in either text
-        let stop = text1.contains("2\u{4EF6}\u{5957}") || text2.contains("2\u{4EF6}\u{5957}");
-        if stop || (text1.trim().len() < 2 && text2.trim().len() < 2) {
+        // Check for stop marker
+        let stop = text1.contains("2\u{4EF6}\u{5957}");
+        if stop || text1.trim().len() < 2 {
             return (candidates, stop, [text1, text2]);
         }
 
-        // Parse both and collect candidates (including inactive/待激活 substats)
+        // Parse and collect candidate
         if let Some(p1) = stat_parser::parse_stat_from_text(text1.trim()) {
             candidates.push(OcrCandidate { key: p1.key, value: p1.value, inactive: p1.inactive });
-        }
-        if let Some(p2) = stat_parser::parse_stat_from_text(text2.trim()) {
-            // Only add if different from first candidate
-            let dominated = candidates.iter().any(|c| c.key == p2.key && (c.value - p2.value).abs() < 0.01);
-            if !dominated {
-                candidates.push(OcrCandidate { key: p2.key, value: p2.value, inactive: p2.inactive });
-            }
         }
 
         (candidates, false, [text1, text2])
@@ -489,6 +496,8 @@ impl GoodArtifactScanner {
     /// Scan a single artifact from a captured game image.
     ///
     /// This is called from the worker thread with a checked-out OCR model.
+    /// `ocr` = level engine (v5, good at reading "+20" style text)
+    /// `substat_ocr` = general engine (v4, used for everything else: name, main stat, set, equip, substats)
     fn scan_single_artifact(
         ocr: &dyn ImageToText<RgbImage>,
         substat_ocr: &dyn ImageToText<RgbImage>,
@@ -499,8 +508,8 @@ impl GoodArtifactScanner {
         config: &GoodArtifactScannerConfig,
         item_index: usize,
     ) -> Result<ArtifactScanResult> {
-        use crate::scanner::good_common::debug_dump::DumpCtx;
-        use super::super::good_common::constants::{ARTIFACT_LOCK_POS1, ARTIFACT_ASTRAL_POS1, STAR_Y};
+        use crate::scanner::common::debug_dump::DumpCtx;
+        use super::super::common::constants::{ARTIFACT_LOCK_POS1, ARTIFACT_ASTRAL_POS1, STAR_Y};
 
         // 0. Detect rarity — stop on 3-star or below
         let rarity = pixel_utils::detect_artifact_rarity(image, scaler);
@@ -510,7 +519,7 @@ impl GoodArtifactScanner {
         }
 
         // 1. Part name → slot key
-        let part_text = Self::ocr_image_region(ocr, image, ocr_regions.part_name, scaler)?;
+        let part_text = Self::ocr_image_region(substat_ocr, image, ocr_regions.part_name, scaler)?;
         let slot_key = stat_parser::match_slot_key(&part_text);
 
         let slot_key = match slot_key {
@@ -530,7 +539,7 @@ impl GoodArtifactScanner {
         };
 
         // 2. Main stat
-        let main_stat_text = Self::ocr_image_region(ocr, image, ocr_regions.main_stat, scaler)?;
+        let main_stat_text = Self::ocr_image_region(substat_ocr, image, ocr_regions.main_stat, scaler)?;
         let main_stat_key = if slot_key == "flower" {
             Some("hp".to_string())
         } else if slot_key == "plume" {
@@ -678,17 +687,14 @@ impl GoodArtifactScanner {
 
                 if let Some((key, has_pct, is_inactive)) = key_info {
                     let crop_frac = crop_frac_for_stat(has_pct);
-                    // Try number crop with both engines
+                    // Try number crop with substat engine (ppocrv4 only)
                     let mut rescue_val = None;
-                    for engine in [substat_ocr, ocr] {
-                        if let Ok(num_text) = Self::ocr_substat_number_crop(
-                            engine, image, (sub_x, sub_y, sub_w, sub_h), y_shift, scaler, crop_frac,
-                        ) {
-                            if let Some(v) = stat_parser::extract_number(num_text.trim()) {
-                                if v > 0.5 {
-                                    rescue_val = Some(v);
-                                    break;
-                                }
+                    if let Ok(num_text) = Self::ocr_substat_number_crop(
+                        substat_ocr, image, (sub_x, sub_y, sub_w, sub_h), y_shift, scaler, crop_frac,
+                    ) {
+                        if let Some(v) = stat_parser::extract_number(num_text.trim()) {
+                            if v > 0.5 {
+                                rescue_val = Some(v);
                             }
                         }
                     }
@@ -829,11 +835,17 @@ impl GoodArtifactScanner {
         // The OCR candidates include inactive=true when "(待激活)" is detected,
         // and the solver propagates this flag through to SolvedSubstat.inactive.
 
-        // 6. Set name — try multiple Y positions since OCR may miss some substats.
-        //    The set name line is below the substats, so its Y depends on how many
-        //    substats exist. Rather than relying on the parsed count (which may
-        //    undercount due to OCR errors), try the 4-substat position first,
-        //    then fall back to 3, 2, 1 positions.
+        // 6. Set name — the set name label always appears on the row immediately
+        //    after the last substat. With N substats, the set name is at row N+1
+        //    (using substat line Y positions). The set name starts slightly left
+        //    of substats (set_name_x vs sub_x).
+        //
+        //    Strategy:
+        //    a) Primary: read set name at substat_lines[N] Y (row right after last stat)
+        //    b) Cross-validate: if row N+1 has a set name but row N had no valid stat,
+        //       it means OCR missed a stat; if row N also has no stat AND no set name,
+        //       try reading row N as set name (artifact has fewer stats than expected)
+        //    c) Fallback: try the legacy Y positions (set_name_base_y - offset)
         let stat_count = (substats.len() + unactivated_substats.len()).clamp(1, 4);
         if stat_count < 4 && rarity == 5 && config.verbose {
             warn!("[artifact] 5* only identified {} substats", stat_count);
@@ -843,40 +855,83 @@ impl GoodArtifactScanner {
         let mut set_name_text = String::new();
         let mut tried_y = 0.0;
 
-        // Try from 4 substats down to 1 (most common case first)
-        for assumed_count in (1..=4).rev() {
-            let missing = 4 - assumed_count;
-            let set_y = ocr_regions.set_name_base_y + y_shift - (missing as f64 * 40.0);
-            let set_rect = (ocr_regions.set_name_x, set_y, ocr_regions.set_name_w, ocr_regions.set_name_h);
-            // Try regular OCR first, then grayscale fallback.
-            // Some set names work better with one or the other.
-            let text_rgb = Self::ocr_image_region(ocr, image, set_rect, scaler)?;
-            let text = if Self::find_set_key_in_text(&text_rgb, mappings).is_some() {
-                text_rgb
-            } else {
-                let text_gray = Self::ocr_image_region_grayscale(ocr, image, set_rect, scaler, mappings)?;
-                if Self::find_set_key_in_text(&text_gray, mappings).is_some() {
-                    text_gray
-                } else {
-                    // Neither matched — use whichever has more Chinese characters
-                    if cn_char_count(&text_rgb) >= cn_char_count(&text_gray) { text_rgb } else { text_gray }
+        // Helper closure: OCR a set name region and try to match
+        let try_set_ocr = |set_rect: (f64, f64, f64, f64)| -> Result<(Option<String>, String)> {
+            let text_rgb = Self::ocr_image_region(substat_ocr, image, set_rect, scaler)?;
+            if let Some(key) = Self::find_set_key_in_text(&text_rgb, mappings) {
+                return Ok((Some(key), text_rgb));
+            }
+            let text_gray = Self::ocr_image_region_grayscale(substat_ocr, image, set_rect, scaler, mappings)?;
+            if let Some(key) = Self::find_set_key_in_text(&text_gray, mappings) {
+                return Ok((Some(key), text_gray));
+            }
+            let text = if cn_char_count(&text_rgb) >= cn_char_count(&text_gray) { text_rgb } else { text_gray };
+            Ok((None, text))
+        };
+
+        // (a) Primary: try the row right after the last recognized stat.
+        //     stat_count substats → set name at substat_lines[stat_count] Y
+        //     (for stat_count=4, use the legacy set_name_base_y which is below line 3)
+        let primary_y = if stat_count < 4 && (stat_count as usize) < ocr_regions.substat_lines.len() {
+            ocr_regions.substat_lines[stat_count as usize].1 + y_shift
+        } else {
+            ocr_regions.set_name_base_y + y_shift
+        };
+        let primary_rect = (ocr_regions.set_name_x, primary_y, ocr_regions.set_name_w, ocr_regions.set_name_h);
+        let (primary_key, primary_text) = try_set_ocr(primary_rect)?;
+        if config.verbose {
+            let hex_repr: String = primary_text.chars()
+                .map(|c| format!("U+{:04X}", c as u32))
+                .collect::<Vec<_>>()
+                .join(" ");
+            info!("[artifact] set probe: primary stat_count={} set_y={:.0} text=「{}」 hex=[{}]", stat_count, primary_y, primary_text, hex_repr);
+        }
+        if let Some(key) = primary_key {
+            set_key = Some(key);
+            set_name_text = primary_text.clone();
+            tried_y = primary_y;
+        }
+
+        // (b) If primary failed, try all substat line Y positions as set name rows.
+        //     The set name could be at any of these positions if the stat count is wrong.
+        //     Also try the legacy positions for robustness.
+        if set_key.is_none() {
+            set_name_text = primary_text;
+            tried_y = primary_y;
+
+            // Try each substat line Y as a set name position (using set_name_x for wider crop)
+            let mut candidates: Vec<f64> = Vec::new();
+            for line in &ocr_regions.substat_lines {
+                candidates.push(line.1 + y_shift);
+            }
+            // Also add the legacy base position
+            candidates.push(ocr_regions.set_name_base_y + y_shift);
+            // Add legacy offset positions
+            for missing in 1..=3 {
+                candidates.push(ocr_regions.set_name_base_y + y_shift - (missing as f64 * 40.0));
+            }
+            // Deduplicate
+            candidates.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            candidates.dedup_by(|a, b| (*a - *b).abs() < 3.0);
+
+            for &set_y in &candidates {
+                // Skip the primary position we already tried
+                if (set_y - primary_y).abs() < 3.0 { continue; }
+                let set_rect = (ocr_regions.set_name_x, set_y, ocr_regions.set_name_w, ocr_regions.set_name_h);
+                let (maybe_key, text) = try_set_ocr(set_rect)?;
+                if config.verbose {
+                    info!("[artifact] set probe: fallback set_y={:.0} text=「{}」", set_y, text);
                 }
-            };
-            if config.verbose {
-                info!(
-                    "[artifact] set probe: assumed_count={} set_y={:.0} text=「{}」",
-                    assumed_count, set_y, text
-                );
-            }
-            if let Some(key) = Self::find_set_key_in_text(&text, mappings) {
-                set_key = Some(key);
-                set_name_text = text;
-                tried_y = set_y;
-                break;
-            }
-            if set_name_text.is_empty() {
-                set_name_text = text;
-                tried_y = set_y;
+                if let Some(key) = maybe_key {
+                    set_key = Some(key);
+                    set_name_text = text;
+                    tried_y = set_y;
+                    break;
+                }
+                if set_name_text.is_empty() {
+                    set_name_text = text;
+                    tried_y = set_y;
+                }
             }
         }
 
@@ -906,7 +961,7 @@ impl GoodArtifactScanner {
         };
 
         // 8. Equipped character
-        let equip_text = Self::ocr_image_region(ocr, image, ocr_regions.equip, scaler)?;
+        let equip_text = Self::ocr_image_region(substat_ocr, image, ocr_regions.equip, scaler)?;
         let location = Self::parse_equip_location(&equip_text, mappings);
 
         // 9. Lock
@@ -1018,6 +1073,13 @@ impl GoodArtifactScanner {
 
         // Create OCR pools with multiple model instances for parallel OCR.
         // Use available parallelism (capped at 8) for pool size.
+        //
+        // Two separate pools are required because each worker checks out from BOTH pools
+        // simultaneously — sharing one pool causes deadlock (N tasks each hold 1, all wait for 2nd).
+        //
+        // Pool roles (based on systematic eval — v4 dominates on all fields except level):
+        //   ocr_pool       = "level engine" (v5) — only used for artifact level OCR
+        //   substat_pool   = "general engine" (v4) — used for name, main stat, set, equip, substats
         let pool_size = std::thread::available_parallelism()
             .map(|n| n.get().min(8))
             .unwrap_or(4);
@@ -1026,15 +1088,12 @@ impl GoodArtifactScanner {
             move || ocr_factory::create_ocr_model(&ocr_backend),
             pool_size,
         )?);
-        // Separate OCR pool for substats — always create a separate pool even if
-        // same backend, because each task checks out from both pools simultaneously.
-        // Sharing a pool causes deadlock: N tasks each hold 1 instance, all waiting for a 2nd.
         let substat_backend = self.config.substat_ocr_backend.clone();
         let substat_ocr_pool = Arc::new(OcrPool::new(
             move || ocr_factory::create_ocr_model(&substat_backend),
             pool_size,
         )?);
-        info!("[artifact] OCR pool: {} instances (main={}, substat={})",
+        info!("[artifact] OCR pool: {} instances (level_engine={}, general_engine={})",
             pool_size, self.config.ocr_backend, self.config.substat_ocr_backend);
 
         // Shared context for worker threads
@@ -1090,7 +1149,7 @@ impl GoodArtifactScanner {
         let scan_config = BackpackScanConfig {
             delay_grid_item: self.config.delay_grid_item,
             delay_scroll: self.config.delay_scroll,
-            delay_after_panel: 100,
+            delay_after_panel: if self.config.skip_lock_delay { 0 } else { 100 },
         };
 
         bp.scan_grid(
@@ -1109,12 +1168,14 @@ impl GoodArtifactScanner {
                         // Quick rarity check on main thread to stop early
                         let rarity = pixel_utils::detect_artifact_rarity(&image, &scaler);
                         if rarity <= 3 {
-                            info!("[artifact] detected {}* item, stopping capture", rarity);
+                            info!("[artifact] detected {}* item at idx={}, stopping capture", rarity, idx);
                             return ScanAction::Stop;
                         }
 
-                        // Send image to worker for OCR processing
-                        if item_tx.send(WorkItem { index: idx, image, metadata: () }).is_err() {
+                        // Send image to worker for OCR processing.
+                        // Normalize index to 0-based so the worker's BTreeMap drain works correctly.
+                        let worker_idx = idx - start_at;
+                        if item_tx.send(WorkItem { index: worker_idx, image, metadata: () }).is_err() {
                             error!("[artifact] worker channel closed");
                             return ScanAction::Stop;
                         }
@@ -1131,24 +1192,9 @@ impl GoodArtifactScanner {
         // Wait for all OCR work to complete and collect results
         let mut artifacts = worker_handle.join();
 
-        // Post-processing: remove unleveled 4-star artifacts from 5-star-capable sets
-        let before_count = artifacts.len();
-        artifacts.retain(|a| {
-            if a.rarity == 4 && a.level == 0 {
-                if let Some(&max_rarity) = self.mappings.artifact_set_max_rarity.get(&a.set_key) {
-                    if max_rarity >= 5 {
-                        return false;
-                    }
-                }
-            }
-            true
-        });
-        if artifacts.len() < before_count {
-            info!(
-                "[artifact] filtered {} unleveled 4* low-value artifacts",
-                before_count - artifacts.len()
-            );
-        }
+        // Note: previously filtered unleveled 4-star artifacts from 5-star-capable sets,
+        // but this removed valid data (e.g., AubadeOfMorningstarAndMoon, ADayCarvedFromRisingWinds).
+        // All scanned artifacts are now kept regardless.
 
         info!(
             "[artifact] complete, {} artifacts scanned (>={}*) in {:?}",
@@ -1197,9 +1243,9 @@ impl GoodArtifactScanner {
             duration_ms: t.elapsed().as_millis() as u64,
         });
 
-        // Part name → slot key
+        // Part name → slot key (use substat_ocr = v4 for text fields)
         let t = Instant::now();
-        let part_text = Self::ocr_image_region(ocr, image, self.ocr_regions.part_name, scaler)
+        let part_text = Self::ocr_image_region(substat_ocr, image, self.ocr_regions.part_name, scaler)
             .unwrap_or_default();
         let slot_key = stat_parser::match_slot_key(&part_text)
             .map(|s| s.to_string())
@@ -1212,9 +1258,9 @@ impl GoodArtifactScanner {
             duration_ms: t.elapsed().as_millis() as u64,
         });
 
-        // Main stat
+        // Main stat (use substat_ocr = v4 for text fields)
         let t = Instant::now();
-        let main_stat_text = Self::ocr_image_region(ocr, image, self.ocr_regions.main_stat, scaler)
+        let main_stat_text = Self::ocr_image_region(substat_ocr, image, self.ocr_regions.main_stat, scaler)
             .unwrap_or_default();
         let main_stat_key = if slot_key == "flower" {
             "hp".to_string()
@@ -1304,11 +1350,11 @@ impl GoodArtifactScanner {
         let set_y = self.ocr_regions.set_name_base_y + y_shift - (missing_stats as f64 * 40.0);
         let set_rect = (self.ocr_regions.set_name_x, set_y, self.ocr_regions.set_name_w, self.ocr_regions.set_name_h);
         let set_name_text = {
-            let rgb = Self::ocr_image_region(ocr, image, set_rect, scaler).unwrap_or_default();
+            let rgb = Self::ocr_image_region(substat_ocr, image, set_rect, scaler).unwrap_or_default();
             if Self::find_set_key_in_text(&rgb, &self.mappings).is_some() {
                 rgb
             } else {
-                let gray = Self::ocr_image_region_grayscale(ocr, image, set_rect, scaler, &self.mappings).unwrap_or_default();
+                let gray = Self::ocr_image_region_grayscale(substat_ocr, image, set_rect, scaler, &self.mappings).unwrap_or_default();
                 if Self::find_set_key_in_text(&gray, &self.mappings).is_some() { gray } else { rgb }
             }
         };
@@ -1321,9 +1367,9 @@ impl GoodArtifactScanner {
             duration_ms: t.elapsed().as_millis() as u64,
         });
 
-        // Equip
+        // Equip (use substat_ocr = v4 for text fields)
         let t = Instant::now();
-        let equip_text = Self::ocr_image_region(ocr, image, self.ocr_regions.equip, scaler)
+        let equip_text = Self::ocr_image_region(substat_ocr, image, self.ocr_regions.equip, scaler)
             .unwrap_or_default();
         let location = Self::parse_equip_location(&equip_text, &self.mappings);
         fields.push(DebugOcrField {

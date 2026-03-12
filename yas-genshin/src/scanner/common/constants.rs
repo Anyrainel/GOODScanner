@@ -27,9 +27,9 @@ pub const NO_CONSTELLATION_CHARACTERS: &[&str] = &["Aloy", "Manekin", "Manekina"
 // Default delay values (in milliseconds), matching GOODScanner settings.json
 // ================================================================
 
-pub const DEFAULT_DELAY_OPEN_SCREEN: u64 = 2000;
-pub const DEFAULT_DELAY_CHAR_TAB_SWITCH: u64 = 500;
-pub const DEFAULT_DELAY_INV_TAB_SWITCH: u64 = 500;
+pub const DEFAULT_DELAY_OPEN_SCREEN: u64 = 1200;
+pub const DEFAULT_DELAY_CHAR_TAB_SWITCH: u64 = 400;
+pub const DEFAULT_DELAY_INV_TAB_SWITCH: u64 = 400;
 pub const DEFAULT_DELAY_SCROLL: u64 = 200;
 pub const DEFAULT_DELAY_GRID_ITEM: u64 = 60;
 
@@ -39,7 +39,7 @@ pub const DEFAULT_DELAY_GRID_ITEM: u64 = 60;
 // ================================================================
 
 /// Character name + element OCR region
-pub const CHAR_NAME_RECT: (f64, f64, f64, f64) = (128.0, 15.0, 330.0, 68.0);
+pub const CHAR_NAME_RECT: (f64, f64, f64, f64) = (128.0, 18.0, 330.0, 60.0);
 /// Character level OCR region
 pub const CHAR_LEVEL_RECT: (f64, f64, f64, f64) = (1440.0, 203.0, 248.0, 42.0);
 

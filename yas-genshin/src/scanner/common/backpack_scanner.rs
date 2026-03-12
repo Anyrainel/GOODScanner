@@ -192,7 +192,7 @@ impl<'a> BackpackScanner<'a> {
 
         // Click the first grid position to ensure focus
         self.ctrl.click_at(GRID_FIRST_X, GRID_FIRST_Y);
-        utils::sleep(500);
+        utils::sleep(300);
 
         let row = GRID_ROWS.min(total_row);
         let mut scanned_row: usize = 0;

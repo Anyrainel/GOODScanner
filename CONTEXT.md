@@ -30,7 +30,7 @@ All weapon fields are displayed on fixed positions, except name for weapon and c
 ## Artifact Data
 
 For artifacts, we need to read from the detail card on the right:
-- slot name (生之花、死之羽、时之沙、空之杯、理之冠)
+- slot name (生之花、死之羽、时之沙、空之杯、理之冠)w
 - main stat key
 - rarity (4-5), star pixel detection to help with filtering stopping condition
 - level (0-20 at rarity 5, 0-16 at rarity 4)

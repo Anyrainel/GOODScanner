@@ -3,24 +3,25 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Result};
 use image::{GenericImageView, RgbImage};
-use log::{error, info, warn};
+use indicatif::{ProgressBar, ProgressStyle};
+use log::{debug, error, info, warn};
 use regex::Regex;
 
 use yas::ocr::ImageToText;
 use yas::utils;
 
 use super::GoodCharacterScannerConfig;
-use crate::scanner::good_common::constants::*;
-use crate::scanner::good_common::coord_scaler::CoordScaler;
-use crate::scanner::good_common::debug_dump::DumpCtx;
-use crate::scanner::good_common::fuzzy_match::fuzzy_match_map;
-use crate::scanner::good_common::game_controller::GenshinGameController;
-use crate::scanner::good_common::mappings::MappingManager;
-use crate::scanner::good_common::models::{DebugOcrField, DebugScanResult, GoodCharacter, GoodTalent};
-use crate::scanner::good_common::navigation;
-use crate::scanner::good_common::ocr_factory;
-use crate::scanner::good_common::ocr_pool::OcrPool;
-use crate::scanner::good_common::stat_parser::level_to_ascension;
+use crate::scanner::common::constants::*;
+use crate::scanner::common::coord_scaler::CoordScaler;
+use crate::scanner::common::debug_dump::DumpCtx;
+use crate::scanner::common::fuzzy_match::fuzzy_match_map;
+use crate::scanner::common::game_controller::GenshinGameController;
+use crate::scanner::common::mappings::MappingManager;
+use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodCharacter, GoodTalent};
+use crate::scanner::common::navigation;
+use crate::scanner::common::ocr_factory;
+use crate::scanner::common::ocr_pool::OcrPool;
+use crate::scanner::common::stat_parser::level_to_ascension;
 
 /// Character scanner ported from GOODScanner/lib/character_scanner.js.
 ///
@@ -136,7 +137,7 @@ impl GoodCharacterScanner {
         let (name, element) = self.parse_name_and_element(&text);
 
         if name.is_some() {
-            info!("[character] name OCR: {:?} -> {:?}", text, name);
+            debug!("[character] name OCR: {:?} -> {:?}", text, name);
             return Ok((name, element, text));
         }
 
@@ -356,12 +357,23 @@ impl GoodCharacterScanner {
         c_index: usize,
         is_first_click: bool,
         tab_delay: u64,
+        dump: &Option<DumpCtx>,
     ) -> Result<bool> {
         let click_y = CHAR_CONSTELLATION_Y_BASE + c_index as f64 * CHAR_CONSTELLATION_Y_STEP;
         ctrl.click_at(CHAR_CONSTELLATION_X, click_y);
 
-        let delay = if is_first_click { tab_delay } else { tab_delay / 2 };
+        let delay = if is_first_click { tab_delay * 3 / 4 } else { tab_delay / 2 };
         utils::sleep(delay as u32);
+
+        // Dump per-constellation-node image
+        if let Some(ref ctx) = dump {
+            if let Ok(img) = ctrl.capture_game() {
+                ctx.dump_region(
+                    &format!("constellation_c{}", c_index + 1),
+                    &img, CHAR_CONSTELLATION_ACTIVATE_RECT, &ctrl.scaler,
+                );
+            }
+        }
 
         let text = Self::ocr_rect(ocr, ctrl, CHAR_CONSTELLATION_ACTIVATE_RECT)?;
         // "已激活" means "Activated"
@@ -385,7 +397,7 @@ impl GoodCharacterScanner {
         // Save the full constellation page
         let path = format!("debug_constellation_{}.png", character_name);
         let _ = image.save(&path);
-        info!("[constellation-debug] saved: {}", path);
+        debug!("[constellation-debug] saved: {}", path);
 
         // Sample lightness at each constellation node position
         let scaler = &ctrl.scaler;
@@ -417,7 +429,7 @@ impl GoodCharacterScanner {
                 }
                 let avg_lightness = if count > 0 { sum / count as f64 } else { 0.0 };
 
-                info!(
+                debug!(
                     "[constellation-debug] {} C{}: pixel({},{}) = ({},{},{}) lightness={:.1} avg5x5={:.1}",
                     character_name, i + 1, sx, sy, pixel[0], pixel[1], pixel[2], lightness, avg_lightness
                 );
@@ -432,6 +444,7 @@ impl GoodCharacterScanner {
         ctrl: &mut GenshinGameController,
         character_name: &str,
         _element: &Option<String>,
+        dump: &Option<DumpCtx>,
     ) -> Result<i32> {
         if NO_CONSTELLATION_CHARACTERS.contains(&character_name) {
             return Ok(0);
@@ -443,27 +456,34 @@ impl GoodCharacterScanner {
         let td = self.config.tab_delay;
         let constellation;
 
-        let c3 = Self::is_constellation_activated(ocr, ctrl, 2, true, td)?;
+        let c3 = Self::is_constellation_activated(ocr, ctrl, 2, true, td, dump)?;
         if !c3 {
-            let c2 = Self::is_constellation_activated(ocr, ctrl, 1, false, td)?;
+            let c2 = Self::is_constellation_activated(ocr, ctrl, 1, false, td, dump)?;
             if !c2 {
-                let c1 = Self::is_constellation_activated(ocr, ctrl, 0, false, td)?;
+                let c1 = Self::is_constellation_activated(ocr, ctrl, 0, false, td, dump)?;
                 constellation = if c1 { 1 } else { 0 };
             } else {
                 constellation = 2;
             }
         } else {
-            let c6 = Self::is_constellation_activated(ocr, ctrl, 5, false, td)?;
+            let c6 = Self::is_constellation_activated(ocr, ctrl, 5, false, td, dump)?;
             if c6 {
                 constellation = 6;
             } else {
-                let c4 = Self::is_constellation_activated(ocr, ctrl, 3, false, td)?;
+                let c4 = Self::is_constellation_activated(ocr, ctrl, 3, false, td, dump)?;
                 if !c4 {
                     constellation = 3;
                 } else {
-                    let c5 = Self::is_constellation_activated(ocr, ctrl, 4, false, td)?;
+                    let c5 = Self::is_constellation_activated(ocr, ctrl, 4, false, td, dump)?;
                     constellation = if c5 { 5 } else { 4 };
                 }
+            }
+        }
+
+        // Dump the full constellation screen BEFORE dismissing the popup
+        if let Some(ref ctx) = dump {
+            if let Ok(img) = ctrl.capture_game() {
+                ctx.dump_region("constellation_screen", &img, (0.0, 0.0, 1920.0, 1080.0), &ctrl.scaler);
             }
         }
 
@@ -601,7 +621,7 @@ impl GoodCharacterScanner {
         utils::sleep(delay as u32);
 
         let text = Self::ocr_rect(ocr, ctrl, CHAR_TALENT_LEVEL_RECT)?;
-        info!("[talent] click fallback idx={} raw OCR: {:?}", talent_index, text);
+        debug!("[talent] click fallback idx={} raw OCR: {:?}", talent_index, text);
         let re = Regex::new(r"[Ll][Vv]\.?\s*(\d{1,2})")?;
         if let Some(caps) = re.captures(&text) {
             let v: i32 = caps[1].parse().unwrap_or(1);
@@ -653,7 +673,7 @@ impl GoodCharacterScanner {
             || {
                 let ocr = ocr_pool.get();
                 Self::ocr_image_region(&ocr, &image, CHAR_TALENT_OVERVIEW_AUTO, &scaler)
-                    .map(|t| { let lv = Self::parse_lv_text(&t); info!("[talent] overview auto: 「{}」 → {}", t.trim(), lv); lv })
+                    .map(|t| { let lv = Self::parse_lv_text(&t); debug!("[talent] overview auto: 「{}」 → {}", t.trim(), lv); lv })
                     .unwrap_or(0)
             },
             || {
@@ -661,13 +681,13 @@ impl GoodCharacterScanner {
                     || {
                         let ocr = ocr_pool.get();
                         Self::ocr_image_region(&ocr, &image, CHAR_TALENT_OVERVIEW_SKILL, &scaler)
-                            .map(|t| { let lv = Self::parse_lv_text(&t); info!("[talent] overview skill: 「{}」 → {}", t.trim(), lv); lv })
+                            .map(|t| { let lv = Self::parse_lv_text(&t); debug!("[talent] overview skill: 「{}」 → {}", t.trim(), lv); lv })
                             .unwrap_or(0)
                     },
                     || {
                         let ocr = ocr_pool.get();
                         Self::ocr_image_region(&ocr, &image, burst_rect, &scaler)
-                            .map(|t| { let lv = Self::parse_lv_text(&t); info!("[talent] overview burst: 「{}」 → {}", t.trim(), lv); lv })
+                            .map(|t| { let lv = Self::parse_lv_text(&t); debug!("[talent] overview burst: 「{}」 → {}", t.trim(), lv); lv })
                             .unwrap_or(0)
                     },
                 )
@@ -776,15 +796,7 @@ impl GoodCharacterScanner {
             }
 
             level_info = Self::read_level(&ocr, ctrl)?;
-            constellation = self.read_constellation_count(&ocr, ctrl, &name, &element)?;
-
-            // Dump the constellation screen
-            if let Some(ref ctx) = dump {
-                if let Ok(img) = ctrl.capture_game() {
-                    ctx.dump_region("constellation_screen", &img, (0.0, 0.0, 1920.0, 1080.0), &ctrl.scaler);
-                    ctx.dump_region("constellation_activate", &img, CHAR_CONSTELLATION_ACTIVATE_RECT, &ctrl.scaler);
-                }
-            }
+            constellation = self.read_constellation_count(&ocr, ctrl, &name, &element, &dump)?;
 
             // Drop the single OCR guard before talent reading (which uses pool internally)
             drop(ocr);
@@ -820,15 +832,7 @@ impl GoodCharacterScanner {
             }
 
             let ocr = ocr_pool.get();
-            constellation = self.read_constellation_count(&ocr, ctrl, &name, &element)?;
-
-            // Dump the constellation screen
-            if let Some(ref ctx) = dump {
-                if let Ok(img) = ctrl.capture_game() {
-                    ctx.dump_region("constellation_screen", &img, (0.0, 0.0, 1920.0, 1080.0), &ctrl.scaler);
-                    ctx.dump_region("constellation_activate", &img, CHAR_CONSTELLATION_ACTIVATE_RECT, &ctrl.scaler);
-                }
-            }
+            constellation = self.read_constellation_count(&ocr, ctrl, &name, &element, &dump)?;
 
             ctrl.click_at(CHAR_TAB_ATTRIBUTES.0, CHAR_TAB_ATTRIBUTES.1);
             utils::sleep(self.config.tab_delay as u32);
@@ -940,6 +944,14 @@ impl GoodCharacterScanner {
         let mut consecutive_failures = 0;
         let mut reverse = false;
 
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .unwrap(),
+        );
+        pb.set_message("0 characters scanned");
+
         loop {
             if utils::is_rmb_down() {
                 info!("[character] user interrupted scan");
@@ -953,17 +965,20 @@ impl GoodCharacterScanner {
                     if first_name.is_none() {
                         first_name = Some(character.key.clone());
                     }
+                    let char_msg = format!(
+                        "{} Lv.{} C{} {}/{}/{}{}",
+                        character.key, character.level, character.constellation,
+                        character.talent.auto, character.talent.skill, character.talent.burst,
+                        if talent_sus { " [talent suspicious]" } else { "" }
+                    );
                     if self.config.log_progress {
-                        info!(
-                            "[character] {} Lv.{} C{} {}/{}/{}{}",
-                            character.key, character.level, character.constellation,
-                            character.talent.auto, character.talent.skill, character.talent.burst,
-                            if talent_sus { " [talent suspicious]" } else { "" }
-                        );
+                        info!("[character] {}", char_msg);
                     }
                     characters.push(character);
                     talent_suspicious_flags.push(talent_sus);
                     consecutive_failures = 0;
+                    pb.set_message(format!("{} scanned — {}", characters.len(), char_msg));
+                    pb.tick();
                 }
                 Ok((None, _)) => {
                     // Skipped (continue_on_failure)
@@ -1003,6 +1018,8 @@ impl GoodCharacterScanner {
             utils::sleep(self.config.tab_delay as u32);
             reverse = !reverse;
         }
+
+        pb.finish_with_message(format!("{} characters scanned", characters.len()));
 
         // Close character screen
         ctrl.key_press(enigo::Key::Escape);
@@ -1288,7 +1305,7 @@ impl GoodCharacterScanner {
 
         // Constellation
         let t = Instant::now();
-        let constellation = self.read_constellation_count(ocr, ctrl, &name_key, &element)
+        let constellation = self.read_constellation_count(ocr, ctrl, &name_key, &element, &None)
             .unwrap_or(0);
         fields.push(DebugOcrField {
             field_name: "constellation".into(),

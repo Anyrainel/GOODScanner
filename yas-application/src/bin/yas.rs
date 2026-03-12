@@ -1,5 +1,5 @@
 use yas::utils::press_any_key_to_continue;
-use yas_genshin::application::GoodScannerApplication;
+use yas_genshin::cli::GoodScannerApplication;
 
 fn init() {
     env_logger::Builder::new()

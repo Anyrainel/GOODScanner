@@ -1,2 +1,2 @@
 pub mod scanner;
-pub mod application;
+pub mod cli;
