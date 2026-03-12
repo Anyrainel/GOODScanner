@@ -12,3 +12,5 @@ data/
 scan_output/
 debug_images/
 diff_report.md
+*.log
+.claude/
