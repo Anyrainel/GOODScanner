@@ -62,15 +62,15 @@ pub fn get_game_info(window_names: &[&str]) -> Result<GameInfo> {
 
     let (hwnd, is_cloud) = get_window(window_names)?;
 
+    // Only restore if minimized — do NOT steal focus here.
+    // Focus is handled later by GenshinGameController::focus_game_window()
+    // after the user confirms they are ready.
     unsafe {
-        ShowWindow(hwnd, SW_RESTORE);
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+            utils::sleep(500);
+        }
     }
-
-    unsafe {
-        SetForegroundWindow(hwnd);
-    }
-
-    utils::sleep(1000);
 
     let rect = utils::get_client_rect(hwnd)?;
     let resolution_family = ResolutionFamily::new(rect.to_rect_usize().size());

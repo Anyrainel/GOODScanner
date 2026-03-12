@@ -485,9 +485,9 @@ impl GoodScannerApplication {
             println!("即将扫描: {}", targets.join(", "));
             println!("Ready to scan: {}", targets.join(", "));
             println!();
-            println!("请确认游戏已运行并处于正确界面，按回车开始扫描。");
-            println!("Please confirm the game is running and on the correct screen.");
-            println!("Press Enter to start...");
+            println!("请确认游戏已运行，按回车开始扫描。扫描过程中可按鼠标右键终止。");
+            println!("Please confirm the game is running. Press Enter to start.");
+            println!("You can right-click to abort during scanning.");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
 
