@@ -1,6 +1,6 @@
 use anyhow::Result;
 use image::RgbImage;
-use log::{error, info};
+use log::{debug, error, info};
 use regex::Regex;
 
 use yas::ocr::ImageToText;
@@ -135,14 +135,14 @@ impl<'a> BackpackScanner<'a> {
                 && self.pages_scrolled % SCROLL_CORRECTION_INTERVAL as u32 == 0
             {
                 ticks -= 1;
-                info!(
+                debug!(
                     "[backpack] scroll correction at page {} (-1 tick)",
                     self.pages_scrolled
                 );
             }
         }
 
-        info!(
+        debug!(
             "[backpack] scroll {} rows ({} ticks, page {})",
             row_count, ticks, self.pages_scrolled
         );

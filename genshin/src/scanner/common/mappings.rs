@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::Deserialize;
 
 const MAPPINGS_URL: &str = "https://ggartifact.com/good/mappings.json";
@@ -152,7 +152,7 @@ impl MappingManager {
                         now_secs
                     );
                     std::fs::write(MAPPINGS_META_PATH, meta)?;
-                    info!("游戏数据映射已更新 / Game data mappings updated");
+                    debug!("游戏数据映射已更新 / Game data mappings updated");
                 } else {
                     if cache_exists {
                         warn!(

@@ -896,7 +896,7 @@ impl GoodCharacterScanner {
             move || ocr_factory::create_ocr_model(&ocr_backend),
             pool_size,
         )?;
-        info!("[character] OCR pool: {} instances", pool_size);
+        debug!("[character] OCR pool: {} instances", pool_size);
 
         // Return to main world using BGI-style strategy:
         // press Escape one at a time, verify after each press.
@@ -913,14 +913,14 @@ impl GoodCharacterScanner {
             let ocr = ocr_pool.get();
             let check = Self::ocr_rect(&ocr, ctrl, CHAR_NAME_RECT).unwrap_or_default();
             if !check.trim().is_empty() {
-                info!("[character] character screen detected on attempt {}", attempt + 1);
+                debug!("[character] character screen detected on attempt {}", attempt + 1);
                 screen_opened = true;
                 break;
             }
 
             // 'c' may have toggled it off, or we weren't in main world.
             // Return to main world again and retry.
-            info!("[character] character screen not detected (attempt {}), retrying...", attempt + 1);
+            debug!("[character] character screen not detected (attempt {}), retrying...", attempt + 1);
             ctrl.return_to_main_ui(4);
         }
         if !screen_opened {
@@ -929,7 +929,7 @@ impl GoodCharacterScanner {
 
         // Jump to the specified character index
         if start_at_char > 0 {
-            info!("[character] jumping to character index {}...", start_at_char);
+            debug!("[character] jumping to character index {}...", start_at_char);
             for _ in 0..start_at_char {
                 ctrl.click_at(CHAR_NEXT_POS.0, CHAR_NEXT_POS.1);
                 utils::sleep((self.config.tab_delay / 2).max(100) as u32);
@@ -972,7 +972,7 @@ impl GoodCharacterScanner {
                         if talent_sus { " [talent suspicious]" } else { "" }
                     );
                     if self.config.log_progress {
-                        info!("[character] {}", char_msg);
+                        debug!("[character] {}", char_msg);
                     }
                     characters.push(character);
                     talent_suspicious_flags.push(talent_sus);

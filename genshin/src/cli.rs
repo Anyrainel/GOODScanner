@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Result};
 use clap::{command, ArgMatches, Args, FromArgMatches};
-use log::info;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 
 use yas::game_info::{GameInfo, GameInfoBuilder};
@@ -180,20 +180,20 @@ fn load_or_create_config() -> Result<GoodUserConfig> {
         let json = serde_json::to_string_pretty(&config)?;
         std::fs::write(&path, &json)?;
         println!("配置已保存 / Config saved to: {}", path.display());
-        info!("Created config at: {}", path.display());
+        debug!("Created config at: {}", path.display());
         return Ok(config);
     }
 
     let contents = std::fs::read_to_string(&path)?;
     let config: GoodUserConfig = serde_json::from_str(&contents)
         .map_err(|e| anyhow!("配置解析失败 / Failed to parse {}: {}", path.display(), e))?;
-    info!("Loaded config from {}", path.display());
+    debug!("Loaded config from {}", path.display());
 
     // Re-save to add any new default fields that didn't exist in the old file
     let updated_json = serde_json::to_string_pretty(&config)?;
     if updated_json != contents {
         let _ = std::fs::write(&path, &updated_json);
-        info!("Config updated with new default fields");
+        debug!("Config updated with new default fields");
     }
 
     Ok(config)
@@ -460,10 +460,10 @@ impl GoodScannerApplication {
         // Fetch and load mappings (before game interaction — no focus steal)
         info!("=== 加载映射数据 / Loading mappings ===");
         let overrides = user_config.to_overrides();
-        if let Some(ref n) = overrides.traveler_name { info!("旅行者 / Traveler: {}", n); }
-        if let Some(ref n) = overrides.wanderer_name { info!("流浪者 / Wanderer: {}", n); }
-        if let Some(ref n) = overrides.manekin_name { info!("奇偶·男 / Manekin: {}", n); }
-        if let Some(ref n) = overrides.manekina_name { info!("奇偶·女 / Manekina: {}", n); }
+        if let Some(ref n) = overrides.traveler_name { debug!("旅行者 / Traveler: {}", n); }
+        if let Some(ref n) = overrides.wanderer_name { debug!("流浪者 / Wanderer: {}", n); }
+        if let Some(ref n) = overrides.manekin_name { debug!("奇偶·男 / Manekin: {}", n); }
+        if let Some(ref n) = overrides.manekina_name { debug!("奇偶·女 / Manekina: {}", n); }
         let mappings = Arc::new(MappingManager::new(&overrides)?);
         info!(
             "已加载 / Loaded: {} characters, {} weapons, {} artifact sets",
@@ -474,9 +474,9 @@ impl GoodScannerApplication {
 
         // Find and focus the game window
         let game_info = Self::get_game_info()?;
-        info!("window: {:?}", game_info.window);
-        info!("ui: {:?}", game_info.ui);
-        info!("cloud: {}", game_info.is_cloud);
+        debug!("window: {:?}", game_info.window);
+        debug!("ui: {:?}", game_info.ui);
+        debug!("cloud: {}", game_info.is_cloud);
 
         let mut ctrl = GenshinGameController::new(game_info)?;
         ctrl.focus_game_window();
@@ -487,7 +487,7 @@ impl GoodScannerApplication {
 
         // Log OCR backend selection
         if let Some(ref backend) = config.ocr_backend {
-            info!("OCR后端覆盖 / OCR backend override: {}", backend);
+            debug!("OCR后端覆盖 / OCR backend override: {}", backend);
         }
 
         // Scan characters
@@ -502,16 +502,18 @@ impl GoodScannerApplication {
             if config.debug_timing {
                 let elapsed = t.elapsed();
                 let avg = if result.is_empty() { 0 } else { elapsed.as_millis() as usize / result.len() };
-                info!("[timing] characters: {} items in {:?} (avg {}ms/item)", result.len(), elapsed, avg);
+                debug!("[timing] characters: {} items in {:?} (avg {}ms/item)", result.len(), elapsed, avg);
             }
             info!("已扫描 / Scanned {} characters", result.len());
             characters = Some(result);
 
-            ctrl.return_to_main_ui(4);
+            if !yas::utils::was_aborted() {
+                ctrl.return_to_main_ui(4);
+            }
         }
 
         // Scan weapons
-        if scan_weapons {
+        if scan_weapons && !yas::utils::was_aborted() {
             info!("=== 扫描武器 / Scanning weapons ===");
             let weapon_config = Self::make_weapon_config(&config, &user_config);
             let scanner = GoodWeaponScanner::new(
@@ -522,14 +524,14 @@ impl GoodScannerApplication {
             if config.debug_timing {
                 let elapsed = t.elapsed();
                 let avg = if result.is_empty() { 0 } else { elapsed.as_millis() as usize / result.len() };
-                info!("[timing] weapons: {} items in {:?} (avg {}ms/item)", result.len(), elapsed, avg);
+                debug!("[timing] weapons: {} items in {:?} (avg {}ms/item)", result.len(), elapsed, avg);
             }
             info!("已扫描 / Scanned {} weapons", result.len());
             weapons = Some(result);
         }
 
         // Scan artifacts
-        if scan_artifacts {
+        if scan_artifacts && !yas::utils::was_aborted() {
             info!("=== 扫描圣遗物 / Scanning artifacts ===");
             let artifact_config = Self::make_artifact_config(&config, &user_config);
             let skip_open = scan_weapons;
@@ -541,10 +543,14 @@ impl GoodScannerApplication {
             if config.debug_timing {
                 let elapsed = t.elapsed();
                 let avg = if result.is_empty() { 0 } else { elapsed.as_millis() as usize / result.len() };
-                info!("[timing] artifacts: {} items in {:?} (avg {}ms/item)", result.len(), elapsed, avg);
+                debug!("[timing] artifacts: {} items in {:?} (avg {}ms/item)", result.len(), elapsed, avg);
             }
             info!("已扫描 / Scanned {} artifacts", result.len());
             artifacts = Some(result);
+        }
+
+        if yas::utils::was_aborted() {
+            info!("扫描被用户中断 / Scan aborted by user (right-click)");
         }
 
         // Export as GOOD v3
@@ -664,7 +670,7 @@ impl GoodScannerApplication {
                     let items_per_page = GRID_COLS * GRID_ROWS;
                     let pages_to_skip = config.debug_start_at / items_per_page;
                     if pages_to_skip > 0 {
-                        info!("[rescan] scrolling {} pages ({} rows)...", pages_to_skip, pages_to_skip * GRID_ROWS);
+                        debug!("[rescan] scrolling {} pages ({} rows)...", pages_to_skip, pages_to_skip * GRID_ROWS);
                         let estimated_ticks = pages_to_skip * GRID_ROWS * 5;
                         for _ in 0..estimated_ticks {
                             ctrl.mouse_scroll(-1);

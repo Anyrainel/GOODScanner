@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Result};
 use image::{GenericImageView, RgbImage};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use regex::Regex;
 
 use yas::ocr::ImageToText;
@@ -150,7 +150,7 @@ impl GoodWeaponScanner {
         let name_text = Self::ocr_image_region(ocr, image, ocr_regions.name, scaler)?;
         let weapon_key = fuzzy_match_map(&name_text, &mappings.weapon_name_map);
         if config.verbose {
-            info!("[weapon] name OCR: {:?} -> {:?}", name_text, weapon_key);
+            debug!("[weapon] name OCR: {:?} -> {:?}", name_text, weapon_key);
         }
 
         if weapon_key.is_none() {
@@ -188,7 +188,7 @@ impl GoodWeaponScanner {
         let equip_text = Self::ocr_image_region(ocr, image, ocr_regions.equip, scaler)?;
         let location = Self::parse_equip_location(&equip_text, mappings);
         if !equip_text.is_empty() {
-            info!("[weapon] {} equip OCR: {:?} -> {:?}", weapon_key, equip_text, location);
+            debug!("[weapon] {} equip OCR: {:?} -> {:?}", weapon_key, equip_text, location);
         }
 
         // Pixel-based detections
@@ -471,7 +471,7 @@ impl GoodWeaponScanner {
             move || ocr_factory::create_ocr_model(&ocr_backend),
             pool_size,
         )?);
-        info!("[weapon] OCR pool: {} instances", pool_size);
+        debug!("[weapon] OCR pool: {} instances", pool_size);
 
         // Shared context for worker threads
         let worker_mappings = self.mappings.clone();
@@ -528,7 +528,7 @@ impl GoodWeaponScanner {
                         // Quick rarity check on main thread
                         let rarity = pixel_utils::detect_weapon_rarity(&image, &scaler);
                         if rarity <= 2 {
-                            info!("[weapon] detected {}* item, stopping capture", rarity);
+                            debug!("[weapon] detected {}* item, stopping capture", rarity);
                             return ScanAction::Stop;
                         }
 

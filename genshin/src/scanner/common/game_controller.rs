@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
 use image::RgbImage;
-use log::info;
+use log::debug;
 
 use yas::capture::{Capturer, GenericCapturer};
 use yas::game_info::GameInfo;
@@ -149,7 +149,7 @@ impl GenshinGameController {
     /// Returns true if main UI was detected, false if still uncertain.
     pub fn return_to_main_ui(&mut self, max_attempts: u32) -> bool {
         if self.is_likely_main_world() {
-            info!("[return_to_main_ui] already in main world");
+            debug!("[return_to_main_ui] already in main world");
             return true;
         }
 
@@ -158,13 +158,13 @@ impl GenshinGameController {
             utils::sleep(900);
 
             if self.is_likely_main_world() {
-                info!("[return_to_main_ui] reached main world after {} Escape(s)", i + 1);
+                debug!("[return_to_main_ui] reached main world after {} Escape(s)", i + 1);
                 return true;
             }
         }
 
         // Fallback: Enter (dismiss any stuck dialog) + Escape
-        info!("[return_to_main_ui] fallback: Enter + Escape");
+        debug!("[return_to_main_ui] fallback: Enter + Escape");
         self.key_press(enigo::Key::Return);
         utils::sleep(500);
         self.key_press(enigo::Key::Escape);
@@ -172,7 +172,7 @@ impl GenshinGameController {
 
         let result = self.is_likely_main_world();
         if result {
-            info!("[return_to_main_ui] reached main world after fallback");
+            debug!("[return_to_main_ui] reached main world after fallback");
         } else {
             log::warn!("[return_to_main_ui] may not be in main world after {} attempts + fallback", max_attempts);
         }
@@ -266,7 +266,7 @@ impl GenshinGameController {
     pub fn save_screenshot(&self, path: &str) -> Result<()> {
         let im = self.capture_game()?;
         im.save(path).map_err(|e| anyhow!("Failed to save screenshot: {}", e))?;
-        info!("[screenshot] saved full: {}", path);
+        debug!("[screenshot] saved full: {}", path);
         Ok(())
     }
 
@@ -282,7 +282,7 @@ impl GenshinGameController {
     ) -> Result<()> {
         let im = self.capture_region(base_x, base_y, base_w, base_h)?;
         im.save(path).map_err(|e| anyhow!("Failed to save screenshot: {}", e))?;
-        info!("[screenshot] saved region ({},{},{},{}) -> {}", base_x, base_y, base_w, base_h, path);
+        debug!("[screenshot] saved region ({},{},{},{}) -> {}", base_x, base_y, base_w, base_h, path);
         Ok(())
     }
 }
@@ -358,7 +358,7 @@ impl GenshinGameController {
         }
 
         // Timeout — proceed anyway (better than hanging)
-        info!("[controller] panel load detection timed out after {}ms", timeout_ms);
+        debug!("[controller] panel load detection timed out after {}ms", timeout_ms);
         Ok(())
     }
 
