@@ -152,6 +152,10 @@ fn prompt_first_run_config() -> GoodUserConfig {
     let manekina_name = prompt_input("奇偶·女性 / Manekina: ");
 
     println!();
+    println!("请确认游戏已运行，按回车开始扫描。扫描过程中可按鼠标右键终止。");
+    println!("Please confirm the game is running. Press Enter to start.");
+    println!("You can right-click to abort during scanning.");
+    let _ = std::io::stdin().read_line(&mut String::new());
 
     GoodUserConfig {
         traveler_name,
@@ -468,24 +472,7 @@ impl GoodScannerApplication {
             mappings.artifact_set_map.len(),
         );
 
-        // Pre-scan confirmation (BEFORE any game window interaction)
-        {
-            let mut targets_zh = Vec::new();
-            let mut targets_en = Vec::new();
-            if scan_characters { targets_zh.push("角色"); targets_en.push("Characters"); }
-            if scan_weapons { targets_zh.push("武器"); targets_en.push("Weapons"); }
-            if scan_artifacts { targets_zh.push("圣遗物"); targets_en.push("Artifacts"); }
-            println!();
-            println!("即将扫描: {}", targets_zh.join(", "));
-            println!("Ready to scan: {}", targets_en.join(", "));
-            println!();
-            println!("请确认游戏已运行，按回车开始扫描。扫描过程中可按鼠标右键终止。");
-            println!("Please confirm the game is running. Press Enter to start.");
-            println!("You can right-click to abort during scanning.");
-            let _ = std::io::stdin().read_line(&mut String::new());
-        }
-
-        // NOW find and focus the game window (after user confirmation)
+        // Find and focus the game window
         let game_info = Self::get_game_info()?;
         info!("window: {:?}", game_info.window);
         info!("ui: {:?}", game_info.ui);
