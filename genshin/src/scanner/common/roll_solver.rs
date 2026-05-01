@@ -26,30 +26,30 @@
 
 /// 5-star artifact substat roll tiers: [0.7x, 0.8x, 0.9x, 1.0x].
 const ROLLS_5: &[(&str, [f64; 4])] = &[
-    ("hp",        [209.13, 239.00, 268.88, 298.75]),
-    ("hp_",       [4.08,   4.66,   5.25,   5.83]),
-    ("atk",       [13.62,  15.56,  17.51,  19.45]),
-    ("atk_",      [4.08,   4.66,   5.25,   5.83]),
-    ("def",       [16.20,  18.52,  20.83,  23.15]),
-    ("def_",      [5.10,   5.83,   6.56,   7.29]),
-    ("eleMas",    [16.32,  18.65,  20.98,  23.31]),
-    ("enerRech_", [4.53,   5.18,   5.83,   6.48]),
-    ("critRate_", [2.72,   3.11,   3.50,   3.89]),
-    ("critDMG_",  [5.44,   6.22,   6.99,   7.77]),
+    ("hp", [209.13, 239.00, 268.88, 298.75]),
+    ("hp_", [4.08, 4.66, 5.25, 5.83]),
+    ("atk", [13.62, 15.56, 17.51, 19.45]),
+    ("atk_", [4.08, 4.66, 5.25, 5.83]),
+    ("def", [16.20, 18.52, 20.83, 23.15]),
+    ("def_", [5.10, 5.83, 6.56, 7.29]),
+    ("eleMas", [16.32, 18.65, 20.98, 23.31]),
+    ("enerRech_", [4.53, 5.18, 5.83, 6.48]),
+    ("critRate_", [2.72, 3.11, 3.50, 3.89]),
+    ("critDMG_", [5.44, 6.22, 6.99, 7.77]),
 ];
 
 /// 4-star artifact substat roll tiers: [0.7x, 0.8x, 0.9x, 1.0x].
 const ROLLS_4: &[(&str, [f64; 4])] = &[
-    ("hp",        [167.30, 191.20, 215.10, 239.00]),
-    ("hp_",       [3.26,   3.73,   4.20,   4.66]),
-    ("atk",       [10.89,  12.45,  14.00,  15.56]),
-    ("atk_",      [3.26,   3.73,   4.20,   4.66]),
-    ("def",       [12.96,  14.82,  16.67,  18.52]),
-    ("def_",      [4.08,   4.66,   5.25,   5.83]),
-    ("eleMas",    [13.06,  14.92,  16.79,  18.65]),
-    ("enerRech_", [3.63,   4.14,   4.66,   5.18]),
-    ("critRate_", [2.18,   2.49,   2.80,   3.11]),
-    ("critDMG_",  [4.35,   4.97,   5.60,   6.22]),
+    ("hp", [167.30, 191.20, 215.10, 239.00]),
+    ("hp_", [3.26, 3.73, 4.20, 4.66]),
+    ("atk", [10.89, 12.45, 14.00, 15.56]),
+    ("atk_", [3.26, 3.73, 4.20, 4.66]),
+    ("def", [12.96, 14.82, 16.67, 18.52]),
+    ("def_", [4.08, 4.66, 5.25, 5.83]),
+    ("eleMas", [13.06, 14.92, 16.79, 18.65]),
+    ("enerRech_", [3.63, 4.14, 4.66, 5.18]),
+    ("critRate_", [2.18, 2.49, 2.80, 3.11]),
+    ("critDMG_", [4.35, 4.97, 5.60, 6.22]),
 ];
 
 fn roll_tiers(key: &str, rarity: i32) -> Option<[f64; 4]> {
@@ -153,10 +153,7 @@ fn enumerate_sums_rec(
 ///
 /// Each substat has a list of valid roll counts. We need to find one per substat
 /// such that the sum equals `total_rolls` and each is >= 1.
-fn find_assignment(
-    valid_counts: &[Vec<i32>],
-    total_rolls: i32,
-) -> Option<Vec<i32>> {
+fn find_assignment(valid_counts: &[Vec<i32>], total_rolls: i32) -> Option<Vec<i32>> {
     let mut assignment = vec![0i32; valid_counts.len()];
     if backtrack(valid_counts, total_rolls, 0, &mut assignment) {
         Some(assignment)
@@ -202,7 +199,12 @@ fn backtrack(
 // remaining rolls can produce the difference. If only one tier works
 // uniquely, we report it; otherwise we report None (ambiguous).
 
-fn compute_initial_value(key: &str, rarity: i32, display_value: f64, roll_count: i32) -> Option<f64> {
+fn compute_initial_value(
+    key: &str,
+    rarity: i32,
+    display_value: f64,
+    roll_count: i32,
+) -> Option<f64> {
     let tiers = roll_tiers(key, rarity)?;
     let is_pct = is_percent_stat(key);
 
@@ -225,7 +227,10 @@ fn compute_initial_value(key: &str, rarity: i32, display_value: f64, roll_count:
             let total = init_tier + rest_sum;
             if matches_display(total, display_value, is_pct) {
                 let init_display = round_to_display(init_tier, is_pct);
-                if !possible_initials.iter().any(|&v| (v - init_display).abs() < 0.001) {
+                if !possible_initials
+                    .iter()
+                    .any(|&v| (v - init_display).abs() < 0.001)
+                {
                     possible_initials.push(init_display);
                 }
                 break; // this init tier works, move to next
@@ -326,9 +331,7 @@ pub fn solve(input: &SolverInput) -> Option<SolverResult> {
     let line_options: Vec<Vec<Option<&OcrCandidate>>> = input
         .substat_candidates
         .iter()
-        .map(|cands| {
-            cands.iter().map(|c| Some(c)).collect()
-        })
+        .map(|cands| cands.iter().map(|c| Some(c)).collect())
         .collect();
 
     // Try solving with original levels first
@@ -337,13 +340,20 @@ pub fn solve(input: &SolverInput) -> Option<SolverResult> {
     // If original levels failed, try level+10 fallback — common OCR error:
     // "11" misread as "1", "12" as "2", etc.
     if result.is_none() {
-        let fallback_levels: Vec<i32> = levels.iter()
+        let fallback_levels: Vec<i32> = levels
+            .iter()
             .filter(|&&l| l >= 0 && l < 10)
             .map(|&l| l + 10)
             .filter(|l| *l <= max_level && !levels.contains(l))
             .collect();
         if !fallback_levels.is_empty() {
-            if let Some(fb) = solve_with_levels(&fallback_levels, input.rarity, max_level, max_init, &line_options) {
+            if let Some(fb) = solve_with_levels(
+                &fallback_levels,
+                input.rarity,
+                max_level,
+                max_init,
+                &line_options,
+            ) {
                 return Some(fb);
             }
         }
@@ -372,7 +382,13 @@ pub fn solve(input: &SolverInput) -> Option<SolverResult> {
                 }
             }
 
-            if let Some(fb) = solve_with_levels(&all_levels, input.rarity, max_level, max_init, &aug_line_options) {
+            if let Some(fb) = solve_with_levels(
+                &all_levels,
+                input.rarity,
+                max_level,
+                max_init,
+                &aug_line_options,
+            ) {
                 return Some(fb);
             }
         }
@@ -393,30 +409,38 @@ pub fn solve(input: &SolverInput) -> Option<SolverResult> {
 /// Returns `None` if no augmentation was needed.
 fn generate_truncated_digit_candidates(input: &SolverInput) -> Option<Vec<Vec<OcrCandidate>>> {
     let mut any_augmented = false;
-    let augmented: Vec<Vec<OcrCandidate>> = input.substat_candidates.iter().map(|cands| {
-        let mut new_cands: Vec<OcrCandidate> = cands.clone();
-        for orig in cands {
-            if is_percent_stat(&orig.key) {
-                continue;
+    let augmented: Vec<Vec<OcrCandidate>> = input
+        .substat_candidates
+        .iter()
+        .map(|cands| {
+            let mut new_cands: Vec<OcrCandidate> = cands.clone();
+            for orig in cands {
+                if is_percent_stat(&orig.key) {
+                    continue;
+                }
+                if roll_table_lookup(&orig.key, input.rarity, orig.value).is_some() {
+                    continue;
+                }
+                // Dropped trailing "1": e.g., 6 → 61
+                let augmented_value = orig.value * 10.0 + 1.0;
+                if roll_table_lookup(&orig.key, input.rarity, augmented_value).is_some() {
+                    new_cands.push(OcrCandidate {
+                        key: orig.key.clone(),
+                        value: augmented_value,
+                        inactive: orig.inactive,
+                    });
+                    any_augmented = true;
+                }
             }
-            if roll_table_lookup(&orig.key, input.rarity, orig.value).is_some() {
-                continue;
-            }
-            // Dropped trailing "1": e.g., 6 → 61
-            let augmented_value = orig.value * 10.0 + 1.0;
-            if roll_table_lookup(&orig.key, input.rarity, augmented_value).is_some() {
-                new_cands.push(OcrCandidate {
-                    key: orig.key.clone(),
-                    value: augmented_value,
-                    inactive: orig.inactive,
-                });
-                any_augmented = true;
-            }
-        }
-        new_cands
-    }).collect();
+            new_cands
+        })
+        .collect();
 
-    if any_augmented { Some(augmented) } else { None }
+    if any_augmented {
+        Some(augmented)
+    } else {
+        None
+    }
 }
 
 /// Inner solving loop: try each level candidate and find a valid substat assignment.
@@ -434,9 +458,17 @@ fn solve_with_levels(
         // At level 0, #lines = init count, so prefer higher init first.
         // At level > 0, prefer lower init (better GT accuracy).
         let possible_initials: &[i32] = if rarity == 5 {
-            if level == 0 { &[4, 3] } else { &[3, 4] }
+            if level == 0 {
+                &[4, 3]
+            } else {
+                &[3, 4]
+            }
         } else {
-            if level == 0 { &[3, 2] } else { &[2, 3] }
+            if level == 0 {
+                &[3, 2]
+            } else {
+                &[2, 3]
+            }
         };
 
         for &init_count in possible_initials {
@@ -449,7 +481,10 @@ fn solve_with_levels(
             let pending_inactive = level == 0 && init_count < max_init;
             let expected_variants: Vec<(i32, i32)> = if pending_inactive {
                 // (expected_selected, solve_total_rolls)
-                vec![(base_expected + 1, total_rolls + 1), (base_expected, total_rolls)]
+                vec![
+                    (base_expected + 1, total_rolls + 1),
+                    (base_expected, total_rolls),
+                ]
             } else {
                 vec![(base_expected, total_rolls)]
             };
@@ -490,9 +525,8 @@ fn solve_with_levels(
                                     .iter()
                                     .zip(assignment.iter())
                                     .map(|(c, &rolls)| {
-                                        let init_val = compute_initial_value(
-                                            &c.key, rarity, c.value, rolls,
-                                        );
+                                        let init_val =
+                                            compute_initial_value(&c.key, rarity, c.value, rolls);
                                         SolvedSubstat {
                                             key: c.key.clone(),
                                             value: c.value,
@@ -507,8 +541,8 @@ fn solve_with_levels(
                                 // This correctly handles the case where init=4 matches but the
                                 // artifact actually has init=3 (one substat is inactive).
                                 let result_init = if level == 0 {
-                                    let inactive_count = substats.iter()
-                                        .filter(|s| s.inactive).count() as i32;
+                                    let inactive_count =
+                                        substats.iter().filter(|s| s.inactive).count() as i32;
                                     (num_active - inactive_count).max(1)
                                 } else {
                                     init_count
@@ -555,11 +589,7 @@ fn advance_selection(selection: &mut [usize], options: &[Vec<Option<&OcrCandidat
 /// Quick validation of a fully parsed artifact's substats.
 ///
 /// Returns `true` if the substats are consistent with roll mechanics.
-pub fn validate_substats(
-    rarity: i32,
-    level: i32,
-    substats: &[(&str, f64)],
-) -> bool {
+pub fn validate_substats(rarity: i32, level: i32, substats: &[(&str, f64)]) -> bool {
     if rarity < 4 || rarity > 5 || substats.is_empty() {
         return false;
     }
@@ -568,7 +598,13 @@ pub fn validate_substats(
         level_candidates: vec![level],
         substat_candidates: substats
             .iter()
-            .map(|(k, v)| vec![OcrCandidate { key: k.to_string(), value: *v, inactive: false }])
+            .map(|(k, v)| {
+                vec![OcrCandidate {
+                    key: k.to_string(),
+                    value: *v,
+                    inactive: false,
+                }]
+            })
             .collect(),
     };
     solve(&input).is_some()
@@ -619,11 +655,15 @@ mod tests {
         // 5★ level 20 with 4 substats (all single-roll values = level 0 artifact)
         // Actually at level 20, total_rolls = 4 + 5 = 9 or 3 + 5 = 8.
         // Let's test a level 0 artifact with 3 substats (init=3, total=3).
-        assert!(validate_substats(5, 0, &[
-            ("critRate_", 3.9),   // tier 4: 3.89 → 3.9
-            ("critDMG_", 7.8),    // tier 4: 7.77 → 7.8
-            ("atk_", 5.8),        // tier 4: 5.83 → 5.8
-        ]));
+        assert!(validate_substats(
+            5,
+            0,
+            &[
+                ("critRate_", 3.9), // tier 4: 3.89 → 3.9
+                ("critDMG_", 7.8),  // tier 4: 7.77 → 7.8
+                ("atk_", 5.8),      // tier 4: 5.83 → 5.8
+            ]
+        ));
     }
 
     #[test]
@@ -632,9 +672,21 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.9, inactive: false }],
-                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8, inactive: false }],
-                vec![OcrCandidate { key: "atk_".into(), value: 5.8, inactive: false }],
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 3.9,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "critDMG_".into(),
+                    value: 7.8,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "atk_".into(),
+                    value: 5.8,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);
@@ -658,11 +710,27 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.9, inactive: false }],
-                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8, inactive: false }],
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 3.9,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "critDMG_".into(),
+                    value: 7.8,
+                    inactive: false,
+                }],
                 vec![
-                    OcrCandidate { key: "atk_".into(), value: 58.0, inactive: false },
-                    OcrCandidate { key: "atk_".into(), value: 5.8, inactive: false },
+                    OcrCandidate {
+                        key: "atk_".into(),
+                        value: 58.0,
+                        inactive: false,
+                    },
+                    OcrCandidate {
+                        key: "atk_".into(),
+                        value: 5.8,
+                        inactive: false,
+                    },
                 ],
             ],
         };
@@ -676,48 +744,68 @@ mod tests {
     #[test]
     fn test_4star_validation() {
         // 4★ level 16 with 3 initial substats: total = 3 + 4 = 7 rolls, 4 active stats
-        assert!(validate_substats(4, 16, &[
-            ("hp_", 4.7),         // 4.66 → 4.7 (1 roll)
-            ("atk", 16.0),        // 15.56 → 16 (1 roll)
-            ("def_", 5.8),        // 5.83 → 5.8 (1 roll)
-            ("critRate_", 12.4),  // 3.11*4 = 12.44 → 12.4 (4 rolls)
-        ]));
+        assert!(validate_substats(
+            4,
+            16,
+            &[
+                ("hp_", 4.7),        // 4.66 → 4.7 (1 roll)
+                ("atk", 16.0),       // 15.56 → 16 (1 roll)
+                ("def_", 5.8),       // 5.83 → 5.8 (1 roll)
+                ("critRate_", 12.4), // 3.11*4 = 12.44 → 12.4 (4 rolls)
+            ]
+        ));
     }
 
     #[test]
     fn test_real_groundtruth_artifacts() {
         // Real artifacts from genshin_export.json groundtruth data
         // 5★ lv20: def=23, atk_=9.3, hp=239, enerRech_=22.0
-        assert!(validate_substats(5, 20, &[
-            ("def", 23.0),
-            ("atk_", 9.3),
-            ("hp", 239.0),
-            ("enerRech_", 22.0),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("def", 23.0),
+                ("atk_", 9.3),
+                ("hp", 239.0),
+                ("enerRech_", 22.0),
+            ]
+        ));
 
         // 5★ lv20: critRate_=17.5, critDMG_=14.0, hp_=5.3, enerRech_=4.5
-        assert!(validate_substats(5, 20, &[
-            ("critRate_", 17.5),
-            ("critDMG_", 14.0),
-            ("hp_", 5.3),
-            ("enerRech_", 4.5),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("critRate_", 17.5),
+                ("critDMG_", 14.0),
+                ("hp_", 5.3),
+                ("enerRech_", 4.5),
+            ]
+        ));
 
         // 5★ lv20: critDMG_=7.0, critRate_=9.7, def=21, eleMas=79
-        assert!(validate_substats(5, 20, &[
-            ("critDMG_", 7.0),
-            ("critRate_", 9.7),
-            ("def", 21.0),
-            ("eleMas", 79.0),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("critDMG_", 7.0),
+                ("critRate_", 9.7),
+                ("def", 21.0),
+                ("eleMas", 79.0),
+            ]
+        ));
 
         // 5★ lv20: hp=807, hp_=4.7, def=23, enerRech_=20.7
-        assert!(validate_substats(5, 20, &[
-            ("hp", 807.0),
-            ("hp_", 4.7),
-            ("def", 23.0),
-            ("enerRech_", 20.7),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("hp", 807.0),
+                ("hp_", 4.7),
+                ("def", 23.0),
+                ("enerRech_", 20.7),
+            ]
+        ));
     }
 
     #[test]
@@ -728,21 +816,47 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "atk_".into(), value: 4.7, inactive: false }],
-                vec![OcrCandidate { key: "atk".into(), value: 19.0, inactive: false }],
-                vec![OcrCandidate { key: "def".into(), value: 16.0, inactive: false }],
-                vec![OcrCandidate { key: "enerRech_".into(), value: 6.5, inactive: true }],
+                vec![OcrCandidate {
+                    key: "atk_".into(),
+                    value: 4.7,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "atk".into(),
+                    value: 19.0,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "def".into(),
+                    value: 16.0,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "enerRech_".into(),
+                    value: 6.5,
+                    inactive: true,
+                }],
             ],
         };
         let result = solve(&input);
         assert!(result.is_some(), "solver should find all 4 substats");
         let r = result.unwrap();
         // Should select all 4 substats
-        assert_eq!(r.substats.len(), 4, "should have 4 substats (3 active + 1 inactive)");
+        assert_eq!(
+            r.substats.len(),
+            4,
+            "should have 4 substats (3 active + 1 inactive)"
+        );
         // init should be 3 (not 4) because 1 substat is inactive
-        assert_eq!(r.initial_substat_count, 3, "init should be 3 for lv0 with 1 inactive");
+        assert_eq!(
+            r.initial_substat_count, 3,
+            "init should be 3 for lv0 with 1 inactive"
+        );
         // total_rolls should be 3 (inactive doesn't count toward active rolls)
-        assert_eq!(r.total_rolls, 3, "total_rolls should exclude inactive at lv0");
+        assert_eq!(
+            r.total_rolls, 3,
+            "total_rolls should exclude inactive at lv0"
+        );
         // Verify each has 1 roll
         for s in &r.substats {
             assert_eq!(s.roll_count, 1);
@@ -758,17 +872,36 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.9, inactive: false }],
-                vec![OcrCandidate { key: "critDMG_".into(), value: 7.8, inactive: false }],
-                vec![OcrCandidate { key: "atk_".into(), value: 5.8, inactive: false }],
-                vec![OcrCandidate { key: "hp_".into(), value: 5.8, inactive: false }],
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 3.9,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "critDMG_".into(),
+                    value: 7.8,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "atk_".into(),
+                    value: 5.8,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "hp_".into(),
+                    value: 5.8,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);
         assert!(result.is_some());
         let r = result.unwrap();
         assert_eq!(r.substats.len(), 4);
-        assert_eq!(r.initial_substat_count, 4, "init should be 4 for all-active lv0");
+        assert_eq!(
+            r.initial_substat_count, 4,
+            "init should be 4 for all-active lv0"
+        );
         assert_eq!(r.total_rolls, 4);
     }
 
@@ -780,10 +913,22 @@ mod tests {
             rarity: 5,
             level_candidates: vec![0],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "atk_".into(), value: 4.7, inactive: false }],
+                vec![OcrCandidate {
+                    key: "atk_".into(),
+                    value: 4.7,
+                    inactive: false,
+                }],
                 // atk=19 line dropped (empty)
-                vec![OcrCandidate { key: "def".into(), value: 16.0, inactive: false }],
-                vec![OcrCandidate { key: "enerRech_".into(), value: 6.5, inactive: true }],
+                vec![OcrCandidate {
+                    key: "def".into(),
+                    value: 16.0,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "enerRech_".into(),
+                    value: 6.5,
+                    inactive: true,
+                }],
             ],
         };
         let result = solve(&input);
@@ -817,17 +962,37 @@ mod tests {
             rarity: 5,
             level_candidates: vec![20],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "atk_".into(), value: 10.5, inactive: false }],
-                vec![OcrCandidate { key: "enerRech_".into(), value: 4.5, inactive: false }],
-                vec![OcrCandidate { key: "atk".into(), value: 37.0, inactive: false }],
-                vec![OcrCandidate { key: "eleMas".into(), value: 6.0, inactive: false }],
+                vec![OcrCandidate {
+                    key: "atk_".into(),
+                    value: 10.5,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "enerRech_".into(),
+                    value: 4.5,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "atk".into(),
+                    value: 37.0,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "eleMas".into(),
+                    value: 6.0,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);
         assert!(result.is_some(), "should solve with digit-append fallback");
         let r = result.unwrap();
         let em = r.substats.iter().find(|s| s.key == "eleMas").unwrap();
-        assert!((em.value - 61.0).abs() < 0.01, "eleMas should be corrected to 61, got {}", em.value);
+        assert!(
+            (em.value - 61.0).abs() < 0.01,
+            "eleMas should be corrected to 61, got {}",
+            em.value
+        );
     }
 
     #[test]
@@ -837,16 +1002,42 @@ mod tests {
             rarity: 5,
             level_candidates: vec![20],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "hp_".into(), value: 9.3, inactive: false }],
-                vec![OcrCandidate { key: "def_".into(), value: 13.1, inactive: false }],
-                vec![OcrCandidate { key: "enerRech_".into(), value: 5.8, inactive: false }],
-                vec![OcrCandidate { key: "eleMas".into(), value: 6.0, inactive: false }],
+                vec![OcrCandidate {
+                    key: "hp_".into(),
+                    value: 9.3,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "def_".into(),
+                    value: 13.1,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "enerRech_".into(),
+                    value: 5.8,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "eleMas".into(),
+                    value: 6.0,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);
         assert!(result.is_some(), "should solve with digit-append fallback");
-        let em = result.unwrap().substats.iter().find(|s| s.key == "eleMas").unwrap().clone();
-        assert!((em.value - 61.0).abs() < 0.01, "eleMas should be corrected to 61, got {}", em.value);
+        let em = result
+            .unwrap()
+            .substats
+            .iter()
+            .find(|s| s.key == "eleMas")
+            .unwrap()
+            .clone();
+        assert!(
+            (em.value - 61.0).abs() < 0.01,
+            "eleMas should be corrected to 61, got {}",
+            em.value
+        );
     }
 
     #[test]
@@ -856,16 +1047,42 @@ mod tests {
             rarity: 5,
             level_candidates: vec![20],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "hp_".into(), value: 8.7, inactive: false }],
-                vec![OcrCandidate { key: "critRate_".into(), value: 7.0, inactive: false }],
-                vec![OcrCandidate { key: "def_".into(), value: 5.8, inactive: false }],
-                vec![OcrCandidate { key: "eleMas".into(), value: 6.0, inactive: false }],
+                vec![OcrCandidate {
+                    key: "hp_".into(),
+                    value: 8.7,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 7.0,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "def_".into(),
+                    value: 5.8,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "eleMas".into(),
+                    value: 6.0,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);
         assert!(result.is_some(), "should solve with digit-append fallback");
-        let em = result.unwrap().substats.iter().find(|s| s.key == "eleMas").unwrap().clone();
-        assert!((em.value - 61.0).abs() < 0.01, "eleMas should be corrected to 61, got {}", em.value);
+        let em = result
+            .unwrap()
+            .substats
+            .iter()
+            .find(|s| s.key == "eleMas")
+            .unwrap()
+            .clone();
+        assert!(
+            (em.value - 61.0).abs() < 0.01,
+            "eleMas should be corrected to 61, got {}",
+            em.value
+        );
     }
 
     #[test]
@@ -875,16 +1092,42 @@ mod tests {
             rarity: 5,
             level_candidates: vec![20],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "enerRech_".into(), value: 16.8, inactive: false }],
-                vec![OcrCandidate { key: "def_".into(), value: 6.6, inactive: false }],
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.1, inactive: false }],
-                vec![OcrCandidate { key: "eleMas".into(), value: 6.0, inactive: false }],
+                vec![OcrCandidate {
+                    key: "enerRech_".into(),
+                    value: 16.8,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "def_".into(),
+                    value: 6.6,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 3.1,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "eleMas".into(),
+                    value: 6.0,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);
         assert!(result.is_some(), "should solve with digit-append fallback");
-        let em = result.unwrap().substats.iter().find(|s| s.key == "eleMas").unwrap().clone();
-        assert!((em.value - 61.0).abs() < 0.01, "eleMas should be corrected to 61, got {}", em.value);
+        let em = result
+            .unwrap()
+            .substats
+            .iter()
+            .find(|s| s.key == "eleMas")
+            .unwrap()
+            .clone();
+        assert!(
+            (em.value - 61.0).abs() < 0.01,
+            "eleMas should be corrected to 61, got {}",
+            em.value
+        );
     }
 
     #[test]
@@ -894,21 +1137,21 @@ mod tests {
         // This isolates eleMas=6 as the specific OCR failure.
         let valid_values: &[(&str, f64)] = &[
             // Goblet
-            ("atk_", 10.5),   // 2 rolls
+            ("atk_", 10.5),     // 2 rolls
             ("enerRech_", 4.5), // 1 roll
-            ("atk", 37.0),    // 2 rolls
+            ("atk", 37.0),      // 2 rolls
             // Plume
-            ("hp_", 9.3),     // 2 rolls
-            ("def_", 13.1),   // 2 rolls
+            ("hp_", 9.3),       // 2 rolls
+            ("def_", 13.1),     // 2 rolls
             ("enerRech_", 5.8), // 1 roll
             // Sands
-            ("hp_", 8.7),     // 2 rolls
+            ("hp_", 8.7),       // 2 rolls
             ("critRate_", 7.0), // 2 rolls
-            ("def_", 5.8),    // 1 roll
+            ("def_", 5.8),      // 1 roll
             // Flower
             ("enerRech_", 16.8), // 3 rolls
-            ("def_", 6.6),    // 1 roll
-            ("critRate_", 3.1), // 1 roll
+            ("def_", 6.6),       // 1 roll
+            ("critRate_", 3.1),  // 1 roll
         ];
         for &(key, val) in valid_values {
             assert!(
@@ -948,36 +1191,52 @@ mod tests {
         // (total rolls = 3 + 5 = 8).
 
         // Goblet: atk_(2) + enerRech_(1) + atk(2) + eleMas(3) = 8
-        assert!(validate_substats(5, 20, &[
-            ("atk_", 10.5),
-            ("enerRech_", 4.5),
-            ("atk", 37.0),
-            ("eleMas", 61.0),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("atk_", 10.5),
+                ("enerRech_", 4.5),
+                ("atk", 37.0),
+                ("eleMas", 61.0),
+            ]
+        ));
 
         // Plume: hp_(2) + def_(2) + enerRech_(1) + eleMas(3) = 8
-        assert!(validate_substats(5, 20, &[
-            ("hp_", 9.3),
-            ("def_", 13.1),
-            ("enerRech_", 5.8),
-            ("eleMas", 61.0),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("hp_", 9.3),
+                ("def_", 13.1),
+                ("enerRech_", 5.8),
+                ("eleMas", 61.0),
+            ]
+        ));
 
         // Sands: hp_(2) + critRate_(2) + def_(1) + eleMas(3) = 8
-        assert!(validate_substats(5, 20, &[
-            ("hp_", 8.7),
-            ("critRate_", 7.0),
-            ("def_", 5.8),
-            ("eleMas", 61.0),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("hp_", 8.7),
+                ("critRate_", 7.0),
+                ("def_", 5.8),
+                ("eleMas", 61.0),
+            ]
+        ));
 
         // Flower: enerRech_(3) + def_(1) + critRate_(1) + eleMas(3) = 8
-        assert!(validate_substats(5, 20, &[
-            ("enerRech_", 16.8),
-            ("def_", 6.6),
-            ("critRate_", 3.1),
-            ("eleMas", 61.0),
-        ]));
+        assert!(validate_substats(
+            5,
+            20,
+            &[
+                ("enerRech_", 16.8),
+                ("def_", 6.6),
+                ("critRate_", 3.1),
+                ("eleMas", 61.0),
+            ]
+        ));
     }
 
     #[test]
@@ -991,16 +1250,35 @@ mod tests {
             rarity: 5,
             level_candidates: vec![1], // OCR misread "11" as "1"
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 3.1, inactive: false }], // 1 roll
-                vec![OcrCandidate { key: "critDMG_".into(), value: 13.2, inactive: false }], // 2 rolls
-                vec![OcrCandidate { key: "atk_".into(), value: 4.1, inactive: false }],      // 1 roll
-                vec![OcrCandidate { key: "def".into(), value: 23.0, inactive: false }],      // 1 roll
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 3.1,
+                    inactive: false,
+                }], // 1 roll
+                vec![OcrCandidate {
+                    key: "critDMG_".into(),
+                    value: 13.2,
+                    inactive: false,
+                }], // 2 rolls
+                vec![OcrCandidate {
+                    key: "atk_".into(),
+                    value: 4.1,
+                    inactive: false,
+                }], // 1 roll
+                vec![OcrCandidate {
+                    key: "def".into(),
+                    value: 23.0,
+                    inactive: false,
+                }], // 1 roll
             ],
         };
         let result = solve(&input);
         assert!(result.is_some(), "should solve");
         let r = result.unwrap();
-        assert_eq!(r.level, 11, "should prefer lv11 (4 substats) over lv1 (3 substats)");
+        assert_eq!(
+            r.level, 11,
+            "should prefer lv11 (4 substats) over lv1 (3 substats)"
+        );
         assert_eq!(r.substats.len(), 4);
     }
 
@@ -1016,10 +1294,26 @@ mod tests {
             rarity: 5,
             level_candidates: vec![20],
             substat_candidates: vec![
-                vec![OcrCandidate { key: "critRate_".into(), value: 17.5, inactive: false }],
-                vec![OcrCandidate { key: "critDMG_".into(), value: 14.0, inactive: false }],
-                vec![OcrCandidate { key: "hp_".into(), value: 5.3, inactive: false }],
-                vec![OcrCandidate { key: "enerRech_".into(), value: 4.5, inactive: false }],
+                vec![OcrCandidate {
+                    key: "critRate_".into(),
+                    value: 17.5,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "critDMG_".into(),
+                    value: 14.0,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "hp_".into(),
+                    value: 5.3,
+                    inactive: false,
+                }],
+                vec![OcrCandidate {
+                    key: "enerRech_".into(),
+                    value: 4.5,
+                    inactive: false,
+                }],
             ],
         };
         let result = solve(&input);

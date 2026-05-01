@@ -123,7 +123,8 @@ pub fn add_image(label: &str, image: &RgbImage) {
 /// Record an OCR region and its raw text result.
 pub fn record_ocr(field: &str, rect: (f64, f64, f64, f64), raw_text: &str) {
     with_ctx(|ctx| {
-        ctx.collector.record_ocr(ctx.current_img, field, rect, raw_text);
+        ctx.collector
+            .record_ocr(ctx.current_img, field, rect, raw_text);
     });
 }
 
@@ -161,10 +162,20 @@ pub fn record_pixel(field: &str, pos: (f64, f64), rgb: [u8; 3], result_text: &st
 }
 
 /// Record a pixel check result with a custom annotation color.
-pub fn record_pixel_colored(field: &str, pos: (f64, f64), rgb: [u8; 3], result_text: &str, color: [u8; 3]) {
+pub fn record_pixel_colored(
+    field: &str,
+    pos: (f64, f64),
+    rgb: [u8; 3],
+    result_text: &str,
+    color: [u8; 3],
+) {
     with_ctx(|ctx| {
         ctx.collector.record_pixel_colored(
-            ctx.current_img, field, pos, rgb, result_text,
+            ctx.current_img,
+            field,
+            pos,
+            rgb,
+            result_text,
             Some(image::Rgb(color)),
         );
     });
@@ -174,16 +185,12 @@ pub fn record_pixel_colored(field: &str, pos: (f64, f64), rgb: [u8; 3], result_t
 /// Called automatically by `detect_constellation_pixel()`.
 pub fn record_constellation(result: &ConstellationResult) {
     with_ctx(|ctx| {
-        ctx.collector
-            .record_constellation(ctx.current_img, result);
+        ctx.collector.record_constellation(ctx.current_img, result);
     });
 }
 
 /// Record grid overlay (cell bounding boxes + lock/astral detection).
-pub fn record_grid_overlay(
-    cells: Vec<GridCellAnnotation>,
-    detections: Vec<(usize, bool, bool)>,
-) {
+pub fn record_grid_overlay(cells: Vec<GridCellAnnotation>, detections: Vec<(usize, bool, bool)>) {
     with_ctx(|ctx| {
         ctx.collector
             .record_grid_overlay(ctx.current_img, cells, detections);

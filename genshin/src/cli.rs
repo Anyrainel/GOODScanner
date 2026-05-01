@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{command, ArgMatches, Args, FromArgMatches};
-use yas::{log_debug, log_info, log_warn, log_error};
 use serde::{Deserialize, Serialize};
+use yas::{log_debug, log_error, log_info, log_warn};
 
+use yas::capture::CaptureMethod;
 use yas::game_info::{GameInfo, GameInfoBuilder};
 
 use crate::scanner::artifact::GoodArtifactScannerConfig;
@@ -16,9 +17,7 @@ use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::mappings::{MappingManager, NameOverrides};
 use crate::scanner::common::models::GoodExport;
 use crate::scanner::common::ocr_pool::{OcrPoolConfig, SharedOcrPools};
-use crate::scanner::common::scan_runner::{
-    run_scan_phases, ScanFailurePolicy, ScanRunOptions,
-};
+use crate::scanner::common::scan_runner::{run_scan_phases, ScanFailurePolicy, ScanRunOptions};
 use crate::scanner::weapon::GoodWeaponScannerConfig;
 
 /// Config file path relative to the executable directory.
@@ -85,7 +84,11 @@ pub fn check_vcpp_runtime() -> Result<()> {
     for &dll_name in VCPP_REQUIRED_DLLS {
         let wide: Vec<u16> = dll_name.encode_utf16().chain(std::iter::once(0)).collect();
         let handle = unsafe {
-            LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
+            LoadLibraryExW(
+                wide.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
         };
         if handle.is_null() {
             missing.push(dll_name);
@@ -131,7 +134,7 @@ pub fn check_onnxruntime() -> bool {
         Ok(meta) if meta.len() >= ORT_DLL_MIN_SIZE => {
             std::env::set_var("ORT_DYLIB_PATH", &dll_path);
             true
-        }
+        },
         Ok(meta) => {
             log_warn!(
                 "onnxruntime.dll 文件异常（{} 字节），将重新下载",
@@ -141,7 +144,7 @@ pub fn check_onnxruntime() -> bool {
             // Remove the bad file so download_onnxruntime_inner can write fresh
             let _ = std::fs::remove_file(&dll_path);
             false
-        }
+        },
         Err(_) => false, // File doesn't exist
     }
 }
@@ -174,35 +177,47 @@ fn download_onnxruntime_inner(dll_path: &std::path::Path) -> Result<()> {
                 }
                 match response.bytes() {
                     Ok(bytes) => {
-                        log_info!("下载完成（{}字节），正在解压...", "Downloaded ({} bytes), extracting...", bytes.len());
+                        log_info!(
+                            "下载完成（{}字节），正在解压...",
+                            "Downloaded ({} bytes), extracting...",
+                            bytes.len()
+                        );
                         match extract_onnxruntime_dll(&bytes, dll_path) {
                             Ok(()) => {
-                                log_info!("ONNX Runtime 已安装到: {}", "installed to: {}", dll_path.display());
+                                log_info!(
+                                    "ONNX Runtime 已安装到: {}",
+                                    "installed to: {}",
+                                    dll_path.display()
+                                );
                                 std::env::set_var("ORT_DYLIB_PATH", dll_path);
                                 return Ok(());
-                            }
+                            },
                             Err(e) => {
                                 last_error = format!("{}", e);
                                 log_warn!("解压失败: {}", "Extract failed: {}", last_error);
                                 if let Err(e) = std::fs::remove_file(dll_path) {
-                                    log_warn!("清理失败的下载文件失败: {}", "Failed to clean up partial download: {}", e);
+                                    log_warn!(
+                                        "清理失败的下载文件失败: {}",
+                                        "Failed to clean up partial download: {}",
+                                        e
+                                    );
                                 }
                                 continue;
-                            }
+                            },
                         }
-                    }
+                    },
                     Err(e) => {
                         last_error = format!("{}", e);
                         log_warn!("下载失败: {}", "Download failed: {}", last_error);
                         continue;
-                    }
+                    },
                 }
-            }
+            },
             Err(e) => {
                 last_error = format!("{}", e);
                 log_warn!("连接失败: {}", "Connection failed: {}", last_error);
                 continue;
-            }
+            },
         }
     }
 
@@ -228,10 +243,19 @@ fn ensure_onnxruntime() -> Result<()> {
 
     println!();
     println!("=======================================================");
-    println!("  {} {}", yas::lang::localize("未找到 / Not found:"), ORT_DLL_NAME);
+    println!(
+        "  {} {}",
+        yas::lang::localize("未找到 / Not found:"),
+        ORT_DLL_NAME
+    );
     println!("=======================================================");
     println!();
-    println!("{}", yas::lang::localize("OCR引擎需要ONNX Runtime运行库。 / The OCR engine requires the ONNX Runtime library."));
+    println!(
+        "{}",
+        yas::lang::localize(
+            "OCR引擎需要ONNX Runtime运行库。 / The OCR engine requires the ONNX Runtime library."
+        )
+    );
     println!();
     println!("{}", yas::lang::localize("按回车自动下载（约70MB），或按 Ctrl+C 退出。 / Press Enter to download automatically (~70MB), or Ctrl+C to exit."));
     let _ = std::io::stdin().read_line(&mut String::new());
@@ -252,12 +276,13 @@ fn extract_onnxruntime_dll(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(
         .map_err(|e| anyhow!("无法打开压缩包 / Cannot open zip archive: {}", e))?;
 
     let suffixes = [
-        "lib/onnxruntime.dll",               // GitHub release zip
+        "lib/onnxruntime.dll",                     // GitHub release zip
         "runtimes/win-x64/native/onnxruntime.dll", // NuGet .nupkg
     ];
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i)
+        let mut file = archive
+            .by_index(i)
             .map_err(|e| anyhow!("无法读取压缩包条目 / Cannot read zip entry: {}", e))?;
         let name = file.name().to_string();
         if suffixes.iter().any(|s| name.ends_with(s)) {
@@ -268,7 +293,9 @@ fn extract_onnxruntime_dll(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(
         }
     }
 
-    Err(anyhow!("压缩包中未找到 onnxruntime.dll / onnxruntime.dll not found in zip archive"))
+    Err(anyhow!(
+        "压缩包中未找到 onnxruntime.dll / onnxruntime.dll not found in zip archive"
+    ))
 }
 
 // ================================================================
@@ -292,24 +319,68 @@ pub fn init_rayon_pool() {
 // User config (good_config.json)
 // ================================================================
 
-fn default_char_tab_delay() -> u64 { DEFAULT_DELAY_CHAR_TAB_SWITCH }
-fn default_char_next_delay() -> u64 { DEFAULT_DELAY_CHAR_NEXT }
-fn default_open_delay() -> u64 { DEFAULT_DELAY_OPEN_SCREEN }
-fn default_close_delay() -> u64 { DEFAULT_DELAY_CLOSE_SCREEN }
-fn default_scroll_delay() -> u64 { DEFAULT_DELAY_SCROLL }
-fn default_tab_delay() -> u64 { DEFAULT_DELAY_INV_TAB_SWITCH }
-fn default_weapon_panel_delay() -> u64 { DEFAULT_WEAPON_PANEL_DELAY }
-fn default_artifact_initial_wait() -> u64 { DEFAULT_ARTIFACT_INITIAL_WAIT }
-fn default_artifact_panel_timeout() -> u64 { DEFAULT_ARTIFACT_PANEL_TIMEOUT }
-fn default_artifact_extra_delay() -> u64 { DEFAULT_ARTIFACT_EXTRA_DELAY }
+fn default_char_tab_delay() -> u64 {
+    DEFAULT_DELAY_CHAR_TAB_SWITCH
+}
+fn default_char_next_delay() -> u64 {
+    DEFAULT_DELAY_CHAR_NEXT
+}
+fn default_open_delay() -> u64 {
+    DEFAULT_DELAY_OPEN_SCREEN
+}
+fn default_close_delay() -> u64 {
+    DEFAULT_DELAY_CLOSE_SCREEN
+}
+fn default_scroll_delay() -> u64 {
+    DEFAULT_DELAY_SCROLL
+}
+fn default_tab_delay() -> u64 {
+    DEFAULT_DELAY_INV_TAB_SWITCH
+}
+fn default_weapon_panel_delay() -> u64 {
+    DEFAULT_WEAPON_PANEL_DELAY
+}
+fn default_artifact_initial_wait() -> u64 {
+    DEFAULT_ARTIFACT_INITIAL_WAIT
+}
+fn default_artifact_panel_timeout() -> u64 {
+    DEFAULT_ARTIFACT_PANEL_TIMEOUT
+}
+fn default_artifact_extra_delay() -> u64 {
+    DEFAULT_ARTIFACT_EXTRA_DELAY
+}
 
-fn default_mgr_transition() -> u64 { 1500 }
-fn default_mgr_action() -> u64 { 800 }
-fn default_mgr_cell() -> u64 { 100 }
-fn default_mgr_scroll() -> u64 { 400 }
+fn default_mgr_transition() -> u64 {
+    1500
+}
+fn default_mgr_action() -> u64 {
+    800
+}
+fn default_mgr_cell() -> u64 {
+    100
+}
+fn default_mgr_scroll() -> u64 {
+    400
+}
 
-fn default_true() -> bool { true }
-fn default_server_port() -> u16 { 8765 }
+fn default_true() -> bool {
+    true
+}
+pub const DEFAULT_HDR_WHITE_POINT: f32 = 4.0;
+fn default_hdr_white_point() -> f32 {
+    DEFAULT_HDR_WHITE_POINT
+}
+fn default_server_port() -> u16 {
+    8765
+}
+
+pub fn capture_method_for_hdr_mode(hdr_mode: bool) -> CaptureMethod {
+    if hdr_mode {
+        CaptureMethod::Wgc
+    } else {
+        CaptureMethod::BitBlt
+    }
+}
 
 /// Deserialize a u64 that may arrive as a number, a numeric string, or an
 /// empty/invalid string.  Non-numeric values silently fall back to 0 so that
@@ -329,43 +400,88 @@ where
             f.write_str("a u64 or a numeric string")
         }
 
-        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<u64, E> { Ok(v) }
-        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<u64, E> { Ok(v.max(0) as u64) }
-        fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<u64, E> { Ok(v.max(0.0) as u64) }
+        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<u64, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<u64, E> {
+            Ok(v.max(0) as u64)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<u64, E> {
+            Ok(v.max(0.0) as u64)
+        }
 
         fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<u64, E> {
             Ok(v.trim().parse::<u64>().unwrap_or(0))
         }
 
-        fn visit_none<E: de::Error>(self) -> std::result::Result<u64, E> { Ok(0) }
-        fn visit_unit<E: de::Error>(self) -> std::result::Result<u64, E> { Ok(0) }
+        fn visit_none<E: de::Error>(self) -> std::result::Result<u64, E> {
+            Ok(0)
+        }
+        fn visit_unit<E: de::Error>(self) -> std::result::Result<u64, E> {
+            Ok(0)
+        }
     }
 
     deserializer.deserialize_any(U64LenientVisitor)
 }
 
-fn is_default_char_tab_delay(v: &u64) -> bool { *v == DEFAULT_DELAY_CHAR_TAB_SWITCH }
-fn is_default_char_next_delay(v: &u64) -> bool { *v == DEFAULT_DELAY_CHAR_NEXT }
-fn is_default_open_delay(v: &u64) -> bool { *v == DEFAULT_DELAY_OPEN_SCREEN }
-fn is_default_close_delay(v: &u64) -> bool { *v == DEFAULT_DELAY_CLOSE_SCREEN }
-fn is_default_scroll_delay(v: &u64) -> bool { *v == DEFAULT_DELAY_SCROLL }
-fn is_default_tab_delay(v: &u64) -> bool { *v == DEFAULT_DELAY_INV_TAB_SWITCH }
-fn is_default_weapon_panel_delay(v: &u64) -> bool { *v == DEFAULT_WEAPON_PANEL_DELAY }
-fn is_default_artifact_initial_wait(v: &u64) -> bool { *v == DEFAULT_ARTIFACT_INITIAL_WAIT }
-fn is_default_artifact_panel_timeout(v: &u64) -> bool { *v == DEFAULT_ARTIFACT_PANEL_TIMEOUT }
-fn is_default_artifact_extra_delay(v: &u64) -> bool { *v == DEFAULT_ARTIFACT_EXTRA_DELAY }
+fn is_default_char_tab_delay(v: &u64) -> bool {
+    *v == DEFAULT_DELAY_CHAR_TAB_SWITCH
+}
+fn is_default_char_next_delay(v: &u64) -> bool {
+    *v == DEFAULT_DELAY_CHAR_NEXT
+}
+fn is_default_open_delay(v: &u64) -> bool {
+    *v == DEFAULT_DELAY_OPEN_SCREEN
+}
+fn is_default_close_delay(v: &u64) -> bool {
+    *v == DEFAULT_DELAY_CLOSE_SCREEN
+}
+fn is_default_scroll_delay(v: &u64) -> bool {
+    *v == DEFAULT_DELAY_SCROLL
+}
+fn is_default_tab_delay(v: &u64) -> bool {
+    *v == DEFAULT_DELAY_INV_TAB_SWITCH
+}
+fn is_default_weapon_panel_delay(v: &u64) -> bool {
+    *v == DEFAULT_WEAPON_PANEL_DELAY
+}
+fn is_default_artifact_initial_wait(v: &u64) -> bool {
+    *v == DEFAULT_ARTIFACT_INITIAL_WAIT
+}
+fn is_default_artifact_panel_timeout(v: &u64) -> bool {
+    *v == DEFAULT_ARTIFACT_PANEL_TIMEOUT
+}
+fn is_default_artifact_extra_delay(v: &u64) -> bool {
+    *v == DEFAULT_ARTIFACT_EXTRA_DELAY
+}
 
 /// Fields in GoodUserConfig that must be unsigned integers.
 /// If the JSON has an invalid value (e.g. empty string from old config versions),
 /// we remove the field so serde fills in its default.
 const U64_FIELDS: &[&str] = &[
-    "char_tab_delay", "char_next_delay", "char_open_delay", "char_close_delay",
-    "inv_scroll_delay", "inv_tab_delay", "inv_open_delay",
-    "weapon_panel_delay", "artifact_initial_wait", "artifact_panel_timeout", "artifact_extra_delay",
-    "mgr_transition_delay", "mgr_action_delay", "mgr_cell_delay", "mgr_scroll_delay",
+    "char_tab_delay",
+    "char_next_delay",
+    "char_open_delay",
+    "char_close_delay",
+    "inv_scroll_delay",
+    "inv_tab_delay",
+    "inv_open_delay",
+    "weapon_panel_delay",
+    "artifact_initial_wait",
+    "artifact_panel_timeout",
+    "artifact_extra_delay",
+    "mgr_transition_delay",
+    "mgr_action_delay",
+    "mgr_cell_delay",
+    "mgr_scroll_delay",
     // Old aliases — also sanitize in case they appear
-    "weapon_scroll_delay", "artifact_scroll_delay", "weapon_tab_delay", "artifact_tab_delay",
-    "weapon_open_delay", "artifact_open_delay",
+    "weapon_scroll_delay",
+    "artifact_scroll_delay",
+    "weapon_tab_delay",
+    "artifact_tab_delay",
+    "weapon_open_delay",
+    "artifact_open_delay",
 ];
 
 /// Sanitize a parsed JSON object: remove u64 fields that have non-numeric values
@@ -409,51 +525,112 @@ pub struct GoodUserConfig {
 
     // --- Timing / delay settings ---
     // Only serialized when user set a value different from default.
-
-    #[serde(default = "default_char_tab_delay", skip_serializing_if = "is_default_char_tab_delay", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_char_tab_delay",
+        skip_serializing_if = "is_default_char_tab_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub char_tab_delay: u64,
-    #[serde(default = "default_char_next_delay", skip_serializing_if = "is_default_char_next_delay", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_char_next_delay",
+        skip_serializing_if = "is_default_char_next_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub char_next_delay: u64,
-    #[serde(default = "default_open_delay", skip_serializing_if = "is_default_open_delay", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_open_delay",
+        skip_serializing_if = "is_default_open_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub char_open_delay: u64,
-    #[serde(default = "default_close_delay", skip_serializing_if = "is_default_close_delay", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_close_delay",
+        skip_serializing_if = "is_default_close_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub char_close_delay: u64,
 
-    #[serde(default = "default_scroll_delay", skip_serializing_if = "is_default_scroll_delay", deserialize_with = "deserialize_u64_lenient", alias = "weapon_scroll_delay", alias = "artifact_scroll_delay")]
+    #[serde(
+        default = "default_scroll_delay",
+        skip_serializing_if = "is_default_scroll_delay",
+        deserialize_with = "deserialize_u64_lenient",
+        alias = "weapon_scroll_delay",
+        alias = "artifact_scroll_delay"
+    )]
     pub inv_scroll_delay: u64,
-    #[serde(default = "default_tab_delay", skip_serializing_if = "is_default_tab_delay", deserialize_with = "deserialize_u64_lenient", alias = "weapon_tab_delay", alias = "artifact_tab_delay")]
+    #[serde(
+        default = "default_tab_delay",
+        skip_serializing_if = "is_default_tab_delay",
+        deserialize_with = "deserialize_u64_lenient",
+        alias = "weapon_tab_delay",
+        alias = "artifact_tab_delay"
+    )]
     pub inv_tab_delay: u64,
-    #[serde(default = "default_open_delay", skip_serializing_if = "is_default_open_delay", deserialize_with = "deserialize_u64_lenient", alias = "weapon_open_delay", alias = "artifact_open_delay")]
+    #[serde(
+        default = "default_open_delay",
+        skip_serializing_if = "is_default_open_delay",
+        deserialize_with = "deserialize_u64_lenient",
+        alias = "weapon_open_delay",
+        alias = "artifact_open_delay"
+    )]
     pub inv_open_delay: u64,
 
     /// Weapon: fixed delay (ms) before panel stability check.
-    #[serde(default = "default_weapon_panel_delay", skip_serializing_if = "is_default_weapon_panel_delay", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_weapon_panel_delay",
+        skip_serializing_if = "is_default_weapon_panel_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub weapon_panel_delay: u64,
 
     /// Artifact: initial wait (ms) after click before starting panel detection.
-    #[serde(default = "default_artifact_initial_wait", skip_serializing_if = "is_default_artifact_initial_wait", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_artifact_initial_wait",
+        skip_serializing_if = "is_default_artifact_initial_wait",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub artifact_initial_wait: u64,
 
     /// Artifact: timeout (ms) for fingerprint-based panel load detection.
-    #[serde(default = "default_artifact_panel_timeout", skip_serializing_if = "is_default_artifact_panel_timeout", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_artifact_panel_timeout",
+        skip_serializing_if = "is_default_artifact_panel_timeout",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub artifact_panel_timeout: u64,
 
     /// Artifact: extra delay (ms) after panel load, before capture.
-    #[serde(default = "default_artifact_extra_delay", skip_serializing_if = "is_default_artifact_extra_delay", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_artifact_extra_delay",
+        skip_serializing_if = "is_default_artifact_extra_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub artifact_extra_delay: u64,
 
     // --- Manager delay settings ---
     /// Screen transition delay for the manager (ms). Default: 1500.
-    #[serde(default = "default_mgr_transition", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_mgr_transition",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub mgr_transition_delay: u64,
     /// Action button delay for the manager (ms). Default: 800.
-    #[serde(default = "default_mgr_action", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_mgr_action",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub mgr_action_delay: u64,
     /// Grid cell click delay for the manager (ms). Default: 100.
-    #[serde(default = "default_mgr_cell", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_mgr_cell",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub mgr_cell_delay: u64,
     /// Scroll settle delay for the manager (ms). Default: 400.
-    #[serde(default = "default_mgr_scroll", deserialize_with = "deserialize_u64_lenient")]
+    #[serde(
+        default = "default_mgr_scroll",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
     pub mgr_scroll_delay: u64,
 
     /// GUI language preference: "zh" or "en".
@@ -461,7 +638,6 @@ pub struct GoodUserConfig {
     pub lang: String,
 
     // --- GUI advanced settings (persisted so they survive restarts) ---
-
     #[serde(default = "default_true")]
     pub scan_characters: bool,
     #[serde(default = "default_true")]
@@ -476,6 +652,10 @@ pub struct GoodUserConfig {
     pub dump_images: bool,
     #[serde(default)]
     pub hdr_mode: bool,
+    #[serde(default = "default_hdr_white_point")]
+    pub hdr_white_point: f32,
+    #[serde(default)]
+    pub capture_method: CaptureMethod,
     #[serde(default)]
     pub dump_job_data: bool,
     #[serde(default)]
@@ -501,7 +681,11 @@ pub struct GoodUserConfig {
 
 impl GoodUserConfig {
     fn opt(s: &str) -> Option<String> {
-        if s.trim().is_empty() { None } else { Some(s.trim().to_string()) }
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s.trim().to_string())
+        }
     }
 
     pub fn to_overrides(&self) -> NameOverrides {
@@ -520,7 +704,8 @@ impl GoodUserConfig {
             log_info!(
                 "OCR v5 池大小手动覆盖: {} → {}",
                 "OCR v5 pool size manually overridden: {} → {}",
-                cfg.v5_count, self.ocr_pool_v5_override,
+                cfg.v5_count,
+                self.ocr_pool_v5_override,
             );
             cfg.v5_count = self.ocr_pool_v5_override;
         }
@@ -528,7 +713,8 @@ impl GoodUserConfig {
             log_info!(
                 "OCR v4 池大小手动覆盖: {} → {}",
                 "OCR v4 pool size manually overridden: {} → {}",
-                cfg.v4_count, self.ocr_pool_v4_override,
+                cfg.v4_count,
+                self.ocr_pool_v4_override,
             );
             cfg.v4_count = self.ocr_pool_v4_override;
         }
@@ -566,6 +752,8 @@ impl Default for GoodUserConfig {
             continue_on_failure: false,
             dump_images: false,
             hdr_mode: false,
+            hdr_white_point: default_hdr_white_point(),
+            capture_method: Default::default(),
             dump_job_data: false,
             save_on_cancel: false,
             char_max_count: 0,
@@ -595,23 +783,31 @@ pub fn load_config_or_default() -> GoodUserConfig {
                 Ok(mut val) => {
                     sanitize_config_json(&mut val);
                     serde_json::from_value::<GoodUserConfig>(val)
-                }
+                },
                 Err(e) => Err(e),
             };
             match config_result {
-                Ok(config) => {
-                    config
-                }
+                Ok(config) => config,
                 Err(e) => {
-                    log_error!("配置文件解析失败，将使用默认值: {}: {}", "Config parse error (using defaults): {}: {}", path.display(), e);
+                    log_error!(
+                        "配置文件解析失败，将使用默认值: {}: {}",
+                        "Config parse error (using defaults): {}: {}",
+                        path.display(),
+                        e
+                    );
                     GoodUserConfig::default()
-                }
+                },
             }
-        }
+        },
         Err(e) => {
-            log_error!("配置文件读取失败，将使用默认值: {}: {}", "Config read error (using defaults): {}: {}", path.display(), e);
+            log_error!(
+                "配置文件读取失败，将使用默认值: {}: {}",
+                "Config read error (using defaults): {}: {}",
+                path.display(),
+                e
+            );
             GoodUserConfig::default()
-        }
+        },
     }
 }
 
@@ -631,7 +827,11 @@ pub fn save_config(config: &GoodUserConfig) -> Result<()> {
 /// (via the GUI, or manually).
 fn load_or_create_config() -> Result<GoodUserConfig> {
     let path = config_path();
-    log_debug!("正在查找配置文件: {}", "Looking for config at: {}", path.display());
+    log_debug!(
+        "正在查找配置文件: {}",
+        "Looking for config at: {}",
+        path.display()
+    );
 
     if !path.exists() {
         return Err(anyhow!(
@@ -669,96 +869,153 @@ fn load_or_create_config() -> Result<GoodUserConfig> {
 #[command(about = "原神GOOD格式扫描器 / Genshin Impact GOOD Format Scanner")]
 pub struct GoodScannerConfig {
     // === Scan targets ===
-
     /// 扫描角色 / Scan characters
-    #[arg(long = "characters", help = "扫描角色\nScan characters",
-          help_heading = "扫描目标 / Scan Targets")]
+    #[arg(
+        long = "characters",
+        help = "扫描角色\nScan characters",
+        help_heading = "扫描目标 / Scan Targets"
+    )]
     pub scan_characters: bool,
 
     /// 扫描武器 / Scan weapons
-    #[arg(long = "weapons", help = "扫描武器\nScan weapons",
-          help_heading = "扫描目标 / Scan Targets")]
+    #[arg(
+        long = "weapons",
+        help = "扫描武器\nScan weapons",
+        help_heading = "扫描目标 / Scan Targets"
+    )]
     pub scan_weapons: bool,
 
     /// 扫描圣遗物 / Scan artifacts
-    #[arg(long = "artifacts", help = "扫描圣遗物\nScan artifacts",
-          help_heading = "扫描目标 / Scan Targets")]
+    #[arg(
+        long = "artifacts",
+        help = "扫描圣遗物\nScan artifacts",
+        help_heading = "扫描目标 / Scan Targets"
+    )]
     pub scan_artifacts: bool,
 
     /// 扫描全部 / Scan all
-    #[arg(long = "all", help = "扫描全部（角色+武器+圣遗物）\nScan all (characters + weapons + artifacts)",
-          help_heading = "扫描目标 / Scan Targets")]
+    #[arg(
+        long = "all",
+        help = "扫描全部（角色+武器+圣遗物）\nScan all (characters + weapons + artifacts)",
+        help_heading = "扫描目标 / Scan Targets"
+    )]
     pub scan_all: bool,
 
     // === Global options ===
-
     /// 显示详细扫描信息 / Show detailed scan info
-    #[arg(long = "verbose", short = 'v', help = "显示详细扫描信息\nShow detailed scan info",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "verbose",
+        short = 'v',
+        help = "显示详细扫描信息\nShow detailed scan info",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub verbose: bool,
 
     /// 单项失败时继续扫描 / Continue when items fail
-    #[arg(long = "continue-on-failure", help = "单项失败时继续扫描\nContinue scanning when individual items fail",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "continue-on-failure",
+        help = "单项失败时继续扫描\nContinue scanning when individual items fail",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub continue_on_failure: bool,
 
     /// 逐项显示扫描进度 / Log each scanned item
-    #[arg(long = "log-progress", help = "逐项显示扫描进度\nLog each item as it is scanned",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "log-progress",
+        help = "逐项显示扫描进度\nLog each item as it is scanned",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub log_progress: bool,
 
     /// 输出目录 / Output directory
-    #[arg(long = "output-dir", help = "输出目录\nOutput directory", default_value = ".",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "output-dir",
+        help = "输出目录\nOutput directory",
+        default_value = ".",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub output_dir: String,
 
     /// 覆盖OCR后端 / Override OCR backend
-    #[arg(long = "ocr-backend", help = "覆盖OCR后端（ppocrv4 或 ppocrv5）\nOverride OCR backend (ppocrv4 or ppocrv5)",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "ocr-backend",
+        help = "覆盖OCR后端（ppocrv4 或 ppocrv5）\nOverride OCR backend (ppocrv4 or ppocrv5)",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub ocr_backend: Option<String>,
 
     /// 保存OCR区域截图 / Dump OCR screenshots
-    #[arg(long = "dump-images", help = "保存OCR区域截图到 debug_images/\nDump OCR region screenshots to debug_images/",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "dump-images",
+        help = "保存OCR区域截图到 debug_images/\nDump OCR region screenshots to debug_images/",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub dump_images: bool,
 
     /// HDR显示模式 / HDR display mode
-    #[arg(long = "hdr-mode", help = "使用HDR像素阈值（默认使用SDR阈值）\nUse HDR pixel thresholds (default uses SDR thresholds)",
-          help_heading = "通用选项 / Global Options")]
+    #[arg(
+        long = "hdr-mode",
+        help = "使用HDR像素阈值（默认使用SDR阈值）\nUse HDR pixel thresholds (default uses SDR thresholds)",
+        help_heading = "通用选项 / Global Options"
+    )]
     pub hdr_mode: bool,
+    #[clap(skip = 4.0f32)]
+    pub hdr_white_point: f32,
 
     // === Scanner config ===
-
     /// 最低武器稀有度 / Min weapon rarity
-    #[arg(long = "weapon-min-rarity", help = "保留的最低武器稀有度（3-5）\nMinimum weapon rarity to keep (3-5)",
-          default_value_t = 3, help_heading = "扫描器配置 / Scanner Config")]
+    #[arg(
+        long = "weapon-min-rarity",
+        help = "保留的最低武器稀有度（3-5）\nMinimum weapon rarity to keep (3-5)",
+        default_value_t = 3,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
     pub weapon_min_rarity: i32,
 
     /// 最低圣遗物稀有度 / Min artifact rarity
-    #[arg(long = "artifact-min-rarity", help = "保留的最低圣遗物稀有度（4-5）\nMinimum artifact rarity to keep (4-5)",
-          default_value_t = 4, help_heading = "扫描器配置 / Scanner Config")]
+    #[arg(
+        long = "artifact-min-rarity",
+        help = "保留的最低圣遗物稀有度（4-5）\nMinimum artifact rarity to keep (4-5)",
+        default_value_t = 4,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
     pub artifact_min_rarity: i32,
 
     /// 最大角色扫描数 / Max characters
-    #[arg(long = "char-max-count", help = "最大角色扫描数（0=不限）\nMax characters to scan (0 = unlimited)",
-          default_value_t = 0, help_heading = "扫描器配置 / Scanner Config")]
+    #[arg(
+        long = "char-max-count",
+        help = "最大角色扫描数（0=不限）\nMax characters to scan (0 = unlimited)",
+        default_value_t = 0,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
     pub char_max_count: usize,
 
     /// 最大武器扫描数 / Max weapons
-    #[arg(long = "weapon-max-count", help = "最大武器扫描数（0=不限）\nMax weapons to scan (0 = unlimited)",
-          default_value_t = 0, help_heading = "扫描器配置 / Scanner Config")]
+    #[arg(
+        long = "weapon-max-count",
+        help = "最大武器扫描数（0=不限）\nMax weapons to scan (0 = unlimited)",
+        default_value_t = 0,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
     pub weapon_max_count: usize,
 
     /// 最大圣遗物扫描数 / Max artifacts
-    #[arg(long = "artifact-max-count", help = "最大圣遗物扫描数（0=不限）\nMax artifacts to scan (0 = unlimited)",
-          default_value_t = 0, help_heading = "扫描器配置 / Scanner Config")]
+    #[arg(
+        long = "artifact-max-count",
+        help = "最大圣遗物扫描数（0=不限）\nMax artifacts to scan (0 = unlimited)",
+        default_value_t = 0,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
     pub artifact_max_count: usize,
 
     // weapon_skip_delay and artifact_skip_delay removed — grid-based detection always used
-
     /// 圣遗物副词条OCR后端 / Artifact substat OCR backend
-    #[arg(long = "artifact-substat-ocr", help = "圣遗物副词条OCR后端\nArtifact substat/general OCR backend",
-          default_value = "ppocrv4", help_heading = "扫描器配置 / Scanner Config")]
+    #[arg(
+        long = "artifact-substat-ocr",
+        help = "圣遗物副词条OCR后端\nArtifact substat/general OCR backend",
+        default_value = "ppocrv4",
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
     pub artifact_substat_ocr: String,
 }
 
@@ -772,7 +1029,9 @@ pub struct GoodScannerApplication {
 
 impl GoodScannerApplication {
     pub fn new(matches: ArgMatches) -> Self {
-        Self { arg_matches: matches }
+        Self {
+            arg_matches: matches,
+        }
     }
 
     pub fn build_command() -> clap::Command {
@@ -789,10 +1048,16 @@ impl GoodScannerApplication {
     }
 
     /// Build a character scanner config from global CLI flags + JSON config.
-    pub fn make_char_config(config: &GoodScannerConfig, user_config: &GoodUserConfig) -> GoodCharacterScannerConfig {
+    pub fn make_char_config(
+        config: &GoodScannerConfig,
+        user_config: &GoodUserConfig,
+    ) -> GoodCharacterScannerConfig {
         GoodCharacterScannerConfig {
             verbose: config.verbose,
-            ocr_backend: config.ocr_backend.clone().unwrap_or_else(|| "ppocrv4".to_string()),
+            ocr_backend: config
+                .ocr_backend
+                .clone()
+                .unwrap_or_else(|| "ppocrv4".to_string()),
             tab_delay: user_config.char_tab_delay,
             next_delay: user_config.char_next_delay,
             open_delay: user_config.char_open_delay,
@@ -805,11 +1070,17 @@ impl GoodScannerApplication {
     }
 
     /// Build a weapon scanner config from global CLI flags + JSON config.
-    pub fn make_weapon_config(config: &GoodScannerConfig, user_config: &GoodUserConfig) -> GoodWeaponScannerConfig {
+    pub fn make_weapon_config(
+        config: &GoodScannerConfig,
+        user_config: &GoodUserConfig,
+    ) -> GoodWeaponScannerConfig {
         GoodWeaponScannerConfig {
             min_rarity: config.weapon_min_rarity,
             verbose: config.verbose,
-            ocr_backend: config.ocr_backend.clone().unwrap_or_else(|| "ppocrv4".to_string()),
+            ocr_backend: config
+                .ocr_backend
+                .clone()
+                .unwrap_or_else(|| "ppocrv4".to_string()),
             delay_scroll: user_config.inv_scroll_delay,
             delay_tab: user_config.inv_tab_delay,
             open_delay: user_config.inv_open_delay,
@@ -822,11 +1093,17 @@ impl GoodScannerApplication {
     }
 
     /// Build an artifact scanner config from global CLI flags + JSON config.
-    pub fn make_artifact_config(config: &GoodScannerConfig, user_config: &GoodUserConfig) -> GoodArtifactScannerConfig {
+    pub fn make_artifact_config(
+        config: &GoodScannerConfig,
+        user_config: &GoodUserConfig,
+    ) -> GoodArtifactScannerConfig {
         GoodArtifactScannerConfig {
             min_rarity: config.artifact_min_rarity,
             verbose: config.verbose,
-            ocr_backend: config.ocr_backend.clone().unwrap_or_else(|| "ppocrv5".to_string()),
+            ocr_backend: config
+                .ocr_backend
+                .clone()
+                .unwrap_or_else(|| "ppocrv5".to_string()),
             substat_ocr_backend: config.artifact_substat_ocr.clone(),
             delay_scroll: user_config.inv_scroll_delay,
             delay_tab: user_config.inv_tab_delay,
@@ -842,7 +1119,10 @@ impl GoodScannerApplication {
     }
 
     pub fn run(&self) -> Result<()> {
-        println!("{}", yas::lang::localize("正在启动扫描器... / GOOD Scanner starting..."));
+        println!(
+            "{}",
+            yas::lang::localize("正在启动扫描器... / GOOD Scanner starting...")
+        );
 
         init_rayon_pool();
 
@@ -857,7 +1137,10 @@ impl GoodScannerApplication {
         let user_config = load_or_create_config()?;
 
         // Determine what to scan (default: all if no flags specified)
-        let no_flags = !config.scan_characters && !config.scan_weapons && !config.scan_artifacts && !config.scan_all;
+        let no_flags = !config.scan_characters
+            && !config.scan_weapons
+            && !config.scan_artifacts
+            && !config.scan_all;
 
         let scan_config = ScanCoreConfig {
             scan_characters: config.scan_characters || config.scan_all || no_flags,
@@ -870,6 +1153,8 @@ impl GoodScannerApplication {
             log_progress: config.log_progress,
             dump_images: config.dump_images,
             hdr_mode: config.hdr_mode || user_config.hdr_mode,
+            hdr_white_point: DEFAULT_HDR_WHITE_POINT,
+            capture_method: capture_method_for_hdr_mode(config.hdr_mode || user_config.hdr_mode),
             output_dir: config.output_dir.clone(),
             ocr_backend: config.ocr_backend.clone(),
             artifact_substat_ocr: config.artifact_substat_ocr.clone(),
@@ -882,7 +1167,6 @@ impl GoodScannerApplication {
         run_scan_core(&user_config, &scan_config, None, None)?;
         Ok(())
     }
-
 }
 
 /// Generate a local-time timestamp string like "2024-01-15_12-30-45".
@@ -890,13 +1174,28 @@ impl GoodScannerApplication {
 pub fn chrono_timestamp() -> String {
     #[repr(C)]
     struct SystemTime {
-        year: u16, month: u16, _dow: u16, day: u16,
-        hour: u16, minute: u16, second: u16, _ms: u16,
+        year: u16,
+        month: u16,
+        _dow: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        _ms: u16,
     }
     extern "system" {
         fn GetLocalTime(lpSystemTime: *mut SystemTime);
     }
-    let mut st = SystemTime { year: 0, month: 0, _dow: 0, day: 0, hour: 0, minute: 0, second: 0, _ms: 0 };
+    let mut st = SystemTime {
+        year: 0,
+        month: 0,
+        _dow: 0,
+        day: 0,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        _ms: 0,
+    };
     unsafe { GetLocalTime(&mut st) };
     format!(
         "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
@@ -919,8 +1218,14 @@ pub fn chrono_timestamp() -> String {
     let mut y = 1970i32;
     let mut d = days as i32;
     loop {
-        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 366 } else { 365 };
-        if d < dy { break; }
+        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+            366
+        } else {
+            365
+        };
+        if d < dy {
+            break;
+        }
         d -= dy;
         y += 1;
     }
@@ -932,11 +1237,21 @@ pub fn chrono_timestamp() -> String {
     };
     let mut m = 1;
     for &days_in_month in md {
-        if d < days_in_month { break; }
+        if d < days_in_month {
+            break;
+        }
         d -= days_in_month;
         m += 1;
     }
-    format!("{:04}-{:02}-{:02}_{:02}-{:02}-{:02}", y, m, d + 1, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+        y,
+        m,
+        d + 1,
+        hours,
+        minutes,
+        seconds
+    )
 }
 
 // ================================================================
@@ -956,6 +1271,8 @@ pub struct ScanCoreConfig {
     pub log_progress: bool,
     pub dump_images: bool,
     pub hdr_mode: bool,
+    pub hdr_white_point: f32,
+    pub capture_method: CaptureMethod,
     pub output_dir: String,
     pub ocr_backend: Option<String>,
     pub artifact_substat_ocr: String,
@@ -979,6 +1296,8 @@ impl Default for ScanCoreConfig {
             log_progress: false,
             dump_images: false,
             hdr_mode: false,
+            hdr_white_point: default_hdr_white_point(),
+            capture_method: CaptureMethod::default(),
             output_dir: ".".to_string(),
             ocr_backend: None,
             artifact_substat_ocr: "ppocrv4".to_string(),
@@ -1005,6 +1324,7 @@ impl ScanCoreConfig {
             ocr_backend: self.ocr_backend.clone(),
             dump_images: self.dump_images,
             hdr_mode: self.hdr_mode,
+            hdr_white_point: self.hdr_white_point,
             weapon_min_rarity: self.weapon_min_rarity,
             artifact_min_rarity: self.artifact_min_rarity,
             char_max_count: self.char_max_count,
@@ -1028,9 +1348,12 @@ pub fn run_scan_core(
     init_rayon_pool();
     crate::scanner::common::annotator::init(config.dump_images);
     crate::scanner::common::pixel_profile::set_hdr_mode(config.hdr_mode);
+    crate::scanner::common::pixel_profile::set_hdr_white_point(config.hdr_white_point);
 
     let report = |msg: &str| {
-        if let Some(f) = status_fn { f(msg); }
+        if let Some(f) = status_fn {
+            f(msg);
+        }
     };
 
     #[cfg(target_os = "windows")]
@@ -1045,7 +1368,11 @@ pub fn run_scan_core(
     let mappings = Arc::new(MappingManager::new(&overrides)?);
     log_info!(
         "已加载: {} 角色, {} 武器, {} 圣遗物套装",
-        "Loaded: {} characters, {} weapons, {} artifact sets", mappings.character_name_map.len(), mappings.weapon_name_map.len(), mappings.artifact_set_map.len());
+        "Loaded: {} characters, {} weapons, {} artifact sets",
+        mappings.character_name_map.len(),
+        mappings.weapon_name_map.len(),
+        mappings.artifact_set_map.len()
+    );
 
     // Find and focus the game window
     report("查找游戏窗口 / Finding game window...");
@@ -1053,11 +1380,13 @@ pub fn run_scan_core(
     log_info!(
         "游戏窗口: {}x{}",
         "Game window: {}x{}",
-        game_info.window.width, game_info.window.height,
+        game_info.window.width,
+        game_info.window.height,
     );
 
     report("初始化屏幕截图 / Initializing screen capture...");
-    let mut ctrl = GenshinGameController::new(game_info)
+    let capture_method = capture_method_for_hdr_mode(config.hdr_mode);
+    let mut ctrl = GenshinGameController::new(game_info, capture_method)
         .context("屏幕截图初始化失败 / Screen capture initialization failed")?;
     let token = cancel_token.unwrap_or_else(yas::cancel::CancelToken::new);
 
@@ -1066,7 +1395,11 @@ pub fn run_scan_core(
     let pool_config = user_config.resolve_ocr_pool_config();
     let ocr_backend = config.ocr_backend.as_deref().unwrap_or("ppocrv5");
     let substat_backend = config.artifact_substat_ocr.as_str();
-    let pools = Arc::new(SharedOcrPools::new(pool_config, ocr_backend, substat_backend)?);
+    let pools = Arc::new(SharedOcrPools::new(
+        pool_config,
+        ocr_backend,
+        substat_backend,
+    )?);
     log_info!("OCR模型加载完成", "OCR models loaded");
 
     let save_on_cancel = config.save_on_cancel;
@@ -1136,6 +1469,7 @@ pub fn run_server_core(
     init_rayon_pool();
     crate::scanner::common::annotator::init(dump_images);
     crate::scanner::common::pixel_profile::set_hdr_mode(user_config.hdr_mode);
+    crate::scanner::common::pixel_profile::set_hdr_white_point(DEFAULT_HDR_WHITE_POINT);
 
     #[cfg(target_os = "windows")]
     {
@@ -1147,7 +1481,11 @@ pub fn run_server_core(
     let mappings = Arc::new(MappingManager::new(&overrides)?);
     log_info!(
         "已加载: {}角色, {}武器, {}套装",
-        "Loaded: {} characters, {} weapons, {} artifact sets", mappings.character_name_map.len(), mappings.weapon_name_map.len(), mappings.artifact_set_map.len());
+        "Loaded: {} characters, {} weapons, {} artifact sets",
+        mappings.character_name_map.len(),
+        mappings.weapon_name_map.len(),
+        mappings.artifact_set_map.len()
+    );
 
     let ocr_be = ocr_backend.unwrap_or("ppocrv5").to_string();
     let substat_ocr = artifact_substat_ocr.to_string();
@@ -1170,6 +1508,7 @@ pub fn run_server_core(
         scan_artifacts: true,
         dump_images,
         hdr_mode: user_config.hdr_mode,
+        capture_method: capture_method_for_hdr_mode(user_config.hdr_mode),
         ocr_backend: ocr_backend.map(|s| s.to_string()),
         artifact_substat_ocr: artifact_substat_ocr.to_string(),
         ..ScanCoreConfig::default()
@@ -1180,17 +1519,20 @@ pub fn run_server_core(
     // attempt fails (e.g. game window not open yet). All captures are cloned
     // inside the body so each call builds fresh state.
     let init_executor = move || -> anyhow::Result<Box<dyn crate::server::ManageExecutor>> {
-
         crate::manager::ui_actions::set_manager_delays(mgr_delays.clone());
         log_info!("查找游戏窗口...", "Finding game window...");
         let game_info = GoodScannerApplication::get_game_info()?;
         log_info!("初始化屏幕截图...", "Initializing screen capture...");
-        let ctrl = GenshinGameController::new(game_info)?;
+        let capture_method = capture_method_for_hdr_mode(exec_user_config.hdr_mode);
+        let ctrl = GenshinGameController::new(game_info, capture_method)?;
         log_info!("加载OCR模型...", "Loading OCR models...");
         let pool_config = exec_user_config.resolve_ocr_pool_config();
-        let pools = Arc::new(SharedOcrPools::new(pool_config, &ocr_be, &substat_ocr)
-            .context("OCR模型加载失败，请确认内存充足（建议8GB以上）\
-                     / OCR model load failed — ensure sufficient memory (8 GB+ recommended)")?);
+        let pools = Arc::new(
+            SharedOcrPools::new(pool_config, &ocr_be, &substat_ocr).context(
+                "OCR模型加载失败，请确认内存充足（建议8GB以上）\
+                     / OCR model load failed — ensure sufficient memory (8 GB+ recommended)",
+            )?,
+        );
         let manager = crate::manager::orchestrator::ArtifactManager::new(
             mappings_clone.clone(),
             pools,
@@ -1221,6 +1563,7 @@ pub fn run_manage_json(
     cancel_token: Option<yas::cancel::CancelToken>,
 ) -> Result<crate::manager::models::ManageResult> {
     crate::scanner::common::pixel_profile::set_hdr_mode(user_config.hdr_mode);
+    crate::scanner::common::pixel_profile::set_hdr_white_point(DEFAULT_HDR_WHITE_POINT);
     #[cfg(target_os = "windows")]
     {
         yas::utils::ensure_admin()?;
@@ -1233,25 +1576,33 @@ pub fn run_manage_json(
         scroll: user_config.mgr_scroll_delay,
     });
 
-    let request: crate::manager::models::LockManageRequest =
-        serde_json::from_str(json_str)
-            .map_err(|e| anyhow!("JSON解析失败 / JSON parse error: {}", e))?;
+    let request: crate::manager::models::LockManageRequest = serde_json::from_str(json_str)
+        .map_err(|e| anyhow!("JSON解析失败 / JSON parse error: {}", e))?;
 
     let total = request.lock.len() + request.unlock.len();
     log_info!(
         "执行 {} 条管理请求（lock: {}, unlock: {}）",
-        "Executing {} manage items (lock: {}, unlock: {})", total, request.lock.len(), request.unlock.len());
+        "Executing {} manage items (lock: {}, unlock: {})",
+        total,
+        request.lock.len(),
+        request.unlock.len()
+    );
 
     let overrides = user_config.to_overrides();
     let mappings = Arc::new(MappingManager::new(&overrides)?);
 
     let game_info = GoodScannerApplication::get_game_info()?;
-    let mut ctrl = GenshinGameController::new(game_info)?;
+    let capture_method = capture_method_for_hdr_mode(user_config.hdr_mode);
+    let mut ctrl = GenshinGameController::new(game_info, capture_method)?;
     let token = cancel_token.unwrap_or_else(yas::cancel::CancelToken::new);
 
     let ocr_be = ocr_backend.unwrap_or("ppocrv5");
     let pool_config = user_config.resolve_ocr_pool_config();
-    let pools = Arc::new(SharedOcrPools::new(pool_config, ocr_be, artifact_substat_ocr)?);
+    let pools = Arc::new(SharedOcrPools::new(
+        pool_config,
+        ocr_be,
+        artifact_substat_ocr,
+    )?);
     let manager = crate::manager::orchestrator::ArtifactManager::new(
         mappings,
         pools,

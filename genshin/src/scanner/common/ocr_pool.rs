@@ -4,9 +4,9 @@ use std::time::Duration;
 use anyhow::Result;
 use image::RgbImage;
 
+use crate::scanner::common::ocr_factory;
 use yas::ocr::ImageToText;
 use yas::{log_debug, log_error};
-use crate::scanner::common::ocr_factory;
 
 /// A pool of OCR model instances for true parallel OCR.
 ///
@@ -31,7 +31,9 @@ impl OcrPool {
     {
         let (checkin, checkout) = crossbeam_channel::bounded(count);
         for _ in 0..count {
-            checkin.send(create_fn()?).map_err(|_| anyhow::anyhow!("OCR池通道已关闭 / Pool channel closed"))?;
+            checkin
+                .send(create_fn()?)
+                .map_err(|_| anyhow::anyhow!("OCR池通道已关闭 / Pool channel closed"))?;
         }
         Ok(Self { checkout, checkin })
     }
@@ -39,7 +41,10 @@ impl OcrPool {
     /// Checkout a model from the pool. Blocks until one is available.
     /// The model is returned to the pool when the guard is dropped.
     pub fn get(&self) -> OcrGuard {
-        let model = self.checkout.recv().expect("OCR池通道已关闭 / OCR pool channel closed");
+        let model = self
+            .checkout
+            .recv()
+            .expect("OCR池通道已关闭 / OCR pool channel closed");
         OcrGuard {
             model: Some(model),
             checkin: self.checkin.clone(),
@@ -62,7 +67,9 @@ impl ImageToText<RgbImage> for OcrGuard {
     }
 
     fn get_average_inference_time(&self) -> Option<Duration> {
-        self.model.as_ref().and_then(|m| m.get_average_inference_time())
+        self.model
+            .as_ref()
+            .and_then(|m| m.get_average_inference_time())
     }
 }
 
@@ -106,7 +113,7 @@ impl OcrPoolConfig {
                     gb,
                 );
                 (2, 4)
-            }
+            },
             Some(bytes) if bytes >= FOUR_GB => {
                 let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                 log_debug!(
@@ -115,7 +122,7 @@ impl OcrPoolConfig {
                     gb,
                 );
                 (2, 2)
-            }
+            },
             Some(bytes) => {
                 let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                 log_debug!(
@@ -124,14 +131,14 @@ impl OcrPoolConfig {
                     gb,
                 );
                 (1, 1)
-            }
+            },
             None => {
                 log_debug!(
                     "无法检测内存，使用小型OCR池 (1×v5 + 1×v4)",
                     "Cannot detect memory, using small OCR pool (1×v5 + 1×v4)",
                 );
                 (1, 1)
-            }
+            },
         };
 
         Self { v5_count, v4_count }
@@ -180,10 +187,15 @@ impl SharedOcrPools {
         log_debug!(
             "OCR池已创建: v5={}, v4={}",
             "OCR pools created: v5={}, v4={}",
-            config.v5_count, config.v4_count,
+            config.v5_count,
+            config.v4_count,
         );
 
-        Ok(Self { v5_pool, v4_pool, config })
+        Ok(Self {
+            v5_pool,
+            v4_pool,
+            config,
+        })
     }
 
     pub fn v5(&self) -> &Arc<OcrPool> {
@@ -224,7 +236,7 @@ where
                 },
             };
             Err(diagnose_error(format!("[{}] panic: {}", label, panic_msg)))
-        }
+        },
     }
 }
 

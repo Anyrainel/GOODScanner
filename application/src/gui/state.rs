@@ -89,7 +89,11 @@ impl UiText {
 
 impl std::fmt::Display for UiText {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if yas::lang::is_en() { &self.en } else { &self.zh })
+        f.write_str(if yas::lang::is_en() {
+            &self.en
+        } else {
+            &self.zh
+        })
     }
 }
 
@@ -158,10 +162,12 @@ impl RefreshState {
                 match h.join() {
                     Ok(Ok(())) => *self = RefreshState::Ok,
                     Ok(Err(msg)) => *self = RefreshState::Failed(msg),
-                    Err(_) => *self = RefreshState::Failed(UiText::new(
-                        "后台线程崩溃",
-                        "Background thread panicked",
-                    )),
+                    Err(_) => {
+                        *self = RefreshState::Failed(UiText::new(
+                            "后台线程崩溃",
+                            "Background thread panicked",
+                        ))
+                    },
                 }
             }
         }
@@ -276,6 +282,9 @@ impl AppState {
         self.user_config.continue_on_failure = self.continue_on_failure;
         self.user_config.dump_images = self.dump_images;
         self.user_config.hdr_mode = self.hdr_mode;
+        self.user_config.hdr_white_point = genshin_scanner::cli::DEFAULT_HDR_WHITE_POINT;
+        self.user_config.capture_method =
+            genshin_scanner::cli::capture_method_for_hdr_mode(self.hdr_mode);
         self.user_config.dump_job_data = self.dump_job_data;
         self.user_config.save_on_cancel = self.save_on_cancel;
         self.user_config.char_max_count = self.char_max_count;
@@ -318,6 +327,8 @@ impl AppState {
             log_progress: true,
             dump_images: self.dump_images,
             hdr_mode: self.hdr_mode,
+            hdr_white_point: genshin_scanner::cli::DEFAULT_HDR_WHITE_POINT,
+            capture_method: genshin_scanner::cli::capture_method_for_hdr_mode(self.hdr_mode),
             save_on_cancel: self.save_on_cancel,
             output_dir: self.output_dir.clone(),
             ocr_backend: None,

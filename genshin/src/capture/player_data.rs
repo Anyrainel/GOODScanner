@@ -10,7 +10,7 @@ use crate::scanner::common::models::{
     GoodArtifact, GoodCharacter, GoodExport, GoodSubStat, GoodTalent, GoodWeapon,
 };
 
-use super::data_types::{DataCache, Property, SkillType, to_good_key};
+use super::data_types::{to_good_key, DataCache, Property, SkillType};
 
 // --- Game-internal property IDs (content IDs, stable within a version) ---
 // These come from the game's `AvatarInfo.prop_map` and may shift across major versions.
@@ -105,7 +105,10 @@ impl PlayerData {
 
     /// Count characters (formal avatars only, avatar_type == 1).
     pub fn character_count(&self) -> usize {
-        self.characters.iter().filter(|c| c.avatar_type == AVATAR_TYPE_FORMAL).count()
+        self.characters
+            .iter()
+            .filter(|c| c.avatar_type == AVATAR_TYPE_FORMAL)
+            .count()
     }
 
     /// Count weapons among captured items.
@@ -189,8 +192,14 @@ impl PlayerData {
                 }
 
                 let name = self.data_cache.get_character(character.avatar_id)?;
-                let level = character.prop_map.get(&PROP_LEVEL).map(|prop| prop.val as u32)?;
-                let ascension = character.prop_map.get(&PROP_ASCENSION).map(|prop| prop.val as u32)?;
+                let level = character
+                    .prop_map
+                    .get(&PROP_LEVEL)
+                    .map(|prop| prop.val as u32)?;
+                let ascension = character
+                    .prop_map
+                    .get(&PROP_ASCENSION)
+                    .map(|prop| prop.val as u32)?;
                 let constellation = character.talent_id_list.len() as u32;
 
                 let mut auto = 1u32;
@@ -251,9 +260,11 @@ impl PlayerData {
                 let mut substats: IndexMap<Property, (f64, f64, Vec<f64>)> = IndexMap::new();
                 for substat_id in artifact.append_prop_id_list.iter() {
                     let substat = self.data_cache.get_affix(*substat_id)?;
-                    let entry = substats
-                        .entry(substat.property)
-                        .or_insert((0.0, substat.value, Vec::new()));
+                    let entry = substats.entry(substat.property).or_insert((
+                        0.0,
+                        substat.value,
+                        Vec::new(),
+                    ));
                     entry.0 += substat.value;
                     entry.2.push(substat.value);
                 }
@@ -347,8 +358,13 @@ impl PlayerData {
                 }
                 let weapon_data = self.data_cache.get_weapon(item.item_id)?;
                 let weapon = equip.weapon();
-                let refinement =
-                    weapon.affix_map.values().cloned().next().unwrap_or_default() + 1;
+                let refinement = weapon
+                    .affix_map
+                    .values()
+                    .cloned()
+                    .next()
+                    .unwrap_or_default()
+                    + 1;
 
                 let level = weapon.level;
                 let ascension = weapon.promote_level;

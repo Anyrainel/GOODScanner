@@ -23,15 +23,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use auto_artifactarium::r#gen::protos::{AvatarInfo, Item, Unk};
 use auto_artifactarium::{GamePacket, GameSniffer};
 use base64::prelude::*;
 use protobuf::Message;
 use protobuf::UnknownValueRef;
-use yas::{log_debug, log_error, log_info, log_warn};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use yas::{log_debug, log_error, log_info, log_warn};
 
 use super::data_cache::load_data_cache;
 use super::packet_capture::PacketCapture;
@@ -168,14 +168,14 @@ impl CaptureMonitor {
                     state.complete = false;
                     state.error = None;
                 }
-            }
+            },
             CaptureCommand::StopCapture => {
                 self.stop_capture();
-            }
+            },
             CaptureCommand::Export { settings, reply } => {
                 let result = self.player_data.export(&settings);
                 let _ = reply.send(result);
-            }
+            },
         }
         false
     }
@@ -300,11 +300,9 @@ fn find_best_field<T: Message>(
 ///
 /// Survives both command ID rotation AND outer field number changes.
 fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
-    let (field, items) = find_best_field::<Item>(
-        proto_data,
-        MIN_ITEM_ENTRIES,
-        |item| item.item_id != 0 && item.guid != 0,
-    )?;
+    let (field, items) = find_best_field::<Item>(proto_data, MIN_ITEM_ENTRIES, |item| {
+        item.item_id != 0 && item.guid != 0
+    })?;
 
     let gear_count = items
         .iter()
@@ -314,7 +312,9 @@ fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
         log_debug!(
             "物品数据包候选被拒（field={}, {} 个物品，{} 个武器/圣遗物）",
             "Item packet candidate rejected (field={}, {} items, {} weapons/artifacts)",
-            field, items.len(), gear_count,
+            field,
+            items.len(),
+            gear_count,
         );
         return None;
     }
@@ -322,7 +322,8 @@ fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
     log_debug!(
         "物品数据包匹配成功（field={}, {} 个物品）",
         "Item packet matched (field={}, {} items)",
-        field, items.len(),
+        field,
+        items.len(),
     );
     Some(items)
 }
@@ -332,18 +333,18 @@ fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
 /// Requires ≥4 avatars and ≥2 with non-empty `prop_map`
 /// (every real avatar has property entries like level/ascension).
 fn try_match_avatars(proto_data: &[u8]) -> Option<Vec<AvatarInfo>> {
-    let (field, avatars) = find_best_field::<AvatarInfo>(
-        proto_data,
-        MIN_AVATAR_ENTRIES,
-        |a| a.avatar_id != 0 && a.guid != 0,
-    )?;
+    let (field, avatars) = find_best_field::<AvatarInfo>(proto_data, MIN_AVATAR_ENTRIES, |a| {
+        a.avatar_id != 0 && a.guid != 0
+    })?;
 
     let has_props = avatars.iter().filter(|a| !a.prop_map.is_empty()).count();
     if has_props < MIN_AVATARS_WITH_PROPS {
         log_debug!(
             "角色数据包候选被拒（field={}, {} 个角色，仅 {} 个有属性）",
             "Avatar packet candidate rejected (field={}, {} avatars, only {} with props)",
-            field, avatars.len(), has_props,
+            field,
+            avatars.len(),
+            has_props,
         );
         return None;
     }
@@ -351,7 +352,8 @@ fn try_match_avatars(proto_data: &[u8]) -> Option<Vec<AvatarInfo>> {
     log_debug!(
         "角色数据包匹配成功（field={}, {} 个角色）",
         "Avatar packet matched (field={}, {} avatars)",
-        field, avatars.len(),
+        field,
+        avatars.len(),
     );
     Some(avatars)
 }
@@ -360,8 +362,8 @@ async fn capture_task(
     cancel_token: CancellationToken,
     packet_tx: mpsc::UnboundedSender<Vec<u8>>,
 ) -> Result<()> {
-    let mut capture =
-        PacketCapture::new().map_err(|e| anyhow!("创建抓包失败 / Error creating packet capture: {e}"))?;
+    let mut capture = PacketCapture::new()
+        .map_err(|e| anyhow!("创建抓包失败 / Error creating packet capture: {e}"))?;
     log_info!("开始抓包", "Starting packet capture");
     loop {
         let packet = tokio::select!(
@@ -373,7 +375,7 @@ async fn capture_task(
             Err(e) => {
                 log_error!("接收数据包出错: {}", "Error receiving packet: {}", e);
                 continue;
-            }
+            },
         };
         if let Err(e) = packet_tx.send(packet) {
             log_error!("发送数据包出错: {}", "Error sending captured packet: {}", e);
@@ -414,16 +416,17 @@ fn load_keys() -> Result<HashMap<u16, Vec<u8>>> {
                 log_info!(
                     "已加载外部密钥文件（{} 个密钥，{} 个新增）",
                     "Loaded external key file ({} keys, {} new)",
-                    external.len(), added,
+                    external.len(),
+                    added,
                 );
-            }
+            },
             Err(e) => log_warn!(
                 "外部密钥文件格式错误: {}",
                 "External key file parse error: {}",
                 e
             ),
         },
-        Err(_) => {} // No external file — use embedded only
+        Err(_) => {}, // No external file — use embedded only
     }
 
     Ok(all_keys)
@@ -443,16 +446,29 @@ mod tests {
     fn match_items_on_real_packet() {
         let items = try_match_items(ITEMS_BIN).expect("should match item packet");
         // Real account has thousands of items, hundreds of weapons/artifacts
-        assert!(items.len() > 1000, "expected >1000 items, got {}", items.len());
-        let weapons = items.iter().filter(|i| i.has_equip() && i.equip().has_weapon()).count();
-        let artifacts = items.iter().filter(|i| i.has_equip() && i.equip().has_reliquary()).count();
+        assert!(
+            items.len() > 1000,
+            "expected >1000 items, got {}",
+            items.len()
+        );
+        let weapons = items
+            .iter()
+            .filter(|i| i.has_equip() && i.equip().has_weapon())
+            .count();
+        let artifacts = items
+            .iter()
+            .filter(|i| i.has_equip() && i.equip().has_reliquary())
+            .count();
         assert!(weapons > 50, "expected >50 weapons, got {}", weapons);
         assert!(artifacts > 50, "expected >50 artifacts, got {}", artifacts);
     }
 
     #[test]
     fn match_items_rejects_avatar_packet() {
-        assert!(try_match_items(AVATARS_BIN).is_none(), "avatar packet should not match as items");
+        assert!(
+            try_match_items(AVATARS_BIN).is_none(),
+            "avatar packet should not match as items"
+        );
     }
 
     #[test]
@@ -470,15 +486,29 @@ mod tests {
     #[test]
     fn match_avatars_on_real_packet() {
         let avatars = try_match_avatars(AVATARS_BIN).expect("should match avatar packet");
-        assert!(avatars.len() > 20, "expected >20 avatars, got {}", avatars.len());
+        assert!(
+            avatars.len() > 20,
+            "expected >20 avatars, got {}",
+            avatars.len()
+        );
         // All real avatars should have prop_map with level
-        let with_level = avatars.iter().filter(|a| a.prop_map.contains_key(&4001)).count();
-        assert!(with_level > 10, "expected >10 avatars with level prop, got {}", with_level);
+        let with_level = avatars
+            .iter()
+            .filter(|a| a.prop_map.contains_key(&4001))
+            .count();
+        assert!(
+            with_level > 10,
+            "expected >10 avatars with level prop, got {}",
+            with_level
+        );
     }
 
     #[test]
     fn match_avatars_rejects_item_packet() {
-        assert!(try_match_avatars(ITEMS_BIN).is_none(), "item packet should not match as avatars");
+        assert!(
+            try_match_avatars(ITEMS_BIN).is_none(),
+            "item packet should not match as avatars"
+        );
     }
 
     #[test]
@@ -496,16 +526,16 @@ mod tests {
     #[test]
     fn find_best_field_returns_correct_field_number() {
         // Items are in field 3 for this game version
-        let (field, items) = find_best_field::<Item>(
-            ITEMS_BIN, 10, |i| i.item_id != 0 && i.guid != 0,
-        ).expect("should find items");
+        let (field, items) =
+            find_best_field::<Item>(ITEMS_BIN, 10, |i| i.item_id != 0 && i.guid != 0)
+                .expect("should find items");
         assert_eq!(field, 3, "items should be in field 3");
         assert!(items.len() > 1000);
 
         // Avatars are in field 10 for this game version
-        let (field, avatars) = find_best_field::<AvatarInfo>(
-            AVATARS_BIN, 4, |a| a.avatar_id != 0 && a.guid != 0,
-        ).expect("should find avatars");
+        let (field, avatars) =
+            find_best_field::<AvatarInfo>(AVATARS_BIN, 4, |a| a.avatar_id != 0 && a.guid != 0)
+                .expect("should find avatars");
         assert_eq!(field, 10, "avatars should be in field 10");
         assert!(avatars.len() > 20);
     }
@@ -522,15 +552,16 @@ mod tests {
     fn item_data_does_not_produce_valid_avatars() {
         // Even if we lower thresholds, item blobs shouldn't parse as AvatarInfo
         // with meaningful data
-        let result = find_best_field::<AvatarInfo>(
-            ITEMS_BIN, 4, |a| a.avatar_id != 0 && a.guid != 0,
-        );
+        let result =
+            find_best_field::<AvatarInfo>(ITEMS_BIN, 4, |a| a.avatar_id != 0 && a.guid != 0);
         // Either None, or if protobuf happens to parse garbage, the prop_map check
         // in try_match_avatars would reject it
         if let Some((_, avatars)) = result {
             let with_props = avatars.iter().filter(|a| !a.prop_map.is_empty()).count();
-            assert!(with_props < MIN_AVATARS_WITH_PROPS,
-                "item data shouldn't produce avatars with valid props");
+            assert!(
+                with_props < MIN_AVATARS_WITH_PROPS,
+                "item data shouldn't produce avatars with valid props"
+            );
         }
     }
 }

@@ -32,7 +32,9 @@ impl<R> WorkerHandle<R> {
     /// work item index that produced `items[i]`. This allows correlating
     /// output positions with debug image folder names.
     pub fn join(self) -> (Vec<R>, Vec<usize>) {
-        self.handle.join().expect("工作线程崩溃 / Worker thread panicked")
+        self.handle
+            .join()
+            .expect("工作线程崩溃 / Worker thread panicked")
     }
 
     /// Check if the worker has signaled that scanning should stop.
@@ -72,7 +74,8 @@ where
         let process_fn = Arc::new(process_fn);
 
         // Result channel: rayon tasks send (index, result) here
-        let (result_tx, result_rx) = crossbeam_channel::unbounded::<(usize, anyhow::Result<Option<R>>)>();
+        let (result_tx, result_rx) =
+            crossbeam_channel::unbounded::<(usize, anyhow::Result<Option<R>>)>();
 
         // Dispatch: receive items and spawn rayon tasks
         let dispatch_result_tx = result_tx.clone();
@@ -96,7 +99,9 @@ where
         let pb = ProgressBar::new(total as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+                )
                 .unwrap()
                 .progress_chars("#>-"),
         );
@@ -121,19 +126,28 @@ where
                         output.push(item);
                         index_map.push(current_index);
                         consecutive_errors = 0;
-                    }
+                    },
                     Ok(None) => {
                         // Skipped item
                         consecutive_errors = 0;
-                    }
+                    },
                     Err(e) => {
-                        log_error!("[worker] 第{}项错误: {}", "[worker] item {} error: {}", current_index, e);
+                        log_error!(
+                            "[worker] 第{}项错误: {}",
+                            "[worker] item {} error: {}",
+                            current_index,
+                            e
+                        );
                         consecutive_errors += 1;
                         if consecutive_errors >= 10 {
-                            log_error!("[worker] 连续{}个错误，发送停止信号", "[worker] {} consecutive errors, signaling stop", consecutive_errors);
+                            log_error!(
+                                "[worker] 连续{}个错误，发送停止信号",
+                                "[worker] {} consecutive errors, signaling stop",
+                                consecutive_errors
+                            );
                             should_stop_clone.store(true, Ordering::Relaxed);
                         }
-                    }
+                    },
                 }
             }
         }
@@ -155,5 +169,11 @@ where
         (output, index_map)
     });
 
-    (item_tx, WorkerHandle { handle, should_stop })
+    (
+        item_tx,
+        WorkerHandle {
+            handle,
+            should_stop,
+        },
+    )
 }

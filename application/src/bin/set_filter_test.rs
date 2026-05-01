@@ -10,7 +10,6 @@
 ///   cargo run --release --bin set_filter_test --features dev-tools -- --json path/to/export.json
 ///
 /// Default JSON: target/release/good_export_2026-04-01_06-20-21.json
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -54,12 +53,9 @@ macro_rules! check_cancel {
 }
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(
-        env_logger::Env::default()
-            .default_filter_or("info"),
-    )
-    .format_timestamp(None)
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .init();
 
     // Parse args
     let args: Vec<String> = std::env::args().collect();
@@ -139,7 +135,7 @@ fn main() -> Result<()> {
         game_info.window.height
     );
 
-    let mut ctrl = GenshinGameController::new(game_info)?;
+    let mut ctrl = GenshinGameController::new(game_info, Default::default())?;
     let mappings = MappingManager::new(&NameOverrides::default())?;
     let ocr = ocr_factory::create_ocr_model("ppocrv4")?;
 
@@ -213,7 +209,12 @@ fn main() -> Result<()> {
         // Find artifact in grid with debug collection
         let mut debug_cells = Vec::new();
         let found = ui_actions::find_artifact_in_grid_debug(
-            &mut ctrl, artifact, ocr.as_ref(), &mappings, false, &mut debug_cells,
+            &mut ctrl,
+            artifact,
+            ocr.as_ref(),
+            &mappings,
+            false,
+            &mut debug_cells,
         )?;
 
         if found {
@@ -232,43 +233,55 @@ fn main() -> Result<()> {
             // === FAILURE: save all debug images and OCR details, then exit ===
             error!(
                 "[FAIL] NOT FOUND after {} passes: set={} slot={} lv={} main={}",
-                passed,
-                artifact.set_key,
-                artifact.slot_key,
-                artifact.level,
-                artifact.main_stat_key
+                passed, artifact.set_key, artifact.slot_key, artifact.level, artifact.main_stat_key
             );
             for (j, sub) in artifact.substats.iter().enumerate() {
                 error!("  target sub[{}]: {} = {}", j, sub.key, sub.value);
             }
             for (j, sub) in artifact.unactivated_substats.iter().enumerate() {
-                error!("  target unsub[{}]: {} = {} (inactive)", j, sub.key, sub.value);
+                error!(
+                    "  target unsub[{}]: {} = {} (inactive)",
+                    j, sub.key, sub.value
+                );
             }
 
             // Save panel images and OCR details for every cell
             let mut report = String::new();
             use std::fmt::Write;
             let _ = writeln!(report, "=== FAILURE REPORT ===");
-            let _ = writeln!(report, "Target: set={} slot={} lv={} main={}",
-                artifact.set_key, artifact.slot_key, artifact.level, artifact.main_stat_key);
+            let _ = writeln!(
+                report,
+                "Target: set={} slot={} lv={} main={}",
+                artifact.set_key, artifact.slot_key, artifact.level, artifact.main_stat_key
+            );
             for sub in &artifact.substats {
                 let _ = writeln!(report, "  target sub: {} = {}", sub.key, sub.value);
             }
             for sub in &artifact.unactivated_substats {
-                let _ = writeln!(report, "  target unsub: {} = {} (inactive)", sub.key, sub.value);
+                let _ = writeln!(
+                    report,
+                    "  target unsub: {} = {} (inactive)",
+                    sub.key, sub.value
+                );
             }
             let _ = writeln!(report, "\n=== CELLS SCANNED ({}) ===", debug_cells.len());
 
             for cell in &debug_cells {
-                let _ = writeln!(report, "\n--- page={} row={} col={} ---", cell.page, cell.row, cell.col);
-                let _ = writeln!(report, "level: OCR='{}' parsed={} full_ocr={} match={:?}",
-                    cell.level_text, cell.level, cell.full_ocr, cell.match_result);
+                let _ = writeln!(
+                    report,
+                    "\n--- page={} row={} col={} ---",
+                    cell.page, cell.row, cell.col
+                );
+                let _ = writeln!(
+                    report,
+                    "level: OCR='{}' parsed={} full_ocr={} match={:?}",
+                    cell.level_text, cell.level, cell.full_ocr, cell.match_result
+                );
                 let _ = writeln!(report, "{}", cell.ocr_details);
 
                 // Save panel image
-                let img_path = grid_debug_dir.join(
-                    format!("p{}_r{}_c{}.png", cell.page, cell.row, cell.col)
-                );
+                let img_path =
+                    grid_debug_dir.join(format!("p{}_r{}_c{}.png", cell.page, cell.row, cell.col));
                 if let Err(e) = cell.panel_image.save(&img_path) {
                     error!("Failed to save {}: {}", img_path.display(), e);
                 }
@@ -282,14 +295,20 @@ fn main() -> Result<()> {
 
             // Final screenshot
             if let Ok(img) = ctrl.capture_game() {
-                save_image(&img, &grid_debug_dir.join("final_screen.png").to_string_lossy());
+                save_image(
+                    &img,
+                    &grid_debug_dir.join("final_screen.png").to_string_lossy(),
+                );
             }
 
             info!("Debug images saved to: {}", grid_debug_dir.display());
             info!("Report saved to: {}", report_path.display());
             bail!(
                 "Artifact not found: set={} slot={} lv={} ({} passed before failure)",
-                artifact.set_key, artifact.slot_key, artifact.level, passed
+                artifact.set_key,
+                artifact.slot_key,
+                artifact.level,
+                passed
             );
         }
     }
@@ -328,8 +347,8 @@ fn clean_debug_dir(dir: &Path) {
 // ================================================================
 
 use genshin_scanner::manager::ui_actions::{
-    FILTER_FUNNEL_X, FILTER_FUNNEL_Y, FILTER_CLEAR_X, FILTER_CLEAR_Y,
-    FILTER_CLOSE_X, FILTER_CLOSE_Y,
+    FILTER_CLEAR_X, FILTER_CLEAR_Y, FILTER_CLOSE_X, FILTER_CLOSE_Y, FILTER_FUNNEL_X,
+    FILTER_FUNNEL_Y,
 };
 
 fn run_filter_test(only_sets: Option<&[String]>) -> Result<()> {
@@ -337,7 +356,7 @@ fn run_filter_test(only_sets: Option<&[String]>) -> Result<()> {
         .add_local_window_name("\u{539F}\u{795E}")
         .add_local_window_name("Genshin Impact")
         .build()?;
-    let mut ctrl = GenshinGameController::new(game_info)?;
+    let mut ctrl = GenshinGameController::new(game_info, Default::default())?;
     let mappings = MappingManager::new(&NameOverrides::default())?;
     let ocr = ocr_factory::create_ocr_model("ppocrv4")?;
 
@@ -354,17 +373,25 @@ fn run_filter_test(only_sets: Option<&[String]>) -> Result<()> {
     let test_keys: Vec<String> = match only_sets {
         Some(subset) => {
             // Filter to only requested sets
-            all_set_keys.iter()
+            all_set_keys
+                .iter()
                 .filter(|k| subset.iter().any(|s| s == *k))
                 .cloned()
                 .collect()
-        }
+        },
         None => all_set_keys.clone(),
     };
 
     let use_debug = only_sets.is_some();
-    info!("Testing detection of {} artifact sets{}", test_keys.len(),
-        if use_debug { " (with debug images)" } else { "" });
+    info!(
+        "Testing detection of {} artifact sets{}",
+        test_keys.len(),
+        if use_debug {
+            " (with debug images)"
+        } else {
+            ""
+        }
+    );
 
     // Navigate to selection view
     info!("=== Navigating to artifact selection view ===");
@@ -408,23 +435,28 @@ fn run_filter_test(only_sets: Option<&[String]>) -> Result<()> {
             // Use debug variant that saves annotated screenshots on failure
             let prefix = format!("debug_images/set_filter_test/{}", set_key);
             ui_actions::find_set_in_filter_panel_debug(
-                &mut ctrl, ocr.as_ref(), set_key, &mappings, &prefix,
+                &mut ctrl,
+                ocr.as_ref(),
+                set_key,
+                &mappings,
+                &prefix,
             )?
         } else {
-            ui_actions::find_set_in_filter_panel(
-                &mut ctrl, ocr.as_ref(), set_key, &mappings,
-            )?
+            ui_actions::find_set_in_filter_panel(&mut ctrl, ocr.as_ref(), set_key, &mappings)?
         };
 
         match found {
             Some(_) => {
                 info!("[PASS] {} ({})", set_key, cn_name);
                 passed += 1;
-            }
+            },
             None => {
-                error!("[FAIL] {} ({}) \u{2014} not found in filter list", set_key, cn_name);
+                error!(
+                    "[FAIL] {} ({}) \u{2014} not found in filter list",
+                    set_key, cn_name
+                );
                 failed_sets.push(format!("{} ({})", set_key, cn_name));
-            }
+            },
         }
     }
 
@@ -462,7 +494,7 @@ fn run_dump_grid(set_key: Option<&str>) -> Result<()> {
         .add_local_window_name("\u{539F}\u{795E}")
         .add_local_window_name("Genshin Impact")
         .build()?;
-    let mut ctrl = GenshinGameController::new(game_info)?;
+    let mut ctrl = GenshinGameController::new(game_info, Default::default())?;
     let mappings = MappingManager::new(&NameOverrides::default())?;
     let ocr = ocr_factory::create_ocr_model("ppocrv4")?;
 
@@ -526,12 +558,22 @@ fn run_dump_grid(set_key: Option<&str>) -> Result<()> {
                     let path = out_dir.join(format!("{}_r{}_c{}.png", slot, row, col));
                     save_image(&img, &path.to_string_lossy());
                     count += 1;
-                    info!("Saved {} ({} row={} col={})", path.display(), slot, row, col);
+                    info!(
+                        "Saved {} ({} row={} col={})",
+                        path.display(),
+                        slot,
+                        row,
+                        col
+                    );
                 }
             }
         }
     }
 
-    info!("Saved {} full screen captures to {}", count, out_dir.display());
+    info!(
+        "Saved {} full screen captures to {}",
+        count,
+        out_dir.display()
+    );
     Ok(())
 }

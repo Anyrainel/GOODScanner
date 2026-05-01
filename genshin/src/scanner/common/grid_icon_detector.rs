@@ -22,7 +22,6 @@
 /// Detection is performed 3 times per page at evenly spaced moments, with majority
 /// vote for denoising (the currently-selected item has an animated border that can
 /// slightly shift its icon position).
-
 use image::RgbImage;
 use yas::log_debug;
 
@@ -36,12 +35,12 @@ use super::coord_scaler::CoordScaler;
 /// GX_LOCK=131.15, GY_LOCK=193.4 at 1080p (half of 4K: 262.3, 386.8)
 /// LOCK_DX=-48.65, LOCK_DY=-59.25 at 1080p (half of 4K: -97.3, -118.5)
 /// Cell center = lock_pos - lock_offset
-const GRID_CX: f64 = 179.8;  // 131.15 - (-48.65)
+const GRID_CX: f64 = 179.8; // 131.15 - (-48.65)
 const GRID_CY: f64 = 252.65; // 193.4 - (-59.25)
 
 /// Cell spacing (1080p base)
-const GRID_OX: f64 = 146.4;  // 292.8 / 2
-const GRID_OY: f64 = 175.2;  // 350.4 / 2
+const GRID_OX: f64 = 146.4; // 292.8 / 2
+const GRID_OY: f64 = 175.2; // 350.4 / 2
 
 /// Lock icon offset from cell center (1080p base)
 const LOCK_DX: f64 = -48.65; // -97.3 / 2
@@ -63,8 +62,8 @@ pub const ITEMS_PER_PAGE: usize = 40;
 // ================================================================
 
 /// Card dimensions (1080p base)
-const CARD_W: f64 = 123.5;  // 247 / 2
-const CARD_H: f64 = 153.0;  // 306 / 2
+const CARD_W: f64 = 123.5; // 247 / 2
+const CARD_H: f64 = 153.0; // 306 / 2
 
 /// Width of the bright band above each row gap used for Y edge detection.
 /// Narrow bands produce sharper Y peaks. 10px at 1080p = 20px at 4K.
@@ -159,12 +158,7 @@ impl GridPageDetection {
     /// `selected_item` is the absolute index of the currently selected item
     /// (which has an animated border — its detection is less reliable, but we
     /// still include it since the crop area is tolerant enough).
-    pub fn detect_pass(
-        &mut self,
-        image: &RgbImage,
-        scaler: &CoordScaler,
-        _selected_item: usize,
-    ) {
+    pub fn detect_pass(&mut self, image: &RgbImage, scaler: &CoordScaler, _selected_item: usize) {
         // Calibrate on first pass, reuse for subsequent passes
         let (off_x, off_y) = match self.cached_offset {
             Some(offset) => offset,
@@ -172,19 +166,32 @@ impl GridPageDetection {
                 let offset = calibrate_grid(image, scaler, self.mode);
                 self.cached_offset = Some(offset);
                 offset
-            }
+            },
         };
 
-        let (results, cells) = detect_page_icons(image, scaler, self.page_items, off_x, off_y, self.mode);
+        let (results, cells) =
+            detect_page_icons(image, scaler, self.page_items, off_x, off_y, self.mode);
         // Cache cell geometry from first pass (positions don't change between passes)
         if self.cached_cells.is_empty() {
             self.cached_cells = cells;
         }
         for (i, result) in results.iter().enumerate() {
             let v = &mut self.votes[i];
-            if result.lock { v.0 += 1; } else { v.1 += 1; }
-            if result.astral { v.2 += 1; } else { v.3 += 1; }
-            if result.elixir { v.4 += 1; } else { v.5 += 1; }
+            if result.lock {
+                v.0 += 1;
+            } else {
+                v.1 += 1;
+            }
+            if result.astral {
+                v.2 += 1;
+            } else {
+                v.3 += 1;
+            }
+            if result.elixir {
+                v.4 += 1;
+            } else {
+                v.5 += 1;
+            }
         }
     }
 
@@ -206,7 +213,9 @@ impl GridPageDetection {
     /// Build annotation data for all cells on this page: bounding boxes + detection results.
     /// Cell geometry comes from the actual detection pass — same coordinates used for real logic.
     /// Returns `None` if no detection pass has run.
-    pub fn annotation_snapshot(&self) -> Option<(Vec<GridCellAnnotation>, Vec<(usize, bool, bool)>)> {
+    pub fn annotation_snapshot(
+        &self,
+    ) -> Option<(Vec<GridCellAnnotation>, Vec<(usize, bool, bool)>)> {
         if self.cached_cells.is_empty() {
             return None;
         }
@@ -221,7 +230,9 @@ impl GridPageDetection {
 
     /// Number of detection passes accumulated so far.
     pub fn pass_count(&self) -> u32 {
-        if self.page_items == 0 { return 0; }
+        if self.page_items == 0 {
+            return 0;
+        }
         let v = &self.votes[0];
         v.0 + v.1 // lock_yes + lock_no = total passes
     }
@@ -258,10 +269,9 @@ impl LightnessSat {
                 let g = p[1] as f64 / 255.0;
                 let b = p[2] as f64 / 255.0;
                 let l = (r.max(g).max(b) + r.min(g).min(b)) / 2.0;
-                data[(y + 1) * stride + (x + 1)] = l
-                    + data[y * stride + (x + 1)]
-                    + data[(y + 1) * stride + x]
-                    - data[y * stride + x];
+                data[(y + 1) * stride + (x + 1)] =
+                    l + data[y * stride + (x + 1)] + data[(y + 1) * stride + x]
+                        - data[y * stride + x];
             }
         }
 
@@ -280,8 +290,8 @@ impl LightnessSat {
             return 0.0;
         }
         let s = self.w + 1;
-        self.data[y2 * s + x2] - self.data[y1 * s + x2]
-            - self.data[y2 * s + x1] + self.data[y1 * s + x1]
+        self.data[y2 * s + x2] - self.data[y1 * s + x2] - self.data[y2 * s + x1]
+            + self.data[y1 * s + x1]
     }
 }
 
@@ -304,11 +314,7 @@ impl LightnessSat {
 /// Returns `(0.0, off_y)` in 1080p base coordinates. For artifacts: off_y ≈ 0
 /// at top of inventory; scroll causes ±12 px gy variation. For weapons: the
 /// expected center is shifted by `WEAPON_CY_OFFSET`.
-pub fn calibrate_grid(
-    image: &RgbImage,
-    scaler: &CoordScaler,
-    mode: GridMode,
-) -> (f64, f64) {
+pub fn calibrate_grid(image: &RgbImage, scaler: &CoordScaler, mode: GridMode) -> (f64, f64) {
     let sat = LightnessSat::new(image);
 
     // Scale all constants to actual resolution
@@ -459,18 +465,30 @@ fn detect_page_icons(
                 }
 
                 if has_astral && !has_lock {
-                    log_debug!("[grid-icon] idx={} 星标但无锁，强制锁定", "[grid-icon] idx={} astral but no lock, forcing lock", i);
+                    log_debug!(
+                        "[grid-icon] idx={} 星标但无锁，强制锁定",
+                        "[grid-icon] idx={} astral but no lock, forcing lock",
+                        i
+                    );
                 }
 
-                results.push(GridIconResult { lock: has_lock, astral: has_astral, elixir: has_elixir });
-            }
+                results.push(GridIconResult {
+                    lock: has_lock,
+                    astral: has_astral,
+                    elixir: has_elixir,
+                });
+            },
             GridMode::Weapon => {
                 // Weapon: slot 1 = refinement badge (ignored), slot 2 = lock. No astral/elixir.
                 let slot2_color = sample_mean_color(image, scaler, slot_x, slot2_y);
                 let has_lock = is_lock_color(&slot2_color);
 
-                results.push(GridIconResult { lock: has_lock, astral: false, elixir: false });
-            }
+                results.push(GridIconResult {
+                    lock: has_lock,
+                    astral: false,
+                    elixir: false,
+                });
+            },
         }
     }
 
@@ -516,7 +534,11 @@ fn sample_mean_color(
         return (0.0, 0.0, 0.0);
     }
 
-    (sum_r / count as f64, sum_g / count as f64, sum_b / count as f64)
+    (
+        sum_r / count as f64,
+        sum_g / count as f64,
+        sum_b / count as f64,
+    )
 }
 
 /// Per-cell annotation data for grid overlay drawing.
@@ -529,7 +551,6 @@ pub struct GridCellAnnotation {
     /// Astral icon position (base coords, artifacts only).
     pub astral_pos: (f64, f64),
 }
-
 
 fn is_lock_color(color: &(f64, f64, f64)) -> bool {
     let (r, g, _b) = *color;

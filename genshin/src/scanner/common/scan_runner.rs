@@ -154,7 +154,11 @@ pub fn run_scan_phases(
         artifacts = phase_result(scan_result, &cancel_token, options, "artifact")?;
     }
 
-    Ok(ScanRunResult { characters, weapons, artifacts })
+    Ok(ScanRunResult {
+        characters,
+        weapons,
+        artifacts,
+    })
 }
 
 fn phase_result<T>(
@@ -166,18 +170,23 @@ fn phase_result<T>(
     match result {
         Ok(data) if options.accept_cancelled_success || !cancel_token.is_cancelled() => {
             Ok(ScanPhaseResult::Complete(data))
-        }
+        },
         Ok(_) => Ok(ScanPhaseResult::Incomplete),
         Err(e) if options.save_on_cancel && cancel_token.is_cancelled() => {
             log_info!("阶段被用户中断: {}", "Phase aborted by user: {}", e);
             Ok(ScanPhaseResult::Complete(Vec::new()))
-        }
+        },
         Err(e) => {
-            log_warn!("[scan] {}阶段失败: {:#}", "[scan] {} phase failed: {:#}", phase_name, e);
+            log_warn!(
+                "[scan] {}阶段失败: {:#}",
+                "[scan] {} phase failed: {:#}",
+                phase_name,
+                e
+            );
             match options.failure_policy {
                 ScanFailurePolicy::StopOnError => Err(e),
                 ScanFailurePolicy::ContinueOnError => Ok(ScanPhaseResult::Incomplete),
             }
-        }
+        },
     }
 }

@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use crate::game_info::{Platform, UI};
 use crate::positioning::Size;
-use crate::window_info::WindowInfoType;
 use crate::window_info::WindowInfoRepository;
+use crate::window_info::WindowInfoType;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Which is a format, where the whole file are recorded under a certain resolution
 #[derive(Serialize, Deserialize)]
@@ -11,13 +11,19 @@ pub struct WindowInfoTemplatePerSize {
     pub current_resolution: Size<usize>,
     pub platform: Platform,
     pub ui: UI,
-    pub data: HashMap<String, WindowInfoType>
+    pub data: HashMap<String, WindowInfoType>,
 }
 
 impl WindowInfoTemplatePerSize {
     pub fn inject_into_window_info_repo(&self, repo: &mut WindowInfoRepository) {
         for (name, value) in self.data.iter() {
-            repo.add(name, self.current_resolution, self.ui, self.platform, *value);
+            repo.add(
+                name,
+                self.current_resolution,
+                self.ui,
+                self.platform,
+                *value,
+            );
         }
     }
 }
@@ -38,4 +44,3 @@ macro_rules! load_window_info_repo {
         }
     };
 }
-

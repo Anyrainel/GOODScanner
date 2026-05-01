@@ -6,14 +6,14 @@ pub const ELIXIR_SHIFT: f64 = 40.0;
 pub const WEAPON_STOP_NAMES: &[&str] = &[
     "\u{5386}\u{7EC3}\u{7684}\u{730E}\u{5F13}", // 历练的猎弓
     "\u{53E3}\u{888B}\u{9B54}\u{5BFC}\u{4E66}", // 口袋魔导书
-    "\u{94C1}\u{5C16}\u{67AA}",                   // 铁尖枪
-    "\u{4F63}\u{5175}\u{91CD}\u{5251}",           // 佣兵重剑
-    "\u{94F6}\u{5251}",                             // 银剑
-    "\u{730E}\u{5F13}",                             // 猎弓
-    "\u{5B66}\u{5F92}\u{7B14}\u{8BB0}",           // 学徒笔记
-    "\u{65B0}\u{624B}\u{957F}\u{67AA}",           // 新手长枪
-    "\u{8BAD}\u{7EC3}\u{5927}\u{5251}",           // 训练大剑
-    "\u{65E0}\u{950B}\u{5251}",                     // 无锋剑
+    "\u{94C1}\u{5C16}\u{67AA}",                 // 铁尖枪
+    "\u{4F63}\u{5175}\u{91CD}\u{5251}",         // 佣兵重剑
+    "\u{94F6}\u{5251}",                         // 银剑
+    "\u{730E}\u{5F13}",                         // 猎弓
+    "\u{5B66}\u{5F92}\u{7B14}\u{8BB0}",         // 学徒笔记
+    "\u{65B0}\u{624B}\u{957F}\u{67AA}",         // 新手长枪
+    "\u{8BAD}\u{7EC3}\u{5927}\u{5251}",         // 训练大剑
+    "\u{65E0}\u{950B}\u{5251}",                 // 无锋剑
 ];
 
 /// Characters that have no constellations or special constellation handling (skip scanning).
@@ -43,7 +43,6 @@ pub const DEFAULT_ARTIFACT_INITIAL_WAIT: u64 = 20;
 pub const DEFAULT_ARTIFACT_PANEL_TIMEOUT: u64 = 200;
 /// Artifact: extra delay (ms) after panel load detection, before capture.
 pub const DEFAULT_ARTIFACT_EXTRA_DELAY: u64 = 0;
-
 
 // ================================================================
 // Character scanner coordinates (at 1920x1080 base resolution)
@@ -80,12 +79,12 @@ pub const CHAR_CONSTELLATION_ACTIVATE_RECT: (f64, f64, f64, f64) = (218.0, 1002.
 // Accuracy: 100% on 109 test characters (min gap=+55.4, d'=7.14).
 /// Per-node icon centers on the S-curve (base 1920x1080 coords)
 pub const CONSTELLATION_NODES: [(f64, f64); 6] = [
-    (1524.0, 277.0),  // C1
-    (1578.0, 387.0),  // C2
-    (1614.0, 500.0),  // C3
-    (1614.0, 611.0),  // C4
-    (1578.0, 722.0),  // C5
-    (1507.0, 832.0),  // C6
+    (1524.0, 277.0), // C1
+    (1578.0, 387.0), // C2
+    (1614.0, 500.0), // C3
+    (1614.0, 611.0), // C4
+    (1578.0, 722.0), // C5
+    (1507.0, 832.0), // C6
 ];
 /// Ring inner radius (skip icon center)
 pub const CONSTELLATION_RING_INNER: i32 = 30;

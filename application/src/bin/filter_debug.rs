@@ -9,7 +9,6 @@
 /// 4. Click 替换 button
 /// 5. Click filter funnel
 /// 6. Capture and save OCR region crops + binarized versions
-
 use std::path::Path;
 
 use anyhow::Result;
@@ -57,11 +56,15 @@ fn main() -> Result<()> {
         .add_local_window_name("Genshin Impact")
         .build()?;
 
-    info!("Window: left={}, top={}, w={}, h={}",
-        game_info.window.left, game_info.window.top,
-        game_info.window.width, game_info.window.height);
+    info!(
+        "Window: left={}, top={}, w={}, h={}",
+        game_info.window.left,
+        game_info.window.top,
+        game_info.window.width,
+        game_info.window.height
+    );
 
-    let mut ctrl = GenshinGameController::new(game_info)?;
+    let mut ctrl = GenshinGameController::new(game_info, Default::default())?;
 
     // Step 1: Return to main UI
     info!("Step 1: Returning to main UI...");
@@ -76,7 +79,10 @@ fn main() -> Result<()> {
 
     // Verify: take screenshot
     let img = ctrl.capture_game()?;
-    save_image(&img, &out_dir.join("fd_step2_char_screen.png").to_string_lossy());
+    save_image(
+        &img,
+        &out_dir.join("fd_step2_char_screen.png").to_string_lossy(),
+    );
 
     // Step 3: Click 圣遗物 menu (160, 293)
     info!("Step 3: Clicking 圣遗物 menu at (160, 293)...");
@@ -84,7 +90,10 @@ fn main() -> Result<()> {
     utils::sleep(1500);
 
     let img = ctrl.capture_game()?;
-    save_image(&img, &out_dir.join("fd_step3_artifact_menu.png").to_string_lossy());
+    save_image(
+        &img,
+        &out_dir.join("fd_step3_artifact_menu.png").to_string_lossy(),
+    );
 
     // Step 4: Click 替换 button (1720, 1010)
     info!("Step 4: Clicking 替换 at (1720, 1010)...");
@@ -92,7 +101,10 @@ fn main() -> Result<()> {
     utils::sleep(2500);
 
     let img = ctrl.capture_game()?;
-    save_image(&img, &out_dir.join("fd_step4_replace.png").to_string_lossy());
+    save_image(
+        &img,
+        &out_dir.join("fd_step4_replace.png").to_string_lossy(),
+    );
 
     // Step 5: Click filter funnel (110, 1005)
     info!("Step 5: Clicking filter funnel at (110, 1005)...");
@@ -101,7 +113,10 @@ fn main() -> Result<()> {
 
     // Step 6: Full screenshot of filter panel
     let img = ctrl.capture_game()?;
-    save_image(&img, &out_dir.join("fd_step5_filter_panel.png").to_string_lossy());
+    save_image(
+        &img,
+        &out_dir.join("fd_step5_filter_panel.png").to_string_lossy(),
+    );
 
     // Step 7: Capture OCR regions for first 3 rows
     info!("Step 6: Capturing OCR regions...");
@@ -114,7 +129,10 @@ fn main() -> Result<()> {
             let crop = ctrl.capture_region(x_start, text_y, 280.0, 35.0)?;
             let base = format!("fd_row{}_{}", row, col_name);
 
-            save_image(&crop, &out_dir.join(format!("{}.png", base)).to_string_lossy());
+            save_image(
+                &crop,
+                &out_dir.join(format!("{}.png", base)).to_string_lossy(),
+            );
 
             // Analyze pixel colors
             let mut total_r: u64 = 0;
@@ -139,27 +157,43 @@ fn main() -> Result<()> {
                 }
             }
 
-            info!("Row {} {}: region ({}, {}, 280, 35)", row, col_name, x_start, text_y);
-            info!("  Mean RGB: ({:.1}, {:.1}, {:.1})",
+            info!(
+                "Row {} {}: region ({}, {}, 280, 35)",
+                row, col_name, x_start, text_y
+            );
+            info!(
+                "  Mean RGB: ({:.1}, {:.1}, {:.1})",
                 total_r as f64 / pixel_count as f64,
                 total_g as f64 / pixel_count as f64,
-                total_b as f64 / pixel_count as f64);
+                total_b as f64 / pixel_count as f64
+            );
 
             if text_count > 0 {
-                info!("  Text pixels (brightness>100): {} / {} ({:.1}%)",
-                    text_count, pixel_count, 100.0 * text_count as f64 / pixel_count as f64);
-                info!("  Text mean RGB: ({:.1}, {:.1}, {:.1})",
+                info!(
+                    "  Text pixels (brightness>100): {} / {} ({:.1}%)",
+                    text_count,
+                    pixel_count,
+                    100.0 * text_count as f64 / pixel_count as f64
+                );
+                info!(
+                    "  Text mean RGB: ({:.1}, {:.1}, {:.1})",
                     text_r as f64 / text_count as f64,
                     text_g as f64 / text_count as f64,
-                    text_b as f64 / text_count as f64);
+                    text_b as f64 / text_count as f64
+                );
 
                 // Count pixels above each threshold
                 for threshold in [130u32, 140, 150, 160] {
-                    let above: u32 = crop.pixels()
+                    let above: u32 = crop
+                        .pixels()
                         .filter(|p| (p[0] as u32 + p[1] as u32 + p[2] as u32) / 3 > threshold)
                         .count() as u32;
-                    info!("  Pixels > {}: {} ({:.1}%)", threshold, above,
-                        100.0 * above as f64 / pixel_count as f64);
+                    info!(
+                        "  Pixels > {}: {} ({:.1}%)",
+                        threshold,
+                        above,
+                        100.0 * above as f64 / pixel_count as f64
+                    );
                 }
             } else {
                 info!("  No text pixels found (all brightness <= 100)");
@@ -168,7 +202,12 @@ fn main() -> Result<()> {
             // Save binarized versions at different thresholds
             for threshold in [120u32, 130, 140, 150, 160] {
                 let bin = binarize(&crop, threshold);
-                save_image(&bin, &out_dir.join(format!("{}_bin{}.png", base, threshold)).to_string_lossy());
+                save_image(
+                    &bin,
+                    &out_dir
+                        .join(format!("{}_bin{}.png", base, threshold))
+                        .to_string_lossy(),
+                );
             }
         }
     }

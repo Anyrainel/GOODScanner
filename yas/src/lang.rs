@@ -30,7 +30,11 @@ pub fn set_lang(lang: &str) {
 
 /// Returns `"zh"` or `"en"`.
 pub fn get_lang() -> &'static str {
-    if LANG.load(Ordering::Relaxed) == 1 { "en" } else { "zh" }
+    if LANG.load(Ordering::Relaxed) == 1 {
+        "en"
+    } else {
+        "zh"
+    }
 }
 
 /// Returns true if the current language is English.

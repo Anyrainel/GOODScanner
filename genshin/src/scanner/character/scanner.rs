@@ -4,16 +4,16 @@ use std::time::SystemTime;
 use anyhow::{bail, Result};
 use image::{GenericImageView, RgbImage};
 use indicatif::{ProgressBar, ProgressStyle};
-use yas::{log_debug, log_error, log_info, log_warn};
 use regex::Regex;
+use yas::{log_debug, log_error, log_info, log_warn};
 
 use yas::ocr::ImageToText;
 use yas::utils;
 
 use super::GoodCharacterScannerConfig;
+use crate::scanner::common::annotator;
 use crate::scanner::common::constants::*;
 use crate::scanner::common::coord_scaler::CoordScaler;
-use crate::scanner::common::annotator;
 use crate::scanner::common::debug_dump::level_cap_display;
 use crate::scanner::common::fuzzy_match::fuzzy_match_map_pair;
 use crate::scanner::common::game_controller::GenshinGameController;
@@ -101,10 +101,7 @@ pub struct GoodCharacterScanner {
 }
 
 impl GoodCharacterScanner {
-    pub fn new(
-        config: GoodCharacterScannerConfig,
-        mappings: Arc<MappingManager>,
-    ) -> Result<Self> {
+    pub fn new(config: GoodCharacterScannerConfig, mappings: Arc<MappingManager>) -> Result<Self> {
         Ok(Self { config, mappings })
     }
 }
@@ -145,13 +142,13 @@ impl GoodCharacterScanner {
     /// Map Chinese element name to English GOOD element key.
     fn zh_element_to_good(zh: &str) -> Option<String> {
         match zh.trim() {
-            "\u{706B}" => Some("Pyro".into()),       // 火
-            "\u{6C34}" => Some("Hydro".into()),      // 水
-            "\u{96F7}" => Some("Electro".into()),    // 雷
-            "\u{51B0}" => Some("Cryo".into()),       // 冰
-            "\u{98CE}" => Some("Anemo".into()),      // 风
-            "\u{5CA9}" => Some("Geo".into()),        // 岩
-            "\u{8349}" => Some("Dendro".into()),     // 草
+            "\u{706B}" => Some("Pyro".into()),    // 火
+            "\u{6C34}" => Some("Hydro".into()),   // 水
+            "\u{96F7}" => Some("Electro".into()), // 雷
+            "\u{51B0}" => Some("Cryo".into()),    // 冰
+            "\u{98CE}" => Some("Anemo".into()),   // 风
+            "\u{5CA9}" => Some("Geo".into()),     // 岩
+            "\u{8349}" => Some("Dendro".into()),  // 草
             _ => None,
         }
     }
@@ -159,12 +156,21 @@ impl GoodCharacterScanner {
     /// Parse character name and element from OCR text.
     /// Text format: "Element/CharacterName" (e.g., "冰/神里绫华")
     /// Returns (good_key, element, entity_name).
-    fn parse_name_and_element(&self, text: &str) -> (Option<String>, Option<String>, Option<String>) {
+    fn parse_name_and_element(
+        &self,
+        text: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
         if text.is_empty() {
             return (None, None, None);
         }
 
-        let slash_char = if text.contains('/') { Some('/') } else if text.contains('\u{FF0F}') { Some('\u{FF0F}') } else { None };
+        let slash_char = if text.contains('/') {
+            Some('/')
+        } else if text.contains('\u{FF0F}') {
+            Some('\u{FF0F}')
+        } else {
+            None
+        };
         if let Some(slash) = slash_char {
             let idx = text.find(slash).unwrap();
             let element = text[..idx].trim().to_string();
@@ -206,7 +212,11 @@ impl GoodCharacterScanner {
             .copied()
             .min_by_key(|&v| (v - max_level).unsigned_abs())
             .unwrap_or(max_level);
-        let level = if max_level >= 95 { max_level } else { level.min(max_level) };
+        let level = if max_level >= 95 {
+            max_level
+        } else {
+            level.min(max_level)
+        };
         let ascended = level >= 20 && level < max_level;
         (level, ascended)
     }
@@ -239,11 +249,19 @@ impl GoodCharacterScanner {
     /// Derive the effective max level (cap) from a level reading.
     fn derive_max_level(level: i32, ascended: bool) -> i32 {
         if ascended {
-            Self::VALID_MAX_LEVELS.iter().copied().find(|&v| v > level).unwrap_or(100)
+            Self::VALID_MAX_LEVELS
+                .iter()
+                .copied()
+                .find(|&v| v > level)
+                .unwrap_or(100)
         } else if Self::VALID_MAX_LEVELS.contains(&level) {
             level
         } else {
-            Self::VALID_MAX_LEVELS.iter().copied().find(|&v| v > level).unwrap_or(100)
+            Self::VALID_MAX_LEVELS
+                .iter()
+                .copied()
+                .find(|&v| v > level)
+                .unwrap_or(100)
         }
     }
 
@@ -273,8 +291,11 @@ impl GoodCharacterScanner {
             let chars: Vec<char> = text.chars().collect();
             let mut result = String::with_capacity(text.len());
             for (i, &c) in chars.iter().enumerate() {
-                if c == ' ' && i > 0 && i + 1 < chars.len()
-                    && chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit()
+                if c == ' '
+                    && i > 0
+                    && i + 1 < chars.len()
+                    && chars[i - 1].is_ascii_digit()
+                    && chars[i + 1].is_ascii_digit()
                 {
                     continue;
                 }
@@ -335,7 +356,7 @@ impl GoodCharacterScanner {
                         "A" => sub3(&mut auto, &mut suspicious),
                         "E" => sub3(&mut skill, &mut suspicious),
                         "Q" => sub3(&mut burst, &mut suspicious),
-                        _ => {}
+                        _ => {},
                     }
                 }
             }
@@ -345,7 +366,7 @@ impl GoodCharacterScanner {
                         "A" => sub3(&mut auto, &mut suspicious),
                         "E" => sub3(&mut skill, &mut suspicious),
                         "Q" => sub3(&mut burst, &mut suspicious),
-                        _ => {}
+                        _ => {},
                     }
                 }
             }
@@ -354,8 +375,12 @@ impl GoodCharacterScanner {
                 sub3(&mut skill, &mut suspicious);
                 sub3(&mut burst, &mut suspicious);
             } else {
-                if skill > 10 { sub3(&mut skill, &mut suspicious); }
-                if burst > 10 { sub3(&mut burst, &mut suspicious); }
+                if skill > 10 {
+                    sub3(&mut skill, &mut suspicious);
+                }
+                if burst > 10 {
+                    sub3(&mut burst, &mut suspicious);
+                }
             }
         }
 
@@ -389,7 +414,8 @@ impl GoodCharacterScanner {
             }
         }
         let max_talent = Self::max_talent_for_ascension(c.ascension);
-        if c.talent.auto > max_talent || c.talent.skill > max_talent || c.talent.burst > max_talent {
+        if c.talent.auto > max_talent || c.talent.skill > max_talent || c.talent.burst > max_talent
+        {
             return true;
         }
         if let Some(m) = meta {
@@ -417,8 +443,13 @@ impl GoodCharacterScanner {
             if let Ok(text) = Self::ocr_image_region(v5, image, CHAR_NAME_RECT, scaler) {
                 let (name, element, entity) = self.parse_name_and_element(&text);
                 if name.is_some() {
-                    log_debug!("[character] 名字OCR: {:?} -> {} ({})", "[character] name OCR: {:?} -> {} ({})",
-                        text, entity.as_deref().unwrap_or("?"), name.as_deref().unwrap_or("?"));
+                    log_debug!(
+                        "[character] 名字OCR: {:?} -> {} ({})",
+                        "[character] name OCR: {:?} -> {} ({})",
+                        text,
+                        entity.as_deref().unwrap_or("?"),
+                        name.as_deref().unwrap_or("?")
+                    );
                     return (name, element, text);
                 }
             }
@@ -426,8 +457,13 @@ impl GoodCharacterScanner {
         if let Ok(text) = Self::ocr_image_region(v4_ocr, image, CHAR_NAME_RECT, scaler) {
             let (name, element, entity) = self.parse_name_and_element(&text);
             if name.is_some() {
-                log_debug!("[character] 名字OCR: {:?} -> {} ({})", "[character] name OCR: {:?} -> {} ({})",
-                    text, entity.as_deref().unwrap_or("?"), name.as_deref().unwrap_or("?"));
+                log_debug!(
+                    "[character] 名字OCR: {:?} -> {} ({})",
+                    "[character] name OCR: {:?} -> {} ({})",
+                    text,
+                    entity.as_deref().unwrap_or("?"),
+                    name.as_deref().unwrap_or("?")
+                );
                 return (name, element, text);
             }
             // Return raw text even on match failure for error reporting
@@ -449,7 +485,7 @@ impl GoodCharacterScanner {
                 annotator::record_ocr("level", CHAR_LEVEL_RECT, "(ocr error)");
                 annotator::set_final("level", "1");
                 return (1, false, String::new());
-            }
+            },
         };
 
         let (level, ascended) = Self::parse_level_text(&text);
@@ -478,7 +514,13 @@ impl GoodCharacterScanner {
 
             // Phase 1: clean split
             if let Some((lv, mx)) = Self::try_split_digits(&digits) {
-                log_debug!("[character] 等级OCR回退拆分: {:?} -> {}/{}", "[character] level OCR fallback split: {:?} -> {}/{}", digits, lv, mx);
+                log_debug!(
+                    "[character] 等级OCR回退拆分: {:?} -> {}/{}",
+                    "[character] level OCR fallback split: {:?} -> {}/{}",
+                    digits,
+                    lv,
+                    mx
+                );
                 return Self::finalize_level(lv, mx);
             }
 
@@ -503,7 +545,10 @@ impl GoodCharacterScanner {
                     log_debug!(
                         "[character] 等级OCR去噪拆分: {:?} (移除索引 {}) -> {}/{}",
                         "[character] level OCR noise-remove split: {:?} (remove idx {}) -> {}/{}",
-                        digits, idx, lv, mx
+                        digits,
+                        idx,
+                        lv,
+                        mx
                     );
                     return Self::finalize_level(lv, mx);
                 }
@@ -514,7 +559,12 @@ impl GoodCharacterScanner {
                 if digits.len() >= len {
                     if let Ok(lv) = digits[..len].parse::<i32>() {
                         if (1..=100).contains(&lv) {
-                            log_debug!("[character] 等级OCR部分提取: {:?} -> {}", "[character] level OCR partial extract: {:?} -> {}", digits, lv);
+                            log_debug!(
+                                "[character] 等级OCR部分提取: {:?} -> {}",
+                                "[character] level OCR partial extract: {:?} -> {}",
+                                digits,
+                                lv
+                            );
                             return (lv, false);
                         }
                     }
@@ -522,7 +572,11 @@ impl GoodCharacterScanner {
             }
         }
 
-        log_warn!("[character] 等级OCR完全失败: {:?}", "[character] level OCR completely failed: {:?}", text);
+        log_warn!(
+            "[character] 等级OCR完全失败: {:?}",
+            "[character] level OCR completely failed: {:?}",
+            text
+        );
         (1, false)
     }
 
@@ -576,8 +630,13 @@ impl GoodCharacterScanner {
             },
         );
 
-        log_debug!("[talent] 概览: 普攻={} 战技={} 爆发={}", "[talent] overview: auto={} skill={} burst={}",
-            auto_res.0, skill_res.0, burst_res.0);
+        log_debug!(
+            "[talent] 概览: 普攻={} 战技={} 爆发={}",
+            "[talent] overview: auto={} skill={} burst={}",
+            auto_res.0,
+            skill_res.0,
+            burst_res.0
+        );
 
         (
             (auto_res.0, skill_res.0, burst_res.0),
@@ -619,7 +678,7 @@ impl GoodCharacterScanner {
                 annotator::record_ocr(label, CHAR_TALENT_LEVEL_RECT, "(ocr error)");
                 annotator::set_final(label, "0");
                 return 0;
-            }
+            },
         };
         let level = Self::parse_talent_level(&text);
         annotator::record_ocr(label, CHAR_TALENT_LEVEL_RECT, &text);
@@ -679,7 +738,10 @@ impl GoodCharacterScanner {
         annotator::set_final("name", &name);
         // Only show resolved name if it differs from what's already in the raw text.
         // Raw format is "Element/CharName" — if CharName matches, raw is clear enough.
-        let cn_name = self.mappings.character_name_map.iter()
+        let cn_name = self
+            .mappings
+            .character_name_map
+            .iter()
             .find(|(_, v)| v.as_str() == name)
             .map(|(cn, _)| cn.as_str())
             .unwrap_or(&name);
@@ -695,7 +757,8 @@ impl GoodCharacterScanner {
             log_debug!(
                 "[character] 等级 {} (突破={}) 可能需要重新读取",
                 "[character] level {} (ascended={}) may need re-reading",
-                level, ascended
+                level,
+                ascended
             );
         }
 
@@ -703,7 +766,8 @@ impl GoodCharacterScanner {
         let constellation = if let Some(ref const_image) = constellation_image {
             annotator::add_image("constellation", const_image);
             let result = crate::scanner::common::pixel_utils::detect_constellation_pixel(
-                const_image, scaler,
+                const_image,
+                scaler,
             );
             if !result.monotonic {
                 log_debug!(
@@ -729,9 +793,15 @@ impl GoodCharacterScanner {
 
         if auto_lv == 0 || skill_lv == 0 || burst_lv == 0 {
             let mut missing = Vec::new();
-            if auto_lv == 0 { missing.push("auto"); }
-            if skill_lv == 0 { missing.push("skill"); }
-            if burst_lv == 0 { missing.push("burst"); }
+            if auto_lv == 0 {
+                missing.push("auto");
+            }
+            if skill_lv == 0 {
+                missing.push("skill");
+            }
+            if burst_lv == 0 {
+                missing.push("burst");
+            }
             log_debug!(
                 "[character] 天赋概览失败: {}，将在第二轮使用点击回退",
                 "[character] talent overview failed for: {}, will use click fallback in phase 2",
@@ -741,7 +811,11 @@ impl GoodCharacterScanner {
 
         // Record talent annotations with raw OCR text
         let has_special = SPECIAL_BURST_CHARACTERS.contains(&name.as_str());
-        let burst_rect = if has_special { CHAR_TALENT_OVERVIEW_BURST_SPECIAL } else { CHAR_TALENT_OVERVIEW_BURST };
+        let burst_rect = if has_special {
+            CHAR_TALENT_OVERVIEW_BURST_SPECIAL
+        } else {
+            CHAR_TALENT_OVERVIEW_BURST
+        };
         annotator::record_ocr("talent_auto", CHAR_TALENT_OVERVIEW_AUTO, &raw_auto);
         annotator::set_final("talent_auto", &format!("{}", auto));
         annotator::record_ocr("talent_skill", CHAR_TALENT_OVERVIEW_SKILL, &raw_skill);
@@ -776,8 +850,10 @@ impl GoodCharacterScanner {
         annotator::record_ocr("constellation_final", (0.0, 0.0, 0.0, 0.0), "");
         annotator::set_final("constellation_final", &format!("C{}", constellation));
         annotator::record_ocr("talents_adjusted", (0.0, 0.0, 0.0, 0.0), "");
-        annotator::set_final("talents_adjusted",
-            &format!("auto={} skill={} burst={}", adj_auto, adj_skill, adj_burst));
+        annotator::set_final(
+            "talents_adjusted",
+            &format!("auto={} skill={} burst={}", adj_auto, adj_skill, adj_burst),
+        );
 
         annotator::finalize_success(&serde_json::to_string_pretty(&character).unwrap_or_default());
 
@@ -827,7 +903,8 @@ impl GoodCharacterScanner {
         // -- Constellation: pixel (primary) --
         annotator::add_image("constellation_tab", &constellation_tab_image);
         let pixel_result = crate::scanner::common::pixel_utils::detect_constellation_pixel(
-            &constellation_tab_image, scaler,
+            &constellation_tab_image,
+            scaler,
         );
 
         // -- Constellation: OCR fallback only when the main thread decided to
@@ -854,7 +931,9 @@ impl GoodCharacterScanner {
                 log_info!(
                     "[constellation] 验证 {}: 像素=C{} OCR=C{} → 使用OCR结果",
                     "[constellation] verify {}: pixel=C{} OCR=C{} → using OCR result",
-                    name, pixel_result.level, ocr_count
+                    name,
+                    pixel_result.level,
+                    ocr_count
                 );
             }
             ocr_count
@@ -876,40 +955,77 @@ impl GoodCharacterScanner {
             (raw_auto, raw_skill, raw_burst)
         } else {
             let ocr = ocr_pool.get();
-            let talent_labels = ["talent_detail_auto", "talent_detail_skill", "talent_detail_burst"];
+            let talent_labels = [
+                "talent_detail_auto",
+                "talent_detail_skill",
+                "talent_detail_burst",
+            ];
             let mut det_levels = [0i32; 3];
-            for (i, (img, label)) in talent_detail_images.iter().zip(talent_labels.iter()).enumerate() {
+            for (i, (img, label)) in talent_detail_images
+                .iter()
+                .zip(talent_labels.iter())
+                .enumerate()
+            {
                 det_levels[i] = Self::read_talent_from_detail_image(&ocr, img, scaler, label);
             }
             let [det_auto, det_skill, det_burst] = det_levels;
-            log_debug!("[talent] 详情: 普攻={} 战技={} 爆发={}", "[talent] detail: auto={} skill={} burst={}",
-                det_auto, det_skill, det_burst);
+            log_debug!(
+                "[talent] 详情: 普攻={} 战技={} 爆发={}",
+                "[talent] detail: auto={} skill={} burst={}",
+                det_auto,
+                det_skill,
+                det_burst
+            );
 
             if det_auto > 0 && ov_auto > 0 && det_auto != ov_auto {
                 log_debug!(
                     "[talent] 验证 {} auto: 概览={} 详情={} → 使用详情",
                     "[talent] verify {} auto: overview={} detail={} → using detail",
-                    name, ov_auto, det_auto
+                    name,
+                    ov_auto,
+                    det_auto
                 );
             }
             if det_skill > 0 && ov_skill > 0 && det_skill != ov_skill {
                 log_debug!(
                     "[talent] 验证 {} skill: 概览={} 详情={} → 使用详情",
                     "[talent] verify {} skill: overview={} detail={} → using detail",
-                    name, ov_skill, det_skill
+                    name,
+                    ov_skill,
+                    det_skill
                 );
             }
             if det_burst > 0 && ov_burst > 0 && det_burst != ov_burst {
                 log_debug!(
                     "[talent] 验证 {} burst: 概览={} 详情={} → 使用详情",
                     "[talent] verify {} burst: overview={} detail={} → using detail",
-                    name, ov_burst, det_burst
+                    name,
+                    ov_burst,
+                    det_burst
                 );
             }
 
-            let raw_auto = if det_auto > 0 { det_auto } else if ov_auto > 0 { ov_auto } else { 1 };
-            let raw_skill = if det_skill > 0 { det_skill } else if ov_skill > 0 { ov_skill } else { 1 };
-            let raw_burst = if det_burst > 0 { det_burst } else if ov_burst > 0 { ov_burst } else { 1 };
+            let raw_auto = if det_auto > 0 {
+                det_auto
+            } else if ov_auto > 0 {
+                ov_auto
+            } else {
+                1
+            };
+            let raw_skill = if det_skill > 0 {
+                det_skill
+            } else if ov_skill > 0 {
+                ov_skill
+            } else {
+                1
+            };
+            let raw_burst = if det_burst > 0 {
+                det_burst
+            } else if ov_burst > 0 {
+                ov_burst
+            } else {
+                1
+            };
             (raw_auto, raw_skill, raw_burst)
         };
 
@@ -927,9 +1043,13 @@ impl GoodCharacterScanner {
         let level_improved = new_level > old.level;
         let constellation_changed = new_constellation != old.constellation;
         let old_talent_ones = [old.talent.auto, old.talent.skill, old.talent.burst]
-            .iter().filter(|&&v| v == 1).count();
+            .iter()
+            .filter(|&&v| v == 1)
+            .count();
         let new_talent_ones = [adj_auto, adj_skill, adj_burst]
-            .iter().filter(|&&v| v == 1).count();
+            .iter()
+            .filter(|&&v| v == 1)
+            .count();
         let talents_improved = new_talent_ones < old_talent_ones;
 
         let mut character = old.clone();
@@ -956,14 +1076,21 @@ impl GoodCharacterScanner {
                 changes.push(format!("C{}→{}", old.constellation, new_constellation));
             }
             if talents_improved || constellation_changed {
-                changes.push(format!("{}/{}/{}→{}/{}/{}",
-                    old.talent.auto, old.talent.skill, old.talent.burst,
-                    adj_auto, adj_skill, adj_burst));
+                changes.push(format!(
+                    "{}/{}/{}→{}/{}/{}",
+                    old.talent.auto,
+                    old.talent.skill,
+                    old.talent.burst,
+                    adj_auto,
+                    adj_skill,
+                    adj_burst
+                ));
             }
             log_info!(
                 "[character] 验证 {}: {}",
                 "[character] verify {}: {}",
-                name, changes.join(", ")
+                name,
+                changes.join(", ")
             );
         } else {
             log_debug!(
@@ -1009,13 +1136,19 @@ impl GoodCharacterScanner {
 
         // Return to main world and open character screen.
         ctrl.focus_game_window();
-        if ctrl.check_rmb() { bail!("cancelled"); }
+        if ctrl.check_rmb() {
+            bail!("cancelled");
+        }
         ctrl.return_to_main_ui(8);
-        if ctrl.check_rmb() { bail!("cancelled"); }
+        if ctrl.check_rmb() {
+            bail!("cancelled");
+        }
 
         let mut screen_opened = false;
         for attempt in 0..3 {
-            if ctrl.check_rmb() { bail!("cancelled"); }
+            if ctrl.check_rmb() {
+                bail!("cancelled");
+            }
             ctrl.key_press(enigo::Key::Layout('c'));
             utils::sleep(self.config.open_delay as u32);
 
@@ -1026,27 +1159,43 @@ impl GoodCharacterScanner {
                 let (n, _, _) = self.read_name_from_image(
                     Some(&v5 as &dyn ImageToText<RgbImage>),
                     &v4 as &dyn ImageToText<RgbImage>,
-                    &check_image, &ctrl.scaler,
+                    &check_image,
+                    &ctrl.scaler,
                 );
                 n
             };
             if check_name.is_some() {
-                log_debug!("[character] 角色界面已检测到，第{}次尝试", "[character] character screen detected on attempt {}", attempt + 1);
+                log_debug!(
+                    "[character] 角色界面已检测到，第{}次尝试",
+                    "[character] character screen detected on attempt {}",
+                    attempt + 1
+                );
                 screen_opened = true;
                 break;
             }
 
-            log_debug!("[character] 未检测到角色界面（第{}次尝试），重试中...", "[character] character screen not detected (attempt {}), retrying...", attempt + 1);
+            log_debug!(
+                "[character] 未检测到角色界面（第{}次尝试），重试中...",
+                "[character] character screen not detected (attempt {}), retrying...",
+                attempt + 1
+            );
             ctrl.return_to_main_ui(4);
         }
         if !screen_opened {
-            log_error!("[character] 3次尝试后仍无法打开角色界面", "[character] failed to open character screen after 3 attempts");
+            log_error!(
+                "[character] 3次尝试后仍无法打开角色界面",
+                "[character] failed to open character screen after 3 attempts"
+            );
             log_info!("{}", "{}", DELAY_TIP);
         }
 
         // Jump to the specified character index
         if start_at_char > 0 {
-            log_debug!("[character] 跳转到角色索引 {}...", "[character] jumping to character index {}...", start_at_char);
+            log_debug!(
+                "[character] 跳转到角色索引 {}...",
+                "[character] jumping to character index {}...",
+                start_at_char
+            );
             for _ in 0..start_at_char {
                 ctrl.click_at(CHAR_NEXT_POS.0, CHAR_NEXT_POS.1);
                 utils::sleep((self.config.next_delay / 2).max(100) as u32);
@@ -1071,16 +1220,24 @@ impl GoodCharacterScanner {
             for work in work_rx {
                 match work {
                     CharacterWork::Scan(captures) => {
-                        let result = scanner.process_scan_captures(captures, &worker_ocr_pool, &worker_scaler);
+                        let result = scanner.process_scan_captures(
+                            captures,
+                            &worker_ocr_pool,
+                            &worker_scaler,
+                        );
                         let _ = result_tx.send(result);
-                    }
+                    },
                     CharacterWork::Rescan(captures) => {
-                        let result = scanner.process_rescan_captures(captures, &worker_ocr_pool, &worker_scaler);
+                        let result = scanner.process_rescan_captures(
+                            captures,
+                            &worker_ocr_pool,
+                            &worker_scaler,
+                        );
                         let _ = result_tx.send(result);
-                    }
+                    },
                     CharacterWork::Done => {
                         let _ = result_tx.send(CharacterResult::PhaseDone);
-                    }
+                    },
                 }
             }
         });
@@ -1107,7 +1264,10 @@ impl GoodCharacterScanner {
 
         loop {
             if ctrl.check_rmb() {
-                log_info!("[character] 用户中断扫描", "[character] user interrupted scan");
+                log_info!(
+                    "[character] 用户中断扫描",
+                    "[character] user interrupted scan"
+                );
                 break;
             }
 
@@ -1121,14 +1281,18 @@ impl GoodCharacterScanner {
                 self.read_name_from_image(
                     Some(&v5 as &dyn ImageToText<RgbImage>),
                     &v4 as &dyn ImageToText<RgbImage>,
-                    &first_image, &ctrl.scaler,
+                    &first_image,
+                    &ctrl.scaler,
                 )
             };
 
             // Retry once on name failure
             let (name, element, raw_text, first_image) = if name.is_none() {
-                log_debug!("[character] 首次名字匹配失败: \u{300C}{}\u{300D}，重试中...",
-                    "[character] first name match failed: \u{300C}{}\u{300D}, retrying...", raw_text);
+                log_debug!(
+                    "[character] 首次名字匹配失败: \u{300C}{}\u{300D}，重试中...",
+                    "[character] first name match failed: \u{300C}{}\u{300D}, retrying...",
+                    raw_text
+                );
                 utils::sleep(1000);
                 let retry_image = ctrl.capture_game()?;
                 let (n2, e2, r2) = {
@@ -1137,7 +1301,8 @@ impl GoodCharacterScanner {
                     self.read_name_from_image(
                         Some(&v5 as &dyn ImageToText<RgbImage>),
                         &v4 as &dyn ImageToText<RgbImage>,
-                        &retry_image, &ctrl.scaler,
+                        &retry_image,
+                        &ctrl.scaler,
                     )
                 };
                 (n2, e2, r2, retry_image)
@@ -1149,8 +1314,11 @@ impl GoodCharacterScanner {
                 Some(n) => n,
                 None => {
                     if self.config.continue_on_failure {
-                        log_warn!("[character] 无法识别: \u{300C}{}\u{300D}，跳过",
-                            "[character] cannot identify: \u{300C}{}\u{300D}, skipping", raw_text);
+                        log_warn!(
+                            "[character] 无法识别: \u{300C}{}\u{300D}，跳过",
+                            "[character] cannot identify: \u{300C}{}\u{300D}, skipping",
+                            raw_text
+                        );
                         log_info!("{}", "{}", DELAY_TIP);
                         consecutive_failures += 1;
                         viewed_count += 1;
@@ -1167,25 +1335,40 @@ impl GoodCharacterScanner {
                         // so the next character starts on a known tab (attrs).
                         reverse = false;
                         Self::drain_phase1_results(
-                            &result_rx, &mut characters, &mut scan_metas,
-                            &mut viewed_indices, &pb, self.config.log_progress,
+                            &result_rx,
+                            &mut characters,
+                            &mut scan_metas,
+                            &mut viewed_indices,
+                            &pb,
+                            self.config.log_progress,
                             progress_fn,
                         );
                         if consecutive_failures >= 5 {
-                            log_error!("[character] 连续{}次失败，停止扫描", "[character] {} consecutive failures, stopping scan", consecutive_failures);
+                            log_error!(
+                                "[character] 连续{}次失败，停止扫描",
+                                "[character] {} consecutive failures, stopping scan",
+                                consecutive_failures
+                            );
                             log_info!("{}", "{}", DELAY_TIP);
                             break;
                         }
                         continue;
                     }
-                    bail!("无法识别角色 / Cannot identify character: \u{300C}{}\u{300D}\n{}", raw_text, DELAY_TIP);
-                }
+                    bail!(
+                        "无法识别角色 / Cannot identify character: \u{300C}{}\u{300D}\n{}",
+                        raw_text,
+                        DELAY_TIP
+                    );
+                },
             };
 
             // Loop detection
             if let Some(ref first) = first_name {
                 if &name == first {
-                    log_info!("[character] 检测到循环，扫描完成", "[character] loop detected, scan complete");
+                    log_info!(
+                        "[character] 检测到循环，扫描完成",
+                        "[character] loop detected, scan complete"
+                    );
                     break;
                 }
             }
@@ -1249,7 +1432,10 @@ impl GoodCharacterScanner {
                 talents_image,
             };
             if work_tx.send(CharacterWork::Scan(captures)).is_err() {
-                log_error!("[character] 工作通道已关闭", "[character] worker channel closed");
+                log_error!(
+                    "[character] 工作通道已关闭",
+                    "[character] worker channel closed"
+                );
                 break;
             }
 
@@ -1261,18 +1447,30 @@ impl GoodCharacterScanner {
 
             // Drain available results (non-blocking)
             Self::drain_phase1_results(
-                &result_rx, &mut characters, &mut scan_metas,
-                &mut viewed_indices, &pb, self.config.log_progress,
+                &result_rx,
+                &mut characters,
+                &mut scan_metas,
+                &mut viewed_indices,
+                &pb,
+                self.config.log_progress,
                 progress_fn,
             );
 
             // Check limits
             if self.config.max_count > 0 && characters.len() >= self.config.max_count {
-                log_info!("[character] 已达到最大数量={}，停止", "[character] reached max_count={}, stopping", self.config.max_count);
+                log_info!(
+                    "[character] 已达到最大数量={}，停止",
+                    "[character] reached max_count={}, stopping",
+                    self.config.max_count
+                );
                 break;
             }
             if consecutive_failures >= 5 {
-                log_error!("[character] 连续{}次失败，停止扫描", "[character] {} consecutive failures, stopping scan", consecutive_failures);
+                log_error!(
+                    "[character] 连续{}次失败，停止扫描",
+                    "[character] {} consecutive failures, stopping scan",
+                    consecutive_failures
+                );
                 log_info!("{}", "{}", DELAY_TIP);
                 break;
             }
@@ -1282,13 +1480,23 @@ impl GoodCharacterScanner {
         let _ = work_tx.send(CharacterWork::Done);
         loop {
             match result_rx.recv() {
-                Ok(CharacterResult::Scanned { viewed_index, character, meta }) => {
+                Ok(CharacterResult::Scanned {
+                    viewed_index,
+                    character,
+                    meta,
+                }) => {
                     if let Some(c) = character {
                         if self.config.log_progress {
-                            log_debug!("[character] {} Lv.{} C{} {}/{}/{}",
+                            log_debug!(
                                 "[character] {} Lv.{} C{} {}/{}/{}",
-                                c.key, c.level, c.constellation,
-                                c.talent.auto, c.talent.skill, c.talent.burst);
+                                "[character] {} Lv.{} C{} {}/{}/{}",
+                                c.key,
+                                c.level,
+                                c.constellation,
+                                c.talent.auto,
+                                c.talent.skill,
+                                c.talent.burst
+                            );
                         }
                         let msg = format!("{} Lv.{} C{}", c.key, c.level, c.constellation);
                         pb.set_message(format!("{} scanned — {}", characters.len() + 1, msg));
@@ -1304,9 +1512,9 @@ impl GoodCharacterScanner {
                         }
                     }
                     scan_metas.push(meta);
-                }
+                },
                 Ok(CharacterResult::PhaseDone) => break,
-                Ok(_) => {}
+                Ok(_) => {},
                 Err(_) => break,
             }
         }
@@ -1319,7 +1527,9 @@ impl GoodCharacterScanner {
 
         // ── Phase 2: Rescan suspicious characters ───────────────────────────
 
-        let suspicious: Vec<(usize, usize)> = characters.iter().enumerate()
+        let suspicious: Vec<(usize, usize)> = characters
+            .iter()
+            .enumerate()
             .filter(|(i, c)| {
                 let meta = scan_metas.get(*i);
                 Self::is_character_suspicious(c, meta)
@@ -1328,8 +1538,14 @@ impl GoodCharacterScanner {
                 log_debug!(
                     "[character] 将重新读取 #{}: {} Lv.{} A{} C{} {}/{}/{}",
                     "[character] will re-read #{}: {} Lv.{} A{} C{} {}/{}/{}",
-                    i, c.key, c.level, c.ascension, c.constellation,
-                    c.talent.auto, c.talent.skill, c.talent.burst
+                    i,
+                    c.key,
+                    c.level,
+                    c.ascension,
+                    c.constellation,
+                    c.talent.auto,
+                    c.talent.skill,
+                    c.talent.burst
                 );
                 (i, viewed_indices[i])
             })
@@ -1341,7 +1557,14 @@ impl GoodCharacterScanner {
                 "[character] second pass: re-reading {} characters for accuracy",
                 suspicious.len()
             );
-            self.run_phase2(ctrl, &ocr_pool, &work_tx, &result_rx, &mut characters, &suspicious);
+            self.run_phase2(
+                ctrl,
+                &ocr_pool,
+                &work_tx,
+                &result_rx,
+                &mut characters,
+                &suspicious,
+            );
         }
 
         // Signal worker to exit
@@ -1352,12 +1575,22 @@ impl GoodCharacterScanner {
         let mut had_impossible_level = false;
         for c in &mut characters {
             if (91..=94).contains(&c.level) {
-                log_warn!("[character] {} 最终修正: {} → 90 (不可能的等级)", "[character] {} final snap: {} → 90 (impossible level)", c.key, c.level);
+                log_warn!(
+                    "[character] {} 最终修正: {} → 90 (不可能的等级)",
+                    "[character] {} final snap: {} → 90 (impossible level)",
+                    c.key,
+                    c.level
+                );
                 c.level = 90;
                 c.ascension = level_to_ascension(90, false);
                 had_impossible_level = true;
             } else if (96..=99).contains(&c.level) {
-                log_warn!("[character] {} 最终修正: {} → 95 (不可能的等级)", "[character] {} final snap: {} → 95 (impossible level)", c.key, c.level);
+                log_warn!(
+                    "[character] {} 最终修正: {} → 95 (不可能的等级)",
+                    "[character] {} final snap: {} → 95 (impossible level)",
+                    c.key,
+                    c.level
+                );
                 c.level = 95;
                 c.ascension = level_to_ascension(95, false);
                 had_impossible_level = true;
@@ -1399,13 +1632,23 @@ impl GoodCharacterScanner {
     ) {
         while let Ok(result) = result_rx.try_recv() {
             match result {
-                CharacterResult::Scanned { viewed_index, character, meta } => {
+                CharacterResult::Scanned {
+                    viewed_index,
+                    character,
+                    meta,
+                } => {
                     if let Some(c) = character {
                         if log_progress {
-                            log_debug!("[character] {} Lv.{} C{} {}/{}/{}",
+                            log_debug!(
                                 "[character] {} Lv.{} C{} {}/{}/{}",
-                                c.key, c.level, c.constellation,
-                                c.talent.auto, c.talent.skill, c.talent.burst);
+                                "[character] {} Lv.{} C{} {}/{}/{}",
+                                c.key,
+                                c.level,
+                                c.constellation,
+                                c.talent.auto,
+                                c.talent.skill,
+                                c.talent.burst
+                            );
                         }
                         let msg = format!("{} Lv.{} C{}", c.key, c.level, c.constellation);
                         pb.set_message(format!("{} scanned — {}", characters.len() + 1, msg));
@@ -1418,8 +1661,8 @@ impl GoodCharacterScanner {
                         }
                     }
                     scan_metas.push(meta);
-                }
-                _ => {} // Ignore unexpected messages during drain
+                },
+                _ => {}, // Ignore unexpected messages during drain
             }
         }
     }
@@ -1444,8 +1687,13 @@ impl GoodCharacterScanner {
             utils::sleep(self.config.open_delay as u32);
             if let Ok(img) = ctrl.capture_game() {
                 let ocr = ocr_pool.get();
-                let text = Self::ocr_image_region(&ocr as &dyn ImageToText<RgbImage>, &img, CHAR_NAME_RECT, &ctrl.scaler)
-                    .unwrap_or_default();
+                let text = Self::ocr_image_region(
+                    &ocr as &dyn ImageToText<RgbImage>,
+                    &img,
+                    CHAR_NAME_RECT,
+                    &ctrl.scaler,
+                )
+                .unwrap_or_default();
                 if !text.trim().is_empty() {
                     screen_opened = true;
                     break;
@@ -1454,7 +1702,10 @@ impl GoodCharacterScanner {
             ctrl.return_to_main_ui(4);
         }
         if !screen_opened {
-            log_warn!("[character] 第二轮: 无法打开角色界面，跳过", "[character] second pass: failed to open character screen, skipping");
+            log_warn!(
+                "[character] 第二轮: 无法打开角色界面，跳过",
+                "[character] second pass: failed to open character screen, skipping"
+            );
             return;
         }
 
@@ -1463,7 +1714,10 @@ impl GoodCharacterScanner {
 
         for &(char_idx, viewed_idx) in suspicious {
             if ctrl.check_rmb() {
-                log_info!("[character] 第二轮: 用户中断", "[character] second pass: user interrupted");
+                log_info!(
+                    "[character] 第二轮: 用户中断",
+                    "[character] second pass: user interrupted"
+                );
                 break;
             }
 
@@ -1499,9 +1753,14 @@ impl GoodCharacterScanner {
             let attrs_image = match ctrl.capture_game() {
                 Ok(img) => img,
                 Err(e) => {
-                    log_error!("[character] 第二轮: 截图失败 {}: {}", "[character] second pass: capture failed for {}: {}", name, e);
+                    log_error!(
+                        "[character] 第二轮: 截图失败 {}: {}",
+                        "[character] second pass: capture failed for {}: {}",
+                        name,
+                        e
+                    );
                     continue;
-                }
+                },
             };
 
             // 2. Talents first: click tab, capture overview.
@@ -1523,14 +1782,32 @@ impl GoodCharacterScanner {
                 let ocr = ocr_pool.get();
                 let ocr_ref = &ocr as &dyn ImageToText<RgbImage>;
                 let a = Self::ocr_image_region(
-                    ocr_ref, &talent_overview_image, CHAR_TALENT_OVERVIEW_AUTO, &ctrl.scaler,
-                ).ok().map(|t| Self::parse_lv_text(&t)).unwrap_or(0);
+                    ocr_ref,
+                    &talent_overview_image,
+                    CHAR_TALENT_OVERVIEW_AUTO,
+                    &ctrl.scaler,
+                )
+                .ok()
+                .map(|t| Self::parse_lv_text(&t))
+                .unwrap_or(0);
                 let s = Self::ocr_image_region(
-                    ocr_ref, &talent_overview_image, CHAR_TALENT_OVERVIEW_SKILL, &ctrl.scaler,
-                ).ok().map(|t| Self::parse_lv_text(&t)).unwrap_or(0);
+                    ocr_ref,
+                    &talent_overview_image,
+                    CHAR_TALENT_OVERVIEW_SKILL,
+                    &ctrl.scaler,
+                )
+                .ok()
+                .map(|t| Self::parse_lv_text(&t))
+                .unwrap_or(0);
                 let b = Self::ocr_image_region(
-                    ocr_ref, &talent_overview_image, burst_rect, &ctrl.scaler,
-                ).ok().map(|t| Self::parse_lv_text(&t)).unwrap_or(0);
+                    ocr_ref,
+                    &talent_overview_image,
+                    burst_rect,
+                    &ctrl.scaler,
+                )
+                .ok()
+                .map(|t| Self::parse_lv_text(&t))
+                .unwrap_or(0);
                 (a, s, b)
             };
 
@@ -1539,7 +1816,9 @@ impl GoodCharacterScanner {
             // The phase-1 stored values are post-adjustment, but auto/skill/burst
             // ≤ 10 and the adjustment is a clamp — matching the unadjusted overview
             // means phase 1 wasn't an OCR glitch.
-            let talents_consistent = ov_auto > 0 && ov_skill > 0 && ov_burst > 0
+            let talents_consistent = ov_auto > 0
+                && ov_skill > 0
+                && ov_burst > 0
                 && ov_auto == old.talent.auto
                 && ov_skill == old.talent.skill
                 && ov_burst == old.talent.burst;
@@ -1553,9 +1832,8 @@ impl GoodCharacterScanner {
                     ctrl.click_at(CHAR_TALENT_CLICK_X, click_y);
                     let delay = if ti == 0 { td * 3 / 4 } else { td / 2 };
                     utils::sleep(delay as u32);
-                    talent_detail_images.push(
-                        ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1))
-                    );
+                    talent_detail_images
+                        .push(ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1)));
                 }
                 // Dismiss talent detail popup.
                 ctrl.key_press(enigo::Key::Escape);
@@ -1563,21 +1841,30 @@ impl GoodCharacterScanner {
                 log_debug!(
                     "[talent] 第二轮 {}: 概览({},{},{}) != 旧({},{},{}) → 点击详情",
                     "[talent] pass2 {}: overview({},{},{}) != old({},{},{}) → clicking details",
-                    name, ov_auto, ov_skill, ov_burst,
-                    old.talent.auto, old.talent.skill, old.talent.burst,
+                    name,
+                    ov_auto,
+                    ov_skill,
+                    ov_burst,
+                    old.talent.auto,
+                    old.talent.skill,
+                    old.talent.burst,
                 );
             } else {
                 log_debug!(
                     "[talent] 第二轮 {}: 概览与旧值一致 ({},{},{}) → 跳过详情点击",
                     "[talent] pass2 {}: overview matches old ({},{},{}) → skipping detail clicks",
-                    name, ov_auto, ov_skill, ov_burst,
+                    name,
+                    ov_auto,
+                    ov_skill,
+                    ov_burst,
                 );
             }
 
             // 5. Constellation tab capture.
             ctrl.click_at(CHAR_TAB_CONSTELLATION.0, CHAR_TAB_CONSTELLATION.1);
             utils::sleep(td as u32);
-            let constellation_tab_image = ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
+            let constellation_tab_image =
+                ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
 
             // 6. Pixel detection on the tab image. Monotonic = clean, trust it;
             // only click nodes if the pattern is ambiguous (non-monotonic) OR
@@ -1586,13 +1873,15 @@ impl GoodCharacterScanner {
             let mut constellation_node_images = Vec::new();
             if !skip_constellation {
                 let pixel_check = crate::scanner::common::pixel_utils::detect_constellation_pixel(
-                    &constellation_tab_image, &ctrl.scaler,
+                    &constellation_tab_image,
+                    &ctrl.scaler,
                 );
                 if pixel_check.monotonic {
                     log_debug!(
                         "[constellation] 第二轮 {}: 像素单调 C{} → 跳过节点点击",
                         "[constellation] pass2 {}: pixel monotonic C{} → skipping node clicks",
-                        name, pixel_check.level,
+                        name,
+                        pixel_check.level,
                     );
                 } else {
                     log_debug!(
@@ -1601,13 +1890,13 @@ impl GoodCharacterScanner {
                         name,
                     );
                     for ci in 0..6 {
-                        let click_y = CHAR_CONSTELLATION_Y_BASE + ci as f64 * CHAR_CONSTELLATION_Y_STEP;
+                        let click_y =
+                            CHAR_CONSTELLATION_Y_BASE + ci as f64 * CHAR_CONSTELLATION_Y_STEP;
                         ctrl.click_at(CHAR_CONSTELLATION_X, click_y);
                         let delay = if ci == 0 { td * 3 / 4 } else { td / 2 };
                         utils::sleep(delay as u32);
-                        constellation_node_images.push(
-                            ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1))
-                        );
+                        constellation_node_images
+                            .push(ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1)));
                     }
                     // Dismiss constellation popup.
                     ctrl.key_press(enigo::Key::Escape);
@@ -1631,7 +1920,10 @@ impl GoodCharacterScanner {
                 talent_detail_images,
             };
             if work_tx.send(CharacterWork::Rescan(rescan)).is_err() {
-                log_error!("[character] 第二轮: 工作通道已关闭", "[character] second pass: worker channel closed");
+                log_error!(
+                    "[character] 第二轮: 工作通道已关闭",
+                    "[character] second pass: worker channel closed"
+                );
                 break;
             }
         }
@@ -1640,11 +1932,14 @@ impl GoodCharacterScanner {
         let _ = work_tx.send(CharacterWork::Done);
         loop {
             match result_rx.recv() {
-                Ok(CharacterResult::Rescanned { char_index, character }) => {
+                Ok(CharacterResult::Rescanned {
+                    char_index,
+                    character,
+                }) => {
                     characters[char_index] = character;
-                }
+                },
                 Ok(CharacterResult::PhaseDone) => break,
-                Ok(_) => {}
+                Ok(_) => {},
                 Err(_) => break,
             }
         }
@@ -1706,7 +2001,8 @@ impl GoodCharacterScanner {
             utils::sleep(self.config.tab_delay as u32);
             let const_image = ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
             let result = crate::scanner::common::pixel_utils::detect_constellation_pixel(
-                &const_image, &scaler,
+                &const_image,
+                &scaler,
             );
             result.level
         };
@@ -1724,13 +2020,15 @@ impl GoodCharacterScanner {
         utils::sleep(self.config.tab_delay as u32);
         let talents_image = ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
         let ocr_backend = self.config.ocr_backend.clone();
-        let debug_pool = OcrPool::new(
-            move || ocr_factory::create_ocr_model(&ocr_backend),
-            3,
-        ).ok();
+        let debug_pool = OcrPool::new(move || ocr_factory::create_ocr_model(&ocr_backend), 3).ok();
         let (auto, skill, burst) = if let Some(ref pool) = debug_pool {
-            let ((a, s, b), _) = Self::read_talents_from_image(pool, &talents_image, &name_key, &scaler);
-            (if a > 0 { a } else { 1 }, if s > 0 { s } else { 1 }, if b > 0 { b } else { 1 })
+            let ((a, s, b), _) =
+                Self::read_talents_from_image(pool, &talents_image, &name_key, &scaler);
+            (
+                if a > 0 { a } else { 1 },
+                if s > 0 { s } else { 1 },
+                if b > 0 { b } else { 1 },
+            )
         } else {
             (1, 1, 1)
         };

@@ -1,7 +1,7 @@
-use std::io::stdin;
-use crate::game_info::{GameInfo, is_16x9, UI, Platform};
+use crate::game_info::{is_16x9, GameInfo, Platform, UI};
 use crate::utils;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use std::io::stdin;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -25,8 +25,8 @@ fn get_window_class(hwnd: HWND) -> Option<String> {
 /// Known window classes for the actual game process.
 /// The launcher shares the same title but uses a different class.
 const GAME_WINDOW_CLASSES: &[&str] = &[
-    "UnityWndClass",         // local Genshin Impact / 原神
-    "Qt5152QWindowIcon",     // cloud 云·原神 (Qt-based)
+    "UnityWndClass",     // local Genshin Impact / 原神
+    "Qt5152QWindowIcon", // cloud 云·原神 (Qt-based)
 ];
 
 fn get_window(window_names: &[&str]) -> Result<(HWND, bool)> {
@@ -60,13 +60,16 @@ fn get_window(window_names: &[&str]) -> Result<(HWND, bool)> {
         log_debug!(
             "匹配到窗口: title={:?}, class={:?}, hwnd={:?}",
             "Matched window: title={:?}, class={:?}, hwnd={:?}",
-            title, class, hwnd,
+            title,
+            class,
+            hwnd,
         );
     }
 
     // Filter by known game window classes to exclude non-game windows
     // (e.g. the HoYoPlay launcher creates a window titled "原神" too).
-    let game_only: Vec<_> = viable_handles.iter()
+    let game_only: Vec<_> = viable_handles
+        .iter()
         .filter(|(_, _, class)| GAME_WINDOW_CLASSES.iter().any(|&known| class == known))
         .collect();
 
@@ -84,7 +87,13 @@ fn get_window(window_names: &[&str]) -> Result<(HWND, bool)> {
             viable_handles.len(),
         );
         for (hwnd, title, class) in &viable_handles {
-            log_warn!("  窗口: title={:?}, class={:?}, hwnd={:?}", "  window: title={:?}, class={:?}, hwnd={:?}", title, class, hwnd);
+            log_warn!(
+                "  窗口: title={:?}, class={:?}, hwnd={:?}",
+                "  window: title={:?}, class={:?}, hwnd={:?}",
+                title,
+                class,
+                hwnd
+            );
         }
     }
 

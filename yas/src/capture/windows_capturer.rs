@@ -1,10 +1,10 @@
-use crate::capture::WinapiCapturer;
-use crate::capture::ScreenshotsCapturer;
 use crate::capture::Capturer;
+use crate::capture::ScreenshotsCapturer;
+use crate::capture::WinapiCapturer;
 use crate::positioning::Rect;
-use image::RgbImage;
-use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::Result;
+use image::RgbImage;
 
 pub struct WindowsCapturer {
     windows_capturer: WinapiCapturer,
@@ -25,7 +25,7 @@ impl Capturer<RgbImage> for WindowsCapturer {
         {
             let result = self.windows_capturer.capture_rect(rect);
             if result.is_ok() {
-                return result
+                return result;
             }
         }
 

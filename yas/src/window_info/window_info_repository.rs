@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
 use crate::game_info::{Platform, UI};
 use crate::positioning::{Pos, Scalable, Size};
+use serde::{Deserialize, Serialize};
 
 use crate::window_info::WindowInfoType;
 
@@ -21,14 +21,28 @@ impl WindowInfoRepository {
         }
     }
 
-    pub fn add(&mut self, name: &str, size: Size<usize>, ui: UI, platform: Platform, value: WindowInfoType) {
+    pub fn add(
+        &mut self,
+        name: &str,
+        size: Size<usize>,
+        ui: UI,
+        platform: Platform,
+        value: WindowInfoType,
+    ) {
         self.data
             .entry(String::from(name))
             .or_insert(HashMap::new())
             .insert((size, ui, platform), value);
     }
 
-    pub fn add_pos(&mut self, name: &str, size: Size<usize>, ui: UI, platform: Platform, value: Pos<f64>) {
+    pub fn add_pos(
+        &mut self,
+        name: &str,
+        size: Size<usize>,
+        ui: UI,
+        platform: Platform,
+        value: Pos<f64>,
+    ) {
         self.data
             .entry(String::from(name))
             .or_insert(HashMap::new())
@@ -39,7 +53,10 @@ impl WindowInfoRepository {
         for (key, data) in other.data.iter() {
             if self.data.contains_key(key) {
                 for (resolution, value) in data.iter() {
-                    self.data.get_mut(key).unwrap().insert(resolution.clone(), value.clone());
+                    self.data
+                        .get_mut(key)
+                        .unwrap()
+                        .insert(resolution.clone(), value.clone());
                 }
             } else {
                 self.data.insert(key.clone(), data.clone());
@@ -55,10 +72,22 @@ impl WindowInfoRepository {
 
     /// Get window info by name and size
     /// if name or resolution does not exist, then return None
-    pub fn get_exact<T>(&self, name: &str, window_size: Size<usize>, ui: UI, platform: Platform) -> Option<T> where WindowInfoType: TryInto<T> {
-        if self.data.contains_key(name) &&
-          self.data[name].contains_key(&(window_size, ui, platform)) {
-            return self.data[name][&(window_size, ui, platform)].try_into().ok();
+    pub fn get_exact<T>(
+        &self,
+        name: &str,
+        window_size: Size<usize>,
+        ui: UI,
+        platform: Platform,
+    ) -> Option<T>
+    where
+        WindowInfoType: TryInto<T>,
+    {
+        if self.data.contains_key(name)
+            && self.data[name].contains_key(&(window_size, ui, platform))
+        {
+            return self.data[name][&(window_size, ui, platform)]
+                .try_into()
+                .ok();
         }
 
         None
@@ -66,17 +95,29 @@ impl WindowInfoRepository {
 
     /// Get window info by name and size
     /// if window size does not exists exactly, this function will search for the same resolution family and scale the result
-    pub fn get_auto_scale<T>(&self, name: &str, window_size: Size<usize>, ui: UI, platform: Platform) -> Option<T> where WindowInfoType: TryInto<T> {
+    pub fn get_auto_scale<T>(
+        &self,
+        name: &str,
+        window_size: Size<usize>,
+        ui: UI,
+        platform: Platform,
+    ) -> Option<T>
+    where
+        WindowInfoType: TryInto<T>,
+    {
         if self.data.contains_key(name) {
             if self.data[name].contains_key(&(window_size, ui, platform)) {
-                return self.data[name][&(window_size, ui, platform)].try_into().ok();
+                return self.data[name][&(window_size, ui, platform)]
+                    .try_into()
+                    .ok();
             } else {
                 // todo find a biggest size which can be scaled, this will reduce error
                 // find if a resolution can be scaled
                 for (k, value) in self.data[name].iter() {
                     let size = &k.0;
                     if size.width * window_size.height == size.height * window_size.width
-                        && k.1 == ui && k.2 == platform
+                        && k.1 == ui
+                        && k.2 == platform
                     {
                         let factor: f64 = window_size.width as f64 / size.width as f64;
                         return value.scale(factor).try_into().ok();

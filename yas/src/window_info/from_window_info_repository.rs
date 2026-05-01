@@ -7,6 +7,6 @@ pub trait FromWindowInfoRepository: Sized {
         window_size: Size<usize>,
         ui: UI,
         platform: Platform,
-        repo: &WindowInfoRepository
+        repo: &WindowInfoRepository,
     ) -> anyhow::Result<Self>;
 }

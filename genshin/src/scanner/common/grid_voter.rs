@@ -79,7 +79,11 @@ pub struct PagedGridVoter<T> {
 impl<T> PagedGridVoter<T> {
     /// Create a voter for `total` items using the given grid `mode`.
     pub fn new(total: usize, mode: GridMode) -> Self {
-        Self { mode, total, state: None }
+        Self {
+            mode,
+            total,
+            state: None,
+        }
     }
 
     /// Clear page state. Call when `scan_grid` emits `PageScrolled` (the
@@ -148,7 +152,13 @@ impl<T> PagedGridVoter<T> {
             // Either 1 pass (items 0–12) or 3 passes (items 26+).
             let gi = state.detection.get(idx);
             let ann = state.detection.annotation_snapshot().map(Arc::new);
-            ready.push(ReadyItem { idx, image, metadata: gi, grid_annotation: ann, payload });
+            ready.push(ReadyItem {
+                idx,
+                image,
+                metadata: gi,
+                grid_annotation: ann,
+                payload,
+            });
         }
 
         ready
@@ -171,7 +181,9 @@ impl<T> PagedGridVoter<T> {
             None => return Vec::new(),
         };
         if state.passes_done == 2 {
-            state.detection.detect_pass(trigger_image, scaler, trigger_idx);
+            state
+                .detection
+                .detect_pass(trigger_image, scaler, trigger_idx);
             state.passes_done = 3;
         }
         let ann = state.detection.annotation_snapshot().map(Arc::new);

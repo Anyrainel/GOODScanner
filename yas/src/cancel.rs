@@ -67,12 +67,9 @@ impl CancelToken {
     /// Cancel with a specific reason. First writer wins — subsequent
     /// calls are no-ops (the original reason is preserved).
     pub fn cancel(&self, reason: StopReason) {
-        let _ = self.inner.compare_exchange(
-            0,
-            reason as u8,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        );
+        let _ = self
+            .inner
+            .compare_exchange(0, reason as u8, Ordering::Relaxed, Ordering::Relaxed);
     }
 
     /// Check the right mouse button and cancel with `UserAbort` if pressed.

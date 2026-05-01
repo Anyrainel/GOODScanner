@@ -34,7 +34,7 @@ unsafe fn unsafe_capture(rect: Rect<i32>) -> Result<Vec<u8>> {
         dc_window,
         rect.left,
         rect.top,
-        SRCCOPY
+        SRCCOPY,
     );
     if result == 0 {
         return Err(anyhow!("屏幕截取失败 / BitBlt failed"));
@@ -52,7 +52,7 @@ unsafe fn unsafe_capture(rect: Rect<i32>) -> Result<Vec<u8>> {
     GetObjectW(
         hbm as *mut c_void,
         size_of::<BITMAP>() as i32,
-        (&mut bitmap) as *mut BITMAP as *mut c_void
+        (&mut bitmap) as *mut BITMAP as *mut c_void,
     );
 
     let mut bi: BITMAPINFOHEADER = BITMAPINFOHEADER {
@@ -80,7 +80,7 @@ unsafe fn unsafe_capture(rect: Rect<i32>) -> Result<Vec<u8>> {
         // lpbitmap,
         buffer.as_mut_ptr() as *mut c_void,
         (&mut bi) as *mut BITMAPINFOHEADER as *mut BITMAPINFO,
-        DIB_RGB_COLORS
+        DIB_RGB_COLORS,
     );
 
     DeleteObject(hbm as *mut c_void);
@@ -102,24 +102,18 @@ impl WinapiCapturer {
 
 impl Capturer<RgbImage> for WinapiCapturer {
     fn capture_rect(&self, rect: Rect<i32>) -> Result<RgbImage> {
-        let raw: Vec<u8> = unsafe {
-            unsafe_capture(rect)?
-        };
+        let raw: Vec<u8> = unsafe { unsafe_capture(rect)? };
 
         let height = rect.height as u32;
         let width = rect.width as u32;
 
-        let img = ImageBuffer::from_fn(
-            rect.width as u32,
-            rect.height as u32,
-            move |x, y| {
-                let y = height - y - 1;
-                let b = raw[((y * width + x) * 4 + 0) as usize];
-                let g = raw[((y * width + x) * 4 + 1) as usize];
-                let r = raw[((y * width + x) * 4 + 2) as usize];
-                image::Rgb([r, g, b])
-            }
-        );
+        let img = ImageBuffer::from_fn(rect.width as u32, rect.height as u32, move |x, y| {
+            let y = height - y - 1;
+            let b = raw[((y * width + x) * 4 + 0) as usize];
+            let g = raw[((y * width + x) * 4 + 1) as usize];
+            let r = raw[((y * width + x) * 4 + 2) as usize];
+            image::Rgb([r, g, b])
+        });
 
         Ok(img)
     }
@@ -130,7 +124,7 @@ impl Capturer<RgbImage> for WinapiCapturer {
                 left: pos.x,
                 top: pos.y,
                 width: 1,
-                height: 1
+                height: 1,
             })?
         };
         let r = raw[2];

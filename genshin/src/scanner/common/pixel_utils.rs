@@ -60,7 +60,12 @@ pub const ICON_BRIGHT_ABSENT: u32 = 208;
 
 /// Get the average brightness of a pixel at base 1920x1080 coordinates.
 /// Returns 0 if out of bounds.
-pub fn get_pixel_brightness(image: &RgbImage, scaler: &CoordScaler, base_x: f64, base_y: f64) -> u32 {
+pub fn get_pixel_brightness(
+    image: &RgbImage,
+    scaler: &CoordScaler,
+    base_x: f64,
+    base_y: f64,
+) -> u32 {
     let x = scaler.x(base_x) as u32;
     let y = scaler.y(base_y) as u32;
     if x >= image.width() || y >= image.height() {
@@ -82,12 +87,17 @@ pub fn get_pixel_brightness(image: &RgbImage, scaler: &CoordScaler, base_x: f64,
 /// All astraled artifacts are locked in-game, so this means the lock icon
 /// animation hasn't settled yet.
 pub fn is_artifact_icon_ambiguous(image: &RgbImage, scaler: &CoordScaler) -> bool {
-    use super::constants::{ARTIFACT_LOCK_POS1, ARTIFACT_ASTRAL_POS1};
+    use super::constants::{ARTIFACT_ASTRAL_POS1, ARTIFACT_LOCK_POS1};
     let lock_b = get_pixel_brightness(image, scaler, ARTIFACT_LOCK_POS1.0, ARTIFACT_LOCK_POS1.1);
     if lock_b >= ICON_BRIGHT_PRESENT && lock_b <= ICON_BRIGHT_ABSENT {
         return true;
     }
-    let astral_b = get_pixel_brightness(image, scaler, ARTIFACT_ASTRAL_POS1.0, ARTIFACT_ASTRAL_POS1.1);
+    let astral_b = get_pixel_brightness(
+        image,
+        scaler,
+        ARTIFACT_ASTRAL_POS1.0,
+        ARTIFACT_ASTRAL_POS1.1,
+    );
     if astral_b >= ICON_BRIGHT_PRESENT && astral_b <= ICON_BRIGHT_ABSENT {
         return true;
     }
@@ -132,8 +142,10 @@ pub fn is_pixel_dark(image: &RgbImage, scaler: &CoordScaler, base_x: f64, base_y
 pub fn detect_dark_icon(
     image: &RgbImage,
     scaler: &CoordScaler,
-    x1: f64, y1: f64,
-    x2: f64, y2: f64,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
     label: &str,
 ) -> bool {
     let d1 = is_pixel_dark(image, scaler, x1, y1);
@@ -142,7 +154,13 @@ pub fn detect_dark_icon(
         log_debug!(
             "[{}] 检测不一致: ({},{})={} ({},{})={}",
             "[{}] detection inconsistent: ({},{})={} ({},{})={}",
-            label, x1, y1, d1, x2, y2, d2
+            label,
+            x1,
+            y1,
+            d1,
+            x2,
+            y2,
+            d2
         );
     }
     d1
@@ -150,17 +168,32 @@ pub fn detect_dark_icon(
 
 /// Check if the "5-star sort by acquired time" filter is active.
 /// When active, the pixel at ARTIFACT_FIVE_STAR_FILTER_POS is light (not dark).
-/// Uses the same brightness < 128 threshold as `is_pixel_dark`.
+/// HDR WGC dumps make the active checkmark pixel much darker than SDR:
+/// RGB(117,129,145), brightness 130 on the sampled 4K captures. Use a
+/// profile-specific threshold so that detector has margin in both modes.
 pub fn is_five_star_filter_active(image: &RgbImage, scaler: &CoordScaler) -> bool {
     use super::constants::ARTIFACT_FIVE_STAR_FILTER_POS;
-    let bright = !is_pixel_dark(image, scaler, ARTIFACT_FIVE_STAR_FILTER_POS.0, ARTIFACT_FIVE_STAR_FILTER_POS.1);
-    if bright {
+    let threshold = if super::pixel_profile::is_hdr_mode() {
+        120
+    } else {
+        128
+    };
+    let brightness = get_pixel_brightness(
+        image,
+        scaler,
+        ARTIFACT_FIVE_STAR_FILTER_POS.0,
+        ARTIFACT_FIVE_STAR_FILTER_POS.1,
+    );
+    let active = brightness >= threshold;
+    if active {
         log_debug!(
-            "[backpack] 检测到五星排序筛选已开启，将点击关闭",
-            "[backpack] 5-star sort filter detected as active, will click to dismiss"
+            "[backpack] 检测到五星排序筛选已开启，将点击关闭(brightness={}, threshold={})",
+            "[backpack] 5-star sort filter detected as active, will click to dismiss (brightness={}, threshold={})",
+            brightness,
+            threshold
         );
     }
-    bright
+    active
 }
 
 /// Detect weapon rarity from star pixels.
@@ -204,10 +237,15 @@ pub fn detect_weapon_rarity(image: &RgbImage, scaler: &CoordScaler) -> i32 {
         2
     } else {
         // Fallback to original single-pixel checks
-        if is_star_yellow(image, scaler, 1485.0, STAR_Y) { 5 }
-        else if is_star_yellow(image, scaler, 1450.0, STAR_Y) { 4 }
-        else if is_star_yellow(image, scaler, 1416.0, STAR_Y) { 3 }
-        else { 2 }
+        if is_star_yellow(image, scaler, 1485.0, STAR_Y) {
+            5
+        } else if is_star_yellow(image, scaler, 1450.0, STAR_Y) {
+            4
+        } else if is_star_yellow(image, scaler, 1416.0, STAR_Y) {
+            3
+        } else {
+            2
+        }
     };
 
     let star_pos = match rarity {
@@ -299,7 +337,8 @@ pub fn artifact_below_min_rarity(image: &RgbImage, scaler: &CoordScaler, min_rar
         log_debug!(
             "[rarity] {}星 < 最低{}星，应停止",
             "[rarity] {}* < min {}*, should stop",
-            rarity, min_rarity
+            rarity,
+            min_rarity
         );
         true
     } else {
@@ -314,7 +353,8 @@ pub fn weapon_below_min_rarity(image: &RgbImage, scaler: &CoordScaler, min_rarit
         log_debug!(
             "[rarity] {}星 < 最低{}星，应停止",
             "[rarity] {}* < min {}*, should stop",
-            rarity, min_rarity
+            rarity,
+            min_rarity
         );
         true
     } else {
@@ -390,15 +430,17 @@ pub fn is_substat_dimmed(
 pub fn detect_weapon_lock(image: &RgbImage, scaler: &CoordScaler) -> bool {
     use super::constants::{WEAPON_LOCK_POS1, WEAPON_LOCK_POS2};
     let locked = detect_dark_icon(
-        image, scaler,
-        WEAPON_LOCK_POS1.0, WEAPON_LOCK_POS1.1,
-        WEAPON_LOCK_POS2.0, WEAPON_LOCK_POS2.1,
+        image,
+        scaler,
+        WEAPON_LOCK_POS1.0,
+        WEAPON_LOCK_POS1.1,
+        WEAPON_LOCK_POS2.0,
+        WEAPON_LOCK_POS2.1,
         "\u{6B66}\u{5668}\u{9501}\u{5B9A}", // 武器锁定
     );
     let pos = (WEAPON_LOCK_POS1.0, WEAPON_LOCK_POS1.1);
     let rgb = read_pixel_rgb(image, scaler, pos.0, pos.1);
-    super::annotator::record_pixel("lock", pos, rgb,
-        if locked { "locked" } else { "unlocked" });
+    super::annotator::record_pixel("lock", pos, rgb, if locked { "locked" } else { "unlocked" });
     locked
 }
 
@@ -409,15 +451,17 @@ pub fn detect_weapon_lock(image: &RgbImage, scaler: &CoordScaler) -> bool {
 pub fn detect_artifact_lock(image: &RgbImage, scaler: &CoordScaler, y_shift: f64) -> bool {
     use super::constants::{ARTIFACT_LOCK_POS1, ARTIFACT_LOCK_POS2};
     let locked = detect_dark_icon(
-        image, scaler,
-        ARTIFACT_LOCK_POS1.0, ARTIFACT_LOCK_POS1.1 + y_shift,
-        ARTIFACT_LOCK_POS2.0, ARTIFACT_LOCK_POS2.1 + y_shift,
+        image,
+        scaler,
+        ARTIFACT_LOCK_POS1.0,
+        ARTIFACT_LOCK_POS1.1 + y_shift,
+        ARTIFACT_LOCK_POS2.0,
+        ARTIFACT_LOCK_POS2.1 + y_shift,
         "\u{5723}\u{9057}\u{7269}\u{9501}\u{5B9A}", // 圣遗物锁定
     );
     let pos = (ARTIFACT_LOCK_POS1.0, ARTIFACT_LOCK_POS1.1 + y_shift);
     let rgb = read_pixel_rgb(image, scaler, pos.0, pos.1);
-    super::annotator::record_pixel("lock", pos, rgb,
-        if locked { "locked" } else { "unlocked" });
+    super::annotator::record_pixel("lock", pos, rgb, if locked { "locked" } else { "unlocked" });
     locked
 }
 
@@ -446,8 +490,18 @@ pub fn verify_artifact_lock_toggled(
     desired_lock: bool,
 ) -> bool {
     use super::constants::{ARTIFACT_LOCK_POS1, ARTIFACT_LOCK_POS2};
-    let b1 = get_pixel_brightness(image, scaler, ARTIFACT_LOCK_POS1.0, ARTIFACT_LOCK_POS1.1 + y_shift);
-    let b2 = get_pixel_brightness(image, scaler, ARTIFACT_LOCK_POS2.0, ARTIFACT_LOCK_POS2.1 + y_shift);
+    let b1 = get_pixel_brightness(
+        image,
+        scaler,
+        ARTIFACT_LOCK_POS1.0,
+        ARTIFACT_LOCK_POS1.1 + y_shift,
+    );
+    let b2 = get_pixel_brightness(
+        image,
+        scaler,
+        ARTIFACT_LOCK_POS2.0,
+        ARTIFACT_LOCK_POS2.1 + y_shift,
+    );
     let ok = if desired_lock {
         // Expect darkening: below "definitely bright" threshold
         b1 < ICON_BRIGHT_ABSENT || b2 < ICON_BRIGHT_ABSENT
@@ -458,7 +512,10 @@ pub fn verify_artifact_lock_toggled(
     log_debug!(
         "[verify_lock] desired={} b1={} b2={} ok={}",
         "[verify_lock] desired={} b1={} b2={} ok={}",
-        desired_lock, b1, b2, ok
+        desired_lock,
+        b1,
+        b2,
+        ok
     );
     ok
 }
@@ -470,15 +527,22 @@ pub fn verify_artifact_lock_toggled(
 pub fn detect_artifact_astral_mark(image: &RgbImage, scaler: &CoordScaler, y_shift: f64) -> bool {
     use super::constants::{ARTIFACT_ASTRAL_POS1, ARTIFACT_ASTRAL_POS2};
     let marked = detect_dark_icon(
-        image, scaler,
-        ARTIFACT_ASTRAL_POS1.0, ARTIFACT_ASTRAL_POS1.1 + y_shift,
-        ARTIFACT_ASTRAL_POS2.0, ARTIFACT_ASTRAL_POS2.1 + y_shift,
+        image,
+        scaler,
+        ARTIFACT_ASTRAL_POS1.0,
+        ARTIFACT_ASTRAL_POS1.1 + y_shift,
+        ARTIFACT_ASTRAL_POS2.0,
+        ARTIFACT_ASTRAL_POS2.1 + y_shift,
         "\u{5723}\u{9057}\u{7269}\u{6536}\u{85CF}", // 圣遗物收藏
     );
     let pos = (ARTIFACT_ASTRAL_POS1.0, ARTIFACT_ASTRAL_POS1.1 + y_shift);
     let rgb = read_pixel_rgb(image, scaler, pos.0, pos.1);
-    super::annotator::record_pixel("astral", pos, rgb,
-        if marked { "marked" } else { "unmarked" });
+    super::annotator::record_pixel(
+        "astral",
+        pos,
+        rgb,
+        if marked { "marked" } else { "unmarked" },
+    );
     marked
 }
 
@@ -490,11 +554,7 @@ pub fn detect_artifact_astral_mark(image: &RgbImage, scaler: &CoordScaler, y_shi
 /// similar brightness) and captures the glow vs dark-circle region.
 ///
 /// Returns the average (R+G+B)/3 brightness of sampled pixels.
-fn sample_constellation_brightness(
-    image: &RgbImage,
-    scaler: &CoordScaler,
-    c_index: usize,
-) -> f64 {
+fn sample_constellation_brightness(image: &RgbImage, scaler: &CoordScaler, c_index: usize) -> f64 {
     use super::constants::{
         CONSTELLATION_NODES, CONSTELLATION_RING_INNER, CONSTELLATION_RING_OUTER,
     };
@@ -530,7 +590,11 @@ fn sample_constellation_brightness(
         bx += 2;
     }
 
-    if count > 0 { sum / count as f64 } else { 0.0 }
+    if count > 0 {
+        sum / count as f64
+    } else {
+        0.0
+    }
 }
 
 /// Per-node constellation detection result (for annotation).
@@ -571,7 +635,8 @@ pub fn detect_constellation_pixel(image: &RgbImage, scaler: &CoordScaler) -> Con
     }
 
     // Per-position threshold check
-    let active: [bool; 6] = std::array::from_fn(|ci| brightnesses[ci] >= CONSTELLATION_THRESHOLDS[ci]);
+    let active: [bool; 6] =
+        std::array::from_fn(|ci| brightnesses[ci] >= CONSTELLATION_THRESHOLDS[ci]);
 
     // Monotonicity: constellation = first locked position
     let mut constellation = 0;

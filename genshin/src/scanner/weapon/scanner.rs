@@ -3,13 +3,15 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Result};
 use image::{GenericImageView, RgbImage};
-use yas::{log_debug, log_error, log_info, log_warn};
 use regex::Regex;
+use yas::{log_debug, log_error, log_info, log_warn};
 
 use yas::ocr::ImageToText;
 
 use super::GoodWeaponScannerConfig;
-use crate::scanner::common::backpack_scanner::{BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction};
+use crate::scanner::common::backpack_scanner::{
+    BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction,
+};
 use crate::scanner::common::constants::*;
 use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::equip_parser;
@@ -102,10 +104,7 @@ pub(crate) enum WeaponScanResult {
 }
 
 impl GoodWeaponScanner {
-    pub fn new(
-        config: GoodWeaponScannerConfig,
-        mappings: Arc<MappingManager>,
-    ) -> Result<Self> {
+    pub fn new(config: GoodWeaponScannerConfig, mappings: Arc<MappingManager>) -> Result<Self> {
         Ok(Self {
             config,
             mappings,
@@ -165,14 +164,27 @@ impl GoodWeaponScanner {
         annotator::record_ocr("name", ocr_regions.name, &name_text);
         annotator::set_label_below("name");
         if let Some((entity, key)) = &weapon_pair {
-            log_debug!("[weapon] 名称OCR: {:?} -> {} ({})", "[weapon] name OCR: {:?} -> {} ({})", name_text, entity, key);
+            log_debug!(
+                "[weapon] 名称OCR: {:?} -> {} ({})",
+                "[weapon] name OCR: {:?} -> {} ({})",
+                name_text,
+                entity,
+                key
+            );
         }
 
         if weapon_key.is_none() {
             // Check if it's a stop-signal weapon/material
-            for &stop_name in WEAPON_STOP_NAMES.iter().chain(WEAPON_FORGING_STOP_NAMES.iter()) {
+            for &stop_name in WEAPON_STOP_NAMES
+                .iter()
+                .chain(WEAPON_FORGING_STOP_NAMES.iter())
+            {
                 if name_text.contains(stop_name) {
-                    log_info!("[weapon] 检测到「{}」，停止扫描", "[weapon] detected 「{}」, stopping", stop_name);
+                    log_info!(
+                        "[weapon] 检测到「{}」，停止扫描",
+                        "[weapon] detected 「{}」, stopping",
+                        stop_name
+                    );
                     annotator::finalize_skip(&format!("stop signal: {}", stop_name));
                     return Ok(WeaponScanResult::Stop);
                 }
@@ -184,12 +196,22 @@ impl GoodWeaponScanner {
             }
 
             if config.continue_on_failure {
-                log_warn!("[weapon] 无法匹配「{}」，跳过", "[weapon] cannot match: 「{}」, skipping", name_text);
-                annotator::finalize_error(None, &format!("cannot match weapon name: {}", name_text));
+                log_warn!(
+                    "[weapon] 无法匹配「{}」，跳过",
+                    "[weapon] cannot match: 「{}」, skipping",
+                    name_text
+                );
+                annotator::finalize_error(
+                    None,
+                    &format!("cannot match weapon name: {}", name_text),
+                );
                 return Ok(WeaponScanResult::Skip);
             }
             annotator::finalize_error(None, &format!("cannot match weapon name: {}", name_text));
-            bail!("无法匹配武器 / Cannot match weapon: \u{300C}{}\u{300D}", name_text);
+            bail!(
+                "无法匹配武器 / Cannot match weapon: \u{300C}{}\u{300D}",
+                name_text
+            );
         }
 
         let (cn_name_owned, weapon_key) = weapon_pair.unwrap();
@@ -202,8 +224,14 @@ impl GoodWeaponScanner {
         let (level, ascended) = Self::parse_weapon_level(&level_text);
         let level_display = level_cap_display(level, ascended);
         // Show raw OCR only if it doesn't trivially resolve to the same level/cap
-        let raw_digits: String = level_text.chars().filter(|c| c.is_ascii_digit() || *c == '/').collect();
-        let display_digits: String = level_display.chars().filter(|c| c.is_ascii_digit() || *c == '/').collect();
+        let raw_digits: String = level_text
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == '/')
+            .collect();
+        let display_digits: String = level_display
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == '/')
+            .collect();
         if raw_digits == display_digits {
             annotator::record_ocr("level", ocr_regions.level, &level_display);
         } else {
@@ -224,24 +252,43 @@ impl GoodWeaponScanner {
         let mut location = Self::parse_equip_location(&equip_text, mappings);
         if location.is_empty() && equip_text.trim().len() >= 2 {
             if let Some(fallback) = equip_fallback_ocr {
-                let equip_text_v5 = Self::ocr_image_region(fallback, image, ocr_regions.equip, scaler)?;
+                let equip_text_v5 =
+                    Self::ocr_image_region(fallback, image, ocr_regions.equip, scaler)?;
                 location = Self::parse_equip_location(&equip_text_v5, mappings);
                 if !location.is_empty() {
-                    log_debug!("[weapon] {} 装备: v4「{}」失败, v5「{}」→ {}", "[weapon] {} equip: v4「{}」failed, v5「{}」→ {}", weapon_key, equip_text.trim(), equip_text_v5.trim(), location);
-                    annotator::add_warning(&format!("equip: v4「{}」failed, v5「{}」matched",
-                        equip_text.trim(), equip_text_v5.trim()));
+                    log_debug!(
+                        "[weapon] {} 装备: v4「{}」失败, v5「{}」→ {}",
+                        "[weapon] {} equip: v4「{}」failed, v5「{}」→ {}",
+                        weapon_key,
+                        equip_text.trim(),
+                        equip_text_v5.trim(),
+                        location
+                    );
+                    annotator::add_warning(&format!(
+                        "equip: v4「{}」failed, v5「{}」matched",
+                        equip_text.trim(),
+                        equip_text_v5.trim()
+                    ));
                 }
             }
         }
         if !equip_text.is_empty() {
-            log_debug!("[weapon] {} 装备OCR: {:?} -> {}", "[weapon] {} equip OCR: {:?} -> {}", weapon_key, equip_text, location);
+            log_debug!(
+                "[weapon] {} 装备OCR: {:?} -> {}",
+                "[weapon] {} equip OCR: {:?} -> {}",
+                weapon_key,
+                equip_text,
+                location
+            );
         }
         annotator::record_ocr("equip", ocr_regions.equip, &equip_text);
         if location.is_empty() {
             annotator::set_final("equip", "(none)");
         } else {
             annotator::set_final("equip", &location);
-            let cn_name = mappings.character_name_map.iter()
+            let cn_name = mappings
+                .character_name_map
+                .iter()
                 .find(|(_, v)| v.as_str() == location)
                 .map(|(cn, _)| cn.as_str())
                 .unwrap_or(&location);
@@ -252,8 +299,10 @@ impl GoodWeaponScanner {
         let rarity = pixel_utils::detect_weapon_rarity(image, scaler);
         // Lock: use grid detection when available, fall back to panel pixel detection
         let lock = if let Some(gi) = grid_icons {
-            annotator::add_warning(&format!("lock={} (source: grid)",
-                if gi.lock { "locked" } else { "unlocked" }));
+            annotator::add_warning(&format!(
+                "lock={} (source: grid)",
+                if gi.lock { "locked" } else { "unlocked" }
+            ));
             gi.lock
         } else {
             pixel_utils::detect_weapon_lock(image, scaler)
@@ -331,7 +380,13 @@ impl GoodWeaponScanner {
         if let Some((lv, mx)) = Self::try_split_digits(&digits) {
             let max_level = Self::snap_max_level(mx);
             let ascended = lv >= 20 && lv < max_level;
-            log_debug!("[weapon] 等级OCR直接分割: {:?} -> {}/{}", "[weapon] level OCR direct split: {:?} -> {}/{}", text, lv, max_level);
+            log_debug!(
+                "[weapon] 等级OCR直接分割: {:?} -> {}/{}",
+                "[weapon] level OCR direct split: {:?} -> {}/{}",
+                text,
+                lv,
+                max_level
+            );
             return (lv, ascended);
         }
 
@@ -355,7 +410,14 @@ impl GoodWeaponScanner {
             if let Some((lv, mx, idx, _)) = best {
                 let max_level = Self::snap_max_level(mx);
                 let ascended = lv >= 20 && lv < max_level;
-                log_debug!("[weapon] 等级OCR去噪: {:?} (移除索引 {}) -> {}/{}", "[weapon] level OCR noise-remove: {:?} (rm idx {}) -> {}/{}", text, idx, lv, max_level);
+                log_debug!(
+                    "[weapon] 等级OCR去噪: {:?} (移除索引 {}) -> {}/{}",
+                    "[weapon] level OCR noise-remove: {:?} (rm idx {}) -> {}/{}",
+                    text,
+                    idx,
+                    lv,
+                    max_level
+                );
                 return (lv, ascended);
             }
         }
@@ -363,17 +425,31 @@ impl GoodWeaponScanner {
         // Phase 3: partial extract — just the level number
         if let Some(caps) = LV_RE.captures(text) {
             let level: i32 = caps[1].parse().unwrap_or(1);
-            log_debug!("[weapon] 等级OCR部分匹配(Lv): {:?} -> {}", "[weapon] level OCR partial (Lv): {:?} -> {}", text, level);
+            log_debug!(
+                "[weapon] 等级OCR部分匹配(Lv): {:?} -> {}",
+                "[weapon] level OCR partial (Lv): {:?} -> {}",
+                text,
+                level
+            );
             return (level, false);
         }
 
         let level: i32 = digits.parse().unwrap_or(0);
         if (1..=90).contains(&level) {
-            log_debug!("[weapon] 等级OCR纯数字: {:?} -> {}", "[weapon] level OCR bare digits: {:?} -> {}", text, level);
+            log_debug!(
+                "[weapon] 等级OCR纯数字: {:?} -> {}",
+                "[weapon] level OCR bare digits: {:?} -> {}",
+                text,
+                level
+            );
             return (level, false);
         }
 
-        log_warn!("[weapon] 等级OCR失败: {:?}", "[weapon] level OCR failed: {:?}", text);
+        log_warn!(
+            "[weapon] 等级OCR失败: {:?}",
+            "[weapon] level OCR failed: {:?}",
+            text
+        );
         (1, false)
     }
 
@@ -434,9 +510,13 @@ impl GoodWeaponScanner {
             // Return to main world using BGI-style strategy:
             // press Escape one at a time, verify after each press.
             ctrl.focus_game_window();
-            if cancel.check_rmb() { anyhow::bail!("cancelled"); }
+            if cancel.check_rmb() {
+                anyhow::bail!("cancelled");
+            }
             ctrl.return_to_main_ui(8);
-            if cancel.check_rmb() { anyhow::bail!("cancelled"); }
+            if cancel.check_rmb() {
+                anyhow::bail!("cancelled");
+            }
         }
 
         let mut bp = BackpackScanner::new(ctrl);
@@ -445,7 +525,9 @@ impl GoodWeaponScanner {
             bp.open_backpack(self.config.open_delay);
         }
         bp.select_tab("weapon", self.config.delay_tab);
-        if cancel.check_rmb() { anyhow::bail!("cancelled"); }
+        if cancel.check_rmb() {
+            anyhow::bail!("cancelled");
+        }
 
         // Borrow a model from the v4 pool for reading item count
         let count_ocr_guard = pools.v4().get();
@@ -453,11 +535,18 @@ impl GoodWeaponScanner {
 
         // If count is 0, try reopening backpack
         let total_count = if current_count == 0 {
-            log_debug!("[weapon] 数量=0，重新打开背包...", "[weapon] count=0, reopening backpack...");
+            log_debug!(
+                "[weapon] 数量=0，重新打开背包...",
+                "[weapon] count=0, reopening backpack..."
+            );
             drop(bp);
-            if cancel.check_rmb() { anyhow::bail!("cancelled"); }
+            if cancel.check_rmb() {
+                anyhow::bail!("cancelled");
+            }
             ctrl.return_to_main_ui(4);
-            if cancel.check_rmb() { anyhow::bail!("cancelled"); }
+            if cancel.check_rmb() {
+                anyhow::bail!("cancelled");
+            }
             let mut bp2 = BackpackScanner::new(ctrl);
             bp2.open_backpack(self.config.open_delay);
             bp2.select_tab("weapon", self.config.delay_tab);
@@ -476,7 +565,13 @@ impl GoodWeaponScanner {
 
         let total_count = if self.config.max_count > 0 {
             let capped = (total_count as usize).min(self.config.max_count + start_at) as i32;
-            log_debug!("[weapon] 总计: {} (受max_count={}限制，截取为{})", "[weapon] total: {} (capped to {} by max_count={})", total_count, self.config.max_count, capped);
+            log_debug!(
+                "[weapon] 总计: {} (受max_count={}限制，截取为{})",
+                "[weapon] total: {} (capped to {} by max_count={})",
+                total_count,
+                self.config.max_count,
+                capped
+            );
             capped
         } else {
             log_debug!("[weapon] 总计: {}", "[weapon] total: {}", total_count);
@@ -501,58 +596,61 @@ impl GoodWeaponScanner {
         let worker_ocr_regions = WeaponOcrRegions::new();
         let worker_cancel = cancel.clone();
 
-        let (item_tx, worker_handle) = scan_worker::start_worker::<Option<GridIconResult>, GoodWeapon, _>(
-            total_count as usize,
-            move |work_item: WorkItem<Option<GridIconResult>>| {
-                // Skip queued work if the run was cancelled mid-scan.
-                if worker_cancel.is_cancelled() {
-                    return Ok(None);
-                }
+        let (item_tx, worker_handle) =
+            scan_worker::start_worker::<Option<GridIconResult>, GoodWeapon, _>(
+                total_count as usize,
+                move |work_item: WorkItem<Option<GridIconResult>>| {
+                    // Skip queued work if the run was cancelled mid-scan.
+                    if worker_cancel.is_cancelled() {
+                        return Ok(None);
+                    }
 
-                annotator::begin_item("weapons", work_item.index, &worker_scaler);
-                annotator::add_image("panel", &work_item.image);
-                if let Some(ref ann) = work_item.grid_annotation {
-                    annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
-                }
+                    annotator::begin_item("weapons", work_item.index, &worker_scaler);
+                    annotator::add_image("panel", &work_item.image);
+                    if let Some(ref ann) = work_item.grid_annotation {
+                        annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
+                    }
 
-                let ocr_guard = worker_ocr_pool.get();
-                let equip_guard = worker_equip_pool.get();
+                    let ocr_guard = worker_ocr_pool.get();
+                    let equip_guard = worker_equip_pool.get();
 
-                match Self::scan_single_weapon(
-                    &ocr_guard,
-                    Some(&equip_guard as &dyn ImageToText<RgbImage>),
-                    &work_item.image,
-                    &worker_scaler,
-                    &worker_ocr_regions,
-                    &worker_mappings,
-                    &worker_config,
-                    work_item.index,
-                    work_item.metadata,
-                ) {
-                    Ok(WeaponScanResult::Weapon(weapon)) => {
-                        if weapon.rarity >= worker_config.min_rarity {
-                            Ok(Some(weapon))
-                        } else {
-                            annotator::finalize_skip("below min rarity filter");
+                    match Self::scan_single_weapon(
+                        &ocr_guard,
+                        Some(&equip_guard as &dyn ImageToText<RgbImage>),
+                        &work_item.image,
+                        &worker_scaler,
+                        &worker_ocr_regions,
+                        &worker_mappings,
+                        &worker_config,
+                        work_item.index,
+                        work_item.metadata,
+                    ) {
+                        Ok(WeaponScanResult::Weapon(weapon)) => {
+                            if weapon.rarity >= worker_config.min_rarity {
+                                Ok(Some(weapon))
+                            } else {
+                                annotator::finalize_skip("below min rarity filter");
+                                Ok(None)
+                            }
+                        },
+                        Ok(WeaponScanResult::Stop) => {
+                            annotator::finalize_skip("stop signal");
                             Ok(None)
-                        }
+                        },
+                        Ok(WeaponScanResult::Skip) => Ok(None),
+                        Err(e) => {
+                            annotator::finalize_error(None, &e.to_string());
+                            Err(e)
+                        },
                     }
-                    Ok(WeaponScanResult::Stop) => {
-                        annotator::finalize_skip("stop signal");
-                        Ok(None)
-                    }
-                    Ok(WeaponScanResult::Skip) => Ok(None),
-                    Err(e) => {
-                        annotator::finalize_error(None, &e.to_string());
-                        Err(e)
-                    }
-                }
-            },
-        );
+                },
+            );
 
         let scan_config = BackpackScanConfig {
             delay_scroll: self.config.delay_scroll,
-            panel_wait: PanelWaitMode::FixedDelay { delay_ms: self.config.panel_delay },
+            panel_wait: PanelWaitMode::FixedDelay {
+                delay_ms: self.config.panel_delay,
+            },
             extra_delay: 0,
             probe_last_cell_per_page: false,
             detect_grid_duplicates: true,
@@ -571,7 +669,12 @@ impl GoodWeaponScanner {
             for item in ready {
                 let worker_idx = item.idx - start_at;
                 if item_tx
-                    .send(WorkItem { index: worker_idx, image: item.image, metadata: item.metadata, grid_annotation: item.grid_annotation })
+                    .send(WorkItem {
+                        index: worker_idx,
+                        image: item.image,
+                        metadata: item.metadata,
+                        grid_annotation: item.grid_annotation,
+                    })
                     .is_err()
                 {
                     log_error!("[weapon] 工作通道已关闭", "[weapon] worker channel closed");
@@ -587,7 +690,7 @@ impl GoodWeaponScanner {
             GridEvent::PageScrolled => {
                 voter.reset_page();
                 ScanAction::Continue
-            }
+            },
             GridEvent::Item { idx, image, .. } => {
                 if worker_handle.stop_requested() {
                     return ScanAction::Stop;
@@ -605,7 +708,7 @@ impl GoodWeaponScanner {
                     return ScanAction::Stop;
                 }
                 ScanAction::Continue
-            }
+            },
         });
 
         let leftover = voter.final_flush(&scaler);
@@ -616,8 +719,13 @@ impl GoodWeaponScanner {
 
         // Write index map for debug image correlation (output position → folder name)
         if self.config.dump_images {
-            let map_path = std::path::Path::new("debug_images").join("weapons").join("index_map.json");
-            let _ = std::fs::write(&map_path, serde_json::to_string(&index_map).unwrap_or_default());
+            let map_path = std::path::Path::new("debug_images")
+                .join("weapons")
+                .join("index_map.json");
+            let _ = std::fs::write(
+                &map_path,
+                serde_json::to_string(&index_map).unwrap_or_default(),
+            );
         }
 
         let elapsed = now.elapsed().unwrap_or_default().as_secs_f64();
@@ -657,10 +765,10 @@ impl GoodWeaponScanner {
 
         // Name
         let t = Instant::now();
-        let name_text = Self::ocr_image_region(ocr, image, self.ocr_regions.name, scaler)
-            .unwrap_or_default();
-        let name_key = fuzzy_match_map(&name_text, &self.mappings.weapon_name_map)
-            .unwrap_or_default();
+        let name_text =
+            Self::ocr_image_region(ocr, image, self.ocr_regions.name, scaler).unwrap_or_default();
+        let name_key =
+            fuzzy_match_map(&name_text, &self.mappings.weapon_name_map).unwrap_or_default();
         fields.push(DebugOcrField {
             field_name: "name".into(),
             raw_text: name_text,
@@ -671,8 +779,8 @@ impl GoodWeaponScanner {
 
         // Level
         let t = Instant::now();
-        let level_text = Self::ocr_image_region(ocr, image, self.ocr_regions.level, scaler)
-            .unwrap_or_default();
+        let level_text =
+            Self::ocr_image_region(ocr, image, self.ocr_regions.level, scaler).unwrap_or_default();
         let (level, ascended) = Self::parse_weapon_level(&level_text);
         fields.push(DebugOcrField {
             field_name: "level".into(),
@@ -697,13 +805,17 @@ impl GoodWeaponScanner {
 
         // Equip
         let t = Instant::now();
-        let equip_text = Self::ocr_image_region(ocr, image, self.ocr_regions.equip, scaler)
-            .unwrap_or_default();
+        let equip_text =
+            Self::ocr_image_region(ocr, image, self.ocr_regions.equip, scaler).unwrap_or_default();
         let location = Self::parse_equip_location(&equip_text, &self.mappings);
         fields.push(DebugOcrField {
             field_name: "equip".into(),
             raw_text: equip_text,
-            parsed_value: if location.is_empty() { "(none)".into() } else { location.clone() },
+            parsed_value: if location.is_empty() {
+                "(none)".into()
+            } else {
+                location.clone()
+            },
             region: self.ocr_regions.equip,
             duration_ms: t.elapsed().as_millis() as u64,
         });
@@ -769,16 +881,12 @@ mod tests {
         let mappings = make_test_mappings();
         let config = default_config();
 
-        let ocr = FakeOcr::new(vec![
-            "天空之翼",
-            "90/90",
-            "精炼1阶",
-            "",
-        ]);
+        let ocr = FakeOcr::new(vec!["天空之翼", "90/90", "精炼1阶", ""]);
 
         let result = GoodWeaponScanner::scan_single_weapon(
             &ocr, None, &image, &scaler, &regions, &mappings, &config, 0, None,
-        ).unwrap();
+        )
+        .unwrap();
 
         match result {
             WeaponScanResult::Weapon(w) => {
@@ -788,7 +896,7 @@ mod tests {
                 assert_eq!(w.rarity, 5);
                 assert!(w.lock);
                 assert!(w.location.is_empty());
-            }
+            },
             other => panic!("Expected Weapon, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -801,23 +909,19 @@ mod tests {
         let mappings = make_test_mappings();
         let config = default_config();
 
-        let ocr = FakeOcr::new(vec![
-            "护摩之杖",
-            "90/90",
-            "精炼1阶",
-            "胡桃已装备",
-        ]);
+        let ocr = FakeOcr::new(vec!["护摩之杖", "90/90", "精炼1阶", "胡桃已装备"]);
 
         let result = GoodWeaponScanner::scan_single_weapon(
             &ocr, None, &image, &scaler, &regions, &mappings, &config, 0, None,
-        ).unwrap();
+        )
+        .unwrap();
 
         match result {
             WeaponScanResult::Weapon(w) => {
                 assert_eq!(w.key, "StaffOfHoma");
                 assert_eq!(w.location, "HuTao");
                 assert!(!w.lock);
-            }
+            },
             other => panic!("Expected Weapon, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -835,7 +939,8 @@ mod tests {
 
         let result = GoodWeaponScanner::scan_single_weapon(
             &ocr, None, &image, &scaler, &regions, &mappings, &config, 0, None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(matches!(result, WeaponScanResult::Stop));
     }
@@ -853,7 +958,8 @@ mod tests {
 
         let result = GoodWeaponScanner::scan_single_weapon(
             &ocr, None, &image, &scaler, &regions, &mappings, &config, 0, None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(matches!(result, WeaponScanResult::Skip));
     }
@@ -883,17 +989,21 @@ mod tests {
         let mappings = make_test_mappings();
         let config = default_config();
 
-        let ocr = FakeOcr::new(vec![
-            "风鹰剑",
-            "80/90",
-            "精炼3阶",
-            "纳两妲已装备",
-        ]);
+        let ocr = FakeOcr::new(vec!["风鹰剑", "80/90", "精炼3阶", "纳两妲已装备"]);
         let fallback = FakeOcr::new(vec!["纳西妲已装备"]);
 
         let result = GoodWeaponScanner::scan_single_weapon(
-            &ocr, Some(&fallback), &image, &scaler, &regions, &mappings, &config, 0, None,
-        ).unwrap();
+            &ocr,
+            Some(&fallback),
+            &image,
+            &scaler,
+            &regions,
+            &mappings,
+            &config,
+            0,
+            None,
+        )
+        .unwrap();
 
         match result {
             WeaponScanResult::Weapon(w) => {
@@ -901,7 +1011,7 @@ mod tests {
                 assert_eq!(w.location, "Nahida");
                 assert_eq!(w.level, 80);
                 assert_eq!(w.refinement, 3);
-            }
+            },
             other => panic!("Expected Weapon, got {:?}", std::mem::discriminant(&other)),
         }
     }
@@ -914,22 +1024,18 @@ mod tests {
         let mappings = make_test_mappings();
         let config = default_config();
 
-        let ocr = FakeOcr::new(vec![
-            "天空之翼",
-            "80/90",
-            "精炼1阶",
-            "",
-        ]);
+        let ocr = FakeOcr::new(vec!["天空之翼", "80/90", "精炼1阶", ""]);
 
         let result = GoodWeaponScanner::scan_single_weapon(
             &ocr, None, &image, &scaler, &regions, &mappings, &config, 0, None,
-        ).unwrap();
+        )
+        .unwrap();
 
         match result {
             WeaponScanResult::Weapon(w) => {
                 assert_eq!(w.level, 80);
                 assert_eq!(w.ascension, 6);
-            }
+            },
             other => panic!("Expected Weapon, got {:?}", std::mem::discriminant(&other)),
         }
     }

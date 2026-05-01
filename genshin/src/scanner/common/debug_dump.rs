@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
+use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use image::{GenericImageView, Rgb, RgbImage};
 
 use super::coord_scaler::CoordScaler;
@@ -18,24 +18,26 @@ const CJK_FONT_SIZE_BASE: f32 = 24.0;
 static SYSTEM_FONT: OnceLock<Option<FontVec>> = OnceLock::new();
 
 fn get_system_font() -> Option<&'static FontVec> {
-    SYSTEM_FONT.get_or_init(|| {
-        // Try common Windows CJK fonts (present on all Windows 7+)
-        let paths = [
-            "C:/Windows/Fonts/msyh.ttc",    // Microsoft YaHei (微软雅黑)
-            "C:/Windows/Fonts/msyhbd.ttc",   // Microsoft YaHei Bold
-            "C:/Windows/Fonts/simsun.ttc",   // SimSun (宋体)
-            "C:/Windows/Fonts/simhei.ttf",   // SimHei (黑体)
-        ];
-        for path in &paths {
-            if let Ok(data) = std::fs::read(path) {
-                // .ttc files: use index 0 (regular weight)
-                if let Ok(font) = FontVec::try_from_vec_and_index(data, 0) {
-                    return Some(font);
+    SYSTEM_FONT
+        .get_or_init(|| {
+            // Try common Windows CJK fonts (present on all Windows 7+)
+            let paths = [
+                "C:/Windows/Fonts/msyh.ttc",   // Microsoft YaHei (微软雅黑)
+                "C:/Windows/Fonts/msyhbd.ttc", // Microsoft YaHei Bold
+                "C:/Windows/Fonts/simsun.ttc", // SimSun (宋体)
+                "C:/Windows/Fonts/simhei.ttf", // SimHei (黑体)
+            ];
+            for path in &paths {
+                if let Ok(data) = std::fs::read(path) {
+                    // .ttc files: use index 0 (regular weight)
+                    if let Ok(font) = FontVec::try_from_vec_and_index(data, 0) {
+                        return Some(font);
+                    }
                 }
             }
-        }
-        None
-    }).as_ref()
+            None
+        })
+        .as_ref()
 }
 
 /// Draw a text label using the system CJK font (ab_glyph).
@@ -56,7 +58,8 @@ fn draw_label_cjk(
     let ih = image.height() as i32;
 
     // Measure text width
-    let text_w: f32 = text.chars()
+    let text_w: f32 = text
+        .chars()
         .map(|ch| scaled.h_advance(scaled.glyph_id(ch)))
         .sum();
     let bg_w = text_w.ceil() as i32 + pad * 2;
@@ -75,10 +78,8 @@ fn draw_label_cjk(
 
     for ch in text.chars() {
         let glyph_id = scaled.glyph_id(ch);
-        let glyph = glyph_id.with_scale_and_position(
-            PxScale::from(font_size),
-            point(cursor_x, baseline_y),
-        );
+        let glyph =
+            glyph_id.with_scale_and_position(PxScale::from(font_size), point(cursor_x, baseline_y));
 
         if let Some(outlined) = font.outline_glyph(glyph) {
             let bounds = outlined.px_bounds();
@@ -88,13 +89,19 @@ fn draw_label_cjk(
                 if px >= 0 && px < iw && py >= 0 && py < ih && coverage > 0.05 {
                     let existing = image.get_pixel(px as u32, py as u32);
                     let blend = |f: u8, b: u8| -> u8 {
-                        (f as f32 * coverage + b as f32 * (1.0 - coverage)).round().clamp(0.0, 255.0) as u8
+                        (f as f32 * coverage + b as f32 * (1.0 - coverage))
+                            .round()
+                            .clamp(0.0, 255.0) as u8
                     };
-                    image.put_pixel(px as u32, py as u32, Rgb([
-                        blend(fg[0], existing[0]),
-                        blend(fg[1], existing[1]),
-                        blend(fg[2], existing[2]),
-                    ]));
+                    image.put_pixel(
+                        px as u32,
+                        py as u32,
+                        Rgb([
+                            blend(fg[0], existing[0]),
+                            blend(fg[1], existing[1]),
+                            blend(fg[2], existing[2]),
+                        ]),
+                    );
                 }
             });
         }
@@ -107,10 +114,14 @@ fn draw_label_cjk(
 fn label_size_cjk(font: &FontVec, text: &str, font_size: f32) -> (i32, i32) {
     let scaled = font.as_scaled(PxScale::from(font_size));
     let pad = (font_size * 0.15).ceil() as i32;
-    let text_w: f32 = text.chars()
+    let text_w: f32 = text
+        .chars()
         .map(|ch| scaled.h_advance(scaled.glyph_id(ch)))
         .sum();
-    (text_w.ceil() as i32 + pad * 2, font_size.ceil() as i32 + pad * 2)
+    (
+        text_w.ceil() as i32 + pad * 2,
+        font_size.ceil() as i32 + pad * 2,
+    )
 }
 
 // ── Bitmap font fallback (6×8 printable ASCII 32..127) ───────────────────────
@@ -232,8 +243,12 @@ fn draw_rect(image: &mut RgbImage, x: i32, y: i32, w: i32, h: i32, color: Rgb<u8
             let ty = y + t;
             let by = y + h - 1 - t;
             if px >= 0 && px < iw {
-                if ty >= 0 && ty < ih { image.put_pixel(px as u32, ty as u32, color); }
-                if by >= 0 && by < ih { image.put_pixel(px as u32, by as u32, color); }
+                if ty >= 0 && ty < ih {
+                    image.put_pixel(px as u32, ty as u32, color);
+                }
+                if by >= 0 && by < ih {
+                    image.put_pixel(px as u32, by as u32, color);
+                }
             }
         }
         // Left and right edges
@@ -241,14 +256,25 @@ fn draw_rect(image: &mut RgbImage, x: i32, y: i32, w: i32, h: i32, color: Rgb<u8
             let lx = x + t;
             let rx = x + w - 1 - t;
             if py >= 0 && py < ih {
-                if lx >= 0 && lx < iw { image.put_pixel(lx as u32, py as u32, color); }
-                if rx >= 0 && rx < iw { image.put_pixel(rx as u32, py as u32, color); }
+                if lx >= 0 && lx < iw {
+                    image.put_pixel(lx as u32, py as u32, color);
+                }
+                if rx >= 0 && rx < iw {
+                    image.put_pixel(rx as u32, py as u32, color);
+                }
             }
         }
     }
 }
 
-fn draw_crosshair(image: &mut RgbImage, cx: i32, cy: i32, size: i32, thickness: i32, color: Rgb<u8>) {
+fn draw_crosshair(
+    image: &mut RgbImage,
+    cx: i32,
+    cy: i32,
+    size: i32,
+    thickness: i32,
+    color: Rgb<u8>,
+) {
     let iw = image.width() as i32;
     let ih = image.height() as i32;
     let half_t = thickness / 2;
@@ -339,7 +365,15 @@ fn scaled_font_size(image_width: u32) -> f32 {
 /// Draw a label at (x, y) using the best available font.
 /// `font_size` is the pre-computed scaled font size for the current image.
 /// Returns (label_width, label_height).
-fn draw_smart_label(image: &mut RgbImage, x: i32, y: i32, text: &str, fg: Rgb<u8>, bg: Rgb<u8>, font_size: f32) -> (i32, i32) {
+fn draw_smart_label(
+    image: &mut RgbImage,
+    x: i32,
+    y: i32,
+    text: &str,
+    fg: Rgb<u8>,
+    bg: Rgb<u8>,
+    font_size: f32,
+) -> (i32, i32) {
     if let Some(font) = get_system_font() {
         let size = label_size_cjk(font, text, font_size);
         draw_label_cjk(image, font, x, y, text, fg, bg, font_size);
@@ -369,8 +403,14 @@ fn measure_label(text: &str, font_size: f32) -> (i32, i32) {
 /// At a boundary level, `ascended=true` means the cap is the next boundary.
 pub fn level_cap_display(level: i32, ascended: bool) -> String {
     let caps: [(i32, i32); 8] = [
-        (20, 40), (40, 50), (50, 60), (60, 70),
-        (70, 80), (80, 90), (90, 95), (95, 100),
+        (20, 40),
+        (40, 50),
+        (50, 60),
+        (60, 70),
+        (70, 80),
+        (80, 90),
+        (90, 95),
+        (95, 100),
     ];
     let cap = 'find: {
         for &(boundary, next_cap) in &caps {
@@ -450,6 +490,10 @@ impl DumpCollector {
     pub fn new(base_dir: &str, category: &str, index: usize, scaler: &CoordScaler) -> Self {
         let folder = format!("{:04}", index);
         let dir = Path::new(base_dir).join(category).join(folder);
+        // Clear any stale files from a previous scan of this index before writing new output.
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
         let _ = std::fs::create_dir_all(&dir);
         Self {
             dir,
@@ -481,21 +525,29 @@ impl DumpCollector {
         rect: (f64, f64, f64, f64),
         raw_text: &str,
     ) {
-        self.entries.push((img_idx, DumpEntry::OcrRegion {
-            field_name: field_name.to_string(),
-            rect,
-            raw_text: raw_text.to_string(),
-            final_result: String::new(),
-            display_result: String::new(),
-            label_pos: LabelPosition::Auto,
-        }));
+        self.entries.push((
+            img_idx,
+            DumpEntry::OcrRegion {
+                field_name: field_name.to_string(),
+                rect,
+                raw_text: raw_text.to_string(),
+                final_result: String::new(),
+                display_result: String::new(),
+                label_pos: LabelPosition::Auto,
+            },
+        ));
     }
 
     /// Update the final (post-processed) result for a previously recorded OCR entry.
     /// This is the GOOD key / code-level value shown in result.txt.
     pub fn set_final_result(&mut self, field_name: &str, final_result: &str) {
         for (_, entry) in self.entries.iter_mut().rev() {
-            if let DumpEntry::OcrRegion { field_name: ref name, final_result: ref mut fr, .. } = entry {
+            if let DumpEntry::OcrRegion {
+                field_name: ref name,
+                final_result: ref mut fr,
+                ..
+            } = entry
+            {
                 if name == field_name {
                     *fr = final_result.to_string();
                     return;
@@ -509,7 +561,12 @@ impl DumpCollector {
     /// Use this with the Chinese name (not the GOOD key) for entity names.
     pub fn set_display_result(&mut self, field_name: &str, display: &str) {
         for (_, entry) in self.entries.iter_mut().rev() {
-            if let DumpEntry::OcrRegion { field_name: ref name, display_result: ref mut dr, .. } = entry {
+            if let DumpEntry::OcrRegion {
+                field_name: ref name,
+                display_result: ref mut dr,
+                ..
+            } = entry
+            {
                 if name == field_name {
                     *dr = display.to_string();
                     return;
@@ -521,7 +578,12 @@ impl DumpCollector {
     /// Set label position to Below for a field (e.g., weapon name).
     pub fn set_label_below(&mut self, field_name: &str) {
         for (_, entry) in self.entries.iter_mut().rev() {
-            if let DumpEntry::OcrRegion { field_name: ref name, label_pos: ref mut lp, .. } = entry {
+            if let DumpEntry::OcrRegion {
+                field_name: ref name,
+                label_pos: ref mut lp,
+                ..
+            } = entry
+            {
                 if name == field_name {
                     *lp = LabelPosition::Below;
                     return;
@@ -552,25 +614,33 @@ impl DumpCollector {
         result_text: &str,
         color: Option<Rgb<u8>>,
     ) {
-        self.entries.push((img_idx, DumpEntry::PixelCheck {
-            field_name: field_name.to_string(),
-            pos,
-            rgb,
-            result_text: result_text.to_string(),
-            color,
-        }));
+        self.entries.push((
+            img_idx,
+            DumpEntry::PixelCheck {
+                field_name: field_name.to_string(),
+                pos,
+                rgb,
+                result_text: result_text.to_string(),
+                color,
+            },
+        ));
     }
 
     /// Record constellation detection results for annotation.
     /// Draws per-node bounding boxes with yes/no labels and a centered "Cx" label.
     pub fn record_constellation(&mut self, img_idx: usize, result: &ConstellationResult) {
-        let nodes: Vec<_> = result.nodes.iter().map(|n| {
-            (n.pos, n.activated, n.brightness, n.threshold)
-        }).collect();
-        self.entries.push((img_idx, DumpEntry::Constellation {
-            level: result.level,
-            nodes,
-        }));
+        let nodes: Vec<_> = result
+            .nodes
+            .iter()
+            .map(|n| (n.pos, n.activated, n.brightness, n.threshold))
+            .collect();
+        self.entries.push((
+            img_idx,
+            DumpEntry::Constellation {
+                level: result.level,
+                nodes,
+            },
+        ));
     }
 
     /// Record grid overlay for annotation.
@@ -581,7 +651,8 @@ impl DumpCollector {
         cells: Vec<GridCellAnnotation>,
         detections: Vec<(usize, bool, bool)>,
     ) {
-        self.entries.push((img_idx, DumpEntry::GridOverlay { cells, detections }));
+        self.entries
+            .push((img_idx, DumpEntry::GridOverlay { cells, detections }));
     }
 
     /// Add a warning message to the result file.
@@ -618,7 +689,11 @@ impl DumpCollector {
 
         for (img_idx, (label, image)) in self.images.iter().enumerate() {
             // Save the original full image
-            let full_name = if single { "full.png".to_string() } else { format!("full_{}.png", label) };
+            let full_name = if single {
+                "full.png".to_string()
+            } else {
+                format!("full_{}.png", label)
+            };
             let _ = image.save(self.dir.join(&full_name));
 
             // Scale all annotation sizes based on image resolution
@@ -633,9 +708,18 @@ impl DumpCollector {
             // Build annotated image
             let mut annotated = image.clone();
             for (entry_img_idx, entry) in &self.entries {
-                if *entry_img_idx != img_idx { continue; }
+                if *entry_img_idx != img_idx {
+                    continue;
+                }
                 match entry {
-                    DumpEntry::OcrRegion { field_name, rect, raw_text, display_result, label_pos, .. } => {
+                    DumpEntry::OcrRegion {
+                        field_name,
+                        rect,
+                        raw_text,
+                        display_result,
+                        label_pos,
+                        ..
+                    } => {
                         let (bx, by, bw, bh) = *rect;
                         let x = self.scaler.x(bx);
                         let y = self.scaler.y(by);
@@ -643,13 +727,20 @@ impl DumpCollector {
                         let h = self.scaler.y(bh);
 
                         // Skip zero-area entries (synthetic/metadata entries)
-                        if w <= 0 || h <= 0 { continue; }
+                        if w <= 0 || h <= 0 {
+                            continue;
+                        }
 
                         // Expand outward so floor(t/2) pixels sit on/inside the region
-                        draw_rect(&mut annotated,
-                            x - rect_outset, y - rect_outset,
-                            w + rect_outset * 2, h + rect_outset * 2,
-                            RED, rect_thickness);
+                        draw_rect(
+                            &mut annotated,
+                            x - rect_outset,
+                            y - rect_outset,
+                            w + rect_outset * 2,
+                            h + rect_outset * 2,
+                            RED,
+                            rect_thickness,
+                        );
 
                         // Build label text: no field names, just OCR results.
                         // If display_result is set and differs from raw, show "raw -> display".
@@ -662,7 +753,10 @@ impl DumpCollector {
                         let effectively_same = !display_result.is_empty()
                             && (disp_norm == raw_norm
                                 || raw_norm == format!("{}已装备", disp_norm));
-                        let label_text = if !display_result.is_empty() && !effectively_same && display_result != raw_trimmed {
+                        let label_text = if !display_result.is_empty()
+                            && !effectively_same
+                            && display_result != raw_trimmed
+                        {
                             format!("{} -> {}", raw_trimmed, display_result)
                         } else if effectively_same {
                             display_result.to_string()
@@ -681,7 +775,7 @@ impl DumpCollector {
                                 let lx = x + (w - label_w) / 2;
                                 let ly = y + h + gap;
                                 (lx.max(0).min(img_w - label_w), ly)
-                            }
+                            },
                             LabelPosition::Auto => {
                                 // Right of region if it fits, otherwise left
                                 let lx = if x + w + gap + label_w <= img_w {
@@ -691,18 +785,40 @@ impl DumpCollector {
                                 };
                                 let ly = y + (h - label_h) / 2;
                                 (lx, ly)
-                            }
+                            },
                         };
-                        draw_smart_label(&mut annotated, label_x, label_y, &label_text, RED, BLACK, fs);
+                        draw_smart_label(
+                            &mut annotated,
+                            label_x,
+                            label_y,
+                            &label_text,
+                            RED,
+                            BLACK,
+                            fs,
+                        );
 
                         // Save individual crop
                         self.save_crop(image, field_name, *rect);
-                    }
-                    DumpEntry::PixelCheck { field_name, pos, rgb: _, result_text, color, .. } => {
+                    },
+                    DumpEntry::PixelCheck {
+                        field_name,
+                        pos,
+                        rgb: _,
+                        result_text,
+                        color,
+                        ..
+                    } => {
                         let draw_color = color.unwrap_or(GREEN);
                         let cx = self.scaler.x(pos.0);
                         let cy = self.scaler.y(pos.1);
-                        draw_crosshair(&mut annotated, cx, cy, cross_size, cross_thickness, draw_color);
+                        draw_crosshair(
+                            &mut annotated,
+                            cx,
+                            cy,
+                            cross_size,
+                            cross_thickness,
+                            draw_color,
+                        );
 
                         // Label: just the result (no field name, no RGB values)
                         let label_text = result_text.to_string();
@@ -713,24 +829,43 @@ impl DumpCollector {
                         } else {
                             cx - cross_size - gap - label_w
                         };
-                        draw_smart_label(&mut annotated, label_x, cy - label_h / 2, &label_text, draw_color, BLACK, fs);
+                        draw_smart_label(
+                            &mut annotated,
+                            label_x,
+                            cy - label_h / 2,
+                            &label_text,
+                            draw_color,
+                            BLACK,
+                            fs,
+                        );
 
                         // Save pixel neighbourhood crop
                         self.save_pixel_crop(image, field_name, *pos);
-                    }
+                    },
                     DumpEntry::Constellation { level, nodes } => {
                         // Draw bounding box per node with label on the left
                         let box_r = 45.0; // slightly larger than ring outer (41)
-                        for (i, &(pos, activated, _brightness, _threshold)) in nodes.iter().enumerate() {
+                        for (i, &(pos, activated, _brightness, _threshold)) in
+                            nodes.iter().enumerate()
+                        {
                             let cx = self.scaler.x(pos.0);
                             let cy = self.scaler.y(pos.1);
                             let r = self.scaler.x(box_r);
                             let color = if activated { GREEN } else { RED };
                             draw_rect(&mut annotated, cx - r, cy - r, r * 2, r * 2, color, 2);
-                            let label = format!("C{}: {}", i + 1, if activated { "yes" } else { "no" });
+                            let label =
+                                format!("C{}: {}", i + 1, if activated { "yes" } else { "no" });
                             let (lw, lh) = measure_label(&label, fs);
                             // Place label to the left of the bounding box
-                            draw_smart_label(&mut annotated, cx - r - gap - lw, cy - lh / 2, &label, color, BLACK, fs);
+                            draw_smart_label(
+                                &mut annotated,
+                                cx - r - gap - lw,
+                                cy - lh / 2,
+                                &label,
+                                color,
+                                BLACK,
+                                fs,
+                            );
                         }
                         // "Cx" label further left, between nodes 3 and 4
                         let center_label = format!("C{}", level);
@@ -743,16 +878,27 @@ impl DumpCollector {
                             self.scaler.y(540.0)
                         };
                         // Find the leftmost node label edge and place C# further left
-                        let leftmost_x = nodes.iter().map(|&(pos, _, _, _)| {
-                            let cx = self.scaler.x(pos.0);
-                            let r = self.scaler.x(box_r);
-                            let sample_label = "C6: yes"; // widest possible label
-                            let (sw, _) = measure_label(sample_label, fs);
-                            cx - r - gap - sw
-                        }).min().unwrap_or(0);
-                        draw_smart_label(&mut annotated, leftmost_x - gap - clw, mid_y - clh / 2,
-                            &center_label, CYAN, BLACK, fs);
-                    }
+                        let leftmost_x = nodes
+                            .iter()
+                            .map(|&(pos, _, _, _)| {
+                                let cx = self.scaler.x(pos.0);
+                                let r = self.scaler.x(box_r);
+                                let sample_label = "C6: yes"; // widest possible label
+                                let (sw, _) = measure_label(sample_label, fs);
+                                cx - r - gap - sw
+                            })
+                            .min()
+                            .unwrap_or(0);
+                        draw_smart_label(
+                            &mut annotated,
+                            leftmost_x - gap - clw,
+                            mid_y - clh / 2,
+                            &center_label,
+                            CYAN,
+                            BLACK,
+                            fs,
+                        );
+                    },
                     DumpEntry::GridOverlay { cells, detections } => {
                         let grid_thickness = (1.0 * scale).round().max(1.0) as i32;
                         // Draw all cell bounding boxes
@@ -765,30 +911,66 @@ impl DumpCollector {
                         }
                         // Draw crosshairs + labels only for detected lock/astral
                         for &(idx, lock, astral) in detections {
-                            if idx >= cells.len() { continue; }
+                            if idx >= cells.len() {
+                                continue;
+                            }
                             let cell = &cells[idx];
                             if lock {
                                 let cx = self.scaler.x(cell.lock_pos.0);
                                 let cy = self.scaler.y(cell.lock_pos.1);
-                                draw_crosshair(&mut annotated, cx, cy, cross_size / 2, cross_thickness, CYAN);
+                                draw_crosshair(
+                                    &mut annotated,
+                                    cx,
+                                    cy,
+                                    cross_size / 2,
+                                    cross_thickness,
+                                    CYAN,
+                                );
                                 let x_off = cross_size / 2 + gap;
                                 let (_, lh) = measure_label("lock", fs);
-                                draw_smart_label(&mut annotated, cx + x_off, cy - lh / 2, "lock", CYAN, BLACK, fs);
+                                draw_smart_label(
+                                    &mut annotated,
+                                    cx + x_off,
+                                    cy - lh / 2,
+                                    "lock",
+                                    CYAN,
+                                    BLACK,
+                                    fs,
+                                );
                             }
                             if astral {
                                 let cx = self.scaler.x(cell.astral_pos.0);
                                 let cy = self.scaler.y(cell.astral_pos.1);
-                                draw_crosshair(&mut annotated, cx, cy, cross_size / 2, cross_thickness, GREEN);
+                                draw_crosshair(
+                                    &mut annotated,
+                                    cx,
+                                    cy,
+                                    cross_size / 2,
+                                    cross_thickness,
+                                    GREEN,
+                                );
                                 let x_off = cross_size / 2 + gap;
                                 let (_, lh) = measure_label("astral", fs);
-                                draw_smart_label(&mut annotated, cx + x_off, cy - lh / 2, "astral", GREEN, BLACK, fs);
+                                draw_smart_label(
+                                    &mut annotated,
+                                    cx + x_off,
+                                    cy - lh / 2,
+                                    "astral",
+                                    GREEN,
+                                    BLACK,
+                                    fs,
+                                );
                             }
                         }
-                    }
+                    },
                 }
             }
 
-            let ann_name = if single { "annotated.png".to_string() } else { format!("annotated_{}.png", label) };
+            let ann_name = if single {
+                "annotated.png".to_string()
+            } else {
+                format!("annotated_{}.png", label)
+            };
             let _ = annotated.save(self.dir.join(&ann_name));
         }
     }
@@ -799,7 +981,9 @@ impl DumpCollector {
         let y = (self.scaler.y(by) as u32).min(image.height().saturating_sub(1));
         let w = (self.scaler.x(bw) as u32).min(image.width().saturating_sub(x));
         let h = (self.scaler.y(bh) as u32).min(image.height().saturating_sub(y));
-        if w == 0 || h == 0 { return; }
+        if w == 0 || h == 0 {
+            return;
+        }
         let sub = image.view(x, y, w, h).to_image();
         let _ = sub.save(self.dir.join(format!("{}.png", name)));
     }
@@ -812,7 +996,9 @@ impl DumpCollector {
         let y = (cy - padding as i32).max(0) as u32;
         let w = (padding * 2 + 1).min(image.width().saturating_sub(x));
         let h = (padding * 2 + 1).min(image.height().saturating_sub(y));
-        if w == 0 || h == 0 { return; }
+        if w == 0 || h == 0 {
+            return;
+        }
         let sub = image.view(x, y, w, h).to_image();
         let _ = sub.save(self.dir.join(format!("{}.png", name)));
     }
@@ -835,9 +1021,17 @@ impl DumpCollector {
             }
 
             for (entry_idx, entry) in &self.entries {
-                if *entry_idx != img_idx { continue; }
+                if *entry_idx != img_idx {
+                    continue;
+                }
                 match entry {
-                    DumpEntry::OcrRegion { field_name, raw_text, final_result, display_result, .. } => {
+                    DumpEntry::OcrRegion {
+                        field_name,
+                        raw_text,
+                        final_result,
+                        display_result,
+                        ..
+                    } => {
                         let label = format!("{}:", field_name);
                         let raw = raw_text.trim();
                         let fin = final_result.trim();
@@ -851,41 +1045,56 @@ impl DumpCollector {
                             out.push_str(&format!("{:<16} {}\n", label, shown));
                         } else if !disp.is_empty() && disp != raw && disp != fin {
                             // 3-tier: raw OCR -> fuzzy-matched name -> GOOD key
-                            out.push_str(&format!("{:<16} {} -> {} -> {}\n",
-                                label, raw, disp, fin));
+                            out.push_str(&format!(
+                                "{:<16} {} -> {} -> {}\n",
+                                label, raw, disp, fin
+                            ));
                         } else {
                             out.push_str(&format!("{:<16} {} -> {}\n", label, raw, fin));
                         }
-                    }
-                    DumpEntry::PixelCheck { field_name, rgb, result_text, .. } => {
-                        out.push_str(&format!("{:<16} rgb({},{},{}) -> {}\n",
+                    },
+                    DumpEntry::PixelCheck {
+                        field_name,
+                        rgb,
+                        result_text,
+                        ..
+                    } => {
+                        out.push_str(&format!(
+                            "{:<16} rgb({},{},{}) -> {}\n",
                             format!("{}:", field_name),
-                            rgb[0], rgb[1], rgb[2],
+                            rgb[0],
+                            rgb[1],
+                            rgb[2],
                             result_text,
                         ));
-                    }
+                    },
                     DumpEntry::Constellation { level, nodes } => {
                         out.push_str(&format!("{:<16} C{}\n", "constellation:", level));
-                        for (i, &(_pos, activated, brightness, threshold)) in nodes.iter().enumerate() {
-                            out.push_str(&format!("  C{}: {:<3} brightness={:.0} threshold={:.0}\n",
+                        for (i, &(_pos, activated, brightness, threshold)) in
+                            nodes.iter().enumerate()
+                        {
+                            out.push_str(&format!(
+                                "  C{}: {:<3} brightness={:.0} threshold={:.0}\n",
                                 i + 1,
                                 if activated { "yes" } else { "no" },
                                 brightness,
                                 threshold,
                             ));
                         }
-                    }
+                    },
                     DumpEntry::GridOverlay { cells, detections } => {
                         out.push_str(&format!("{:<16} {} cells\n", "grid:", cells.len()));
-                        let locks: Vec<_> = detections.iter().filter(|d| d.1).map(|d| d.0).collect();
-                        let astrals: Vec<_> = detections.iter().filter(|d| d.2).map(|d| d.0).collect();
+                        let locks: Vec<_> =
+                            detections.iter().filter(|d| d.1).map(|d| d.0).collect();
+                        let astrals: Vec<_> =
+                            detections.iter().filter(|d| d.2).map(|d| d.0).collect();
                         if !locks.is_empty() {
                             out.push_str(&format!("{:<16} cells {:?}\n", "  locked:", locks));
                         }
                         if !astrals.is_empty() {
                             out.push_str(&format!("{:<16} cells {:?}\n", "  astral:", astrals));
                         }
-                    }
+                    },
                 }
             }
             out.push('\n');
@@ -908,7 +1117,11 @@ impl DumpCollector {
             out.push('\n');
         }
 
-        let filename = if error.is_some() { "error.txt" } else { "result.txt" };
+        let filename = if error.is_some() {
+            "error.txt"
+        } else {
+            "result.txt"
+        };
         let _ = std::fs::write(self.dir.join(filename), &out);
     }
 }
@@ -919,7 +1132,10 @@ impl Drop for DumpCollector {
             // Write a minimal error.txt so debug output is never silently lost
             // (e.g., when a ? operator propagates an error before finalize is called)
             let path = self.dir.join("error.txt");
-            let _ = std::fs::write(&path, "DROPPED: scan function exited before finalize (likely an error)\n");
+            let _ = std::fs::write(
+                &path,
+                "DROPPED: scan function exited before finalize (likely an error)\n",
+            );
         }
     }
 }
@@ -945,6 +1161,9 @@ impl DumpCtx {
     pub fn new(base_dir: &str, category: &str, index: usize, _entity_name: &str) -> Self {
         let folder = format!("{:04}", index);
         let dir = Path::new(base_dir).join(category).join(folder);
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
         let _ = std::fs::create_dir_all(&dir);
         Self { dir }
     }
@@ -954,35 +1173,65 @@ impl DumpCtx {
         let _ = image.save(&path);
     }
 
-    pub fn dump_region(&self, field_name: &str, image: &RgbImage, rect: (f64, f64, f64, f64), scaler: &CoordScaler) {
+    pub fn dump_region(
+        &self,
+        field_name: &str,
+        image: &RgbImage,
+        rect: (f64, f64, f64, f64),
+        scaler: &CoordScaler,
+    ) {
         save_region(&self.dir, field_name, image, rect, scaler);
     }
 
-    pub fn dump_region_shifted(&self, field_name: &str, image: &RgbImage, rect: (f64, f64, f64, f64), y_shift: f64, scaler: &CoordScaler) {
+    pub fn dump_region_shifted(
+        &self,
+        field_name: &str,
+        image: &RgbImage,
+        rect: (f64, f64, f64, f64),
+        y_shift: f64,
+        scaler: &CoordScaler,
+    ) {
         let shifted = (rect.0, rect.1 + y_shift, rect.2, rect.3);
         save_region(&self.dir, field_name, image, shifted, scaler);
     }
 
-    pub fn dump_pixel(&self, field_name: &str, image: &RgbImage, center: (f64, f64), padding: u32, scaler: &CoordScaler) {
+    pub fn dump_pixel(
+        &self,
+        field_name: &str,
+        image: &RgbImage,
+        center: (f64, f64),
+        padding: u32,
+        scaler: &CoordScaler,
+    ) {
         let cx = scaler.x(center.0) as i32;
         let cy = scaler.y(center.1) as i32;
         let x = (cx - padding as i32).max(0) as u32;
         let y = (cy - padding as i32).max(0) as u32;
         let w = (padding * 2 + 1).min(image.width().saturating_sub(x));
         let h = (padding * 2 + 1).min(image.height().saturating_sub(y));
-        if w == 0 || h == 0 { return; }
+        if w == 0 || h == 0 {
+            return;
+        }
         let sub = image.view(x, y, w, h).to_image();
         let _ = sub.save(self.dir.join(format!("{}.png", field_name)));
     }
 }
 
-fn save_region(dir: &Path, name: &str, image: &RgbImage, rect: (f64, f64, f64, f64), scaler: &CoordScaler) {
+fn save_region(
+    dir: &Path,
+    name: &str,
+    image: &RgbImage,
+    rect: (f64, f64, f64, f64),
+    scaler: &CoordScaler,
+) {
     let (bx, by, bw, bh) = rect;
     let x = (scaler.x(bx) as u32).min(image.width().saturating_sub(1));
     let y = (scaler.y(by) as u32).min(image.height().saturating_sub(1));
     let w = (scaler.x(bw) as u32).min(image.width().saturating_sub(x));
     let h = (scaler.y(bh) as u32).min(image.height().saturating_sub(y));
-    if w == 0 || h == 0 { return; }
+    if w == 0 || h == 0 {
+        return;
+    }
     let sub = image.view(x, y, w, h).to_image();
     let _ = sub.save(dir.join(format!("{}.png", name)));
 }

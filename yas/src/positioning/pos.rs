@@ -11,7 +11,10 @@ pub struct Pos<T> {
     pub y: T,
 }
 
-impl<T> Add<Pos<T>> for Pos<T> where T: Add<T, Output = T> {
+impl<T> Add<Pos<T>> for Pos<T>
+where
+    T: Add<T, Output = T>,
+{
     type Output = Self;
 
     fn add(self, rhs: Pos<T>) -> Self::Output {
@@ -22,18 +25,24 @@ impl<T> Add<Pos<T>> for Pos<T> where T: Add<T, Output = T> {
     }
 }
 
-impl<T> Add<Size<T>> for Pos<T> where T: Add<T, Output = T> {
+impl<T> Add<Size<T>> for Pos<T>
+where
+    T: Add<T, Output = T>,
+{
     type Output = Self;
 
     fn add(self, rhs: Size<T>) -> Self::Output {
         Pos {
             x: self.x + rhs.width,
-            y: self.y + rhs.height
+            y: self.y + rhs.height,
         }
     }
 }
 
-impl<T> Sub<Pos<T>> for Pos<T> where T: Sub<T, Output = T> {
+impl<T> Sub<Pos<T>> for Pos<T>
+where
+    T: Sub<T, Output = T>,
+{
     type Output = Self;
 
     fn sub(self, rhs: Pos<T>) -> Self::Output {
@@ -46,13 +55,14 @@ impl<T> Sub<Pos<T>> for Pos<T> where T: Sub<T, Output = T> {
 
 impl<T> Pos<T> {
     pub fn new(x: T, y: T) -> Pos<T> {
-        Pos {
-            x, y
-        }
+        Pos { x, y }
     }
 }
 
-impl<T> Display for Pos<T> where T: Display {
+impl<T> Display for Pos<T>
+where
+    T: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {})", self.x, self.y)
     }
@@ -73,7 +83,7 @@ macro_rules! impl_int_pos {
             fn scale(&self, factor: f64) -> Pos<$t> {
                 Pos {
                     x: ((self.x as f64) * factor) as $t,
-                    y: ((self.y as f64) * factor) as $t
+                    y: ((self.y as f64) * factor) as $t,
                 }
             }
         }

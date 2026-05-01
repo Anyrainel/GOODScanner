@@ -16,8 +16,8 @@
 use anyhow::Result;
 use genshin_scanner::scanner::common::equip_parser;
 use genshin_scanner::scanner::common::fuzzy_match::fuzzy_match_map;
-use genshin_scanner::scanner::common::ocr_factory::create_ocr_model;
 use genshin_scanner::scanner::common::mappings::{MappingManager, NameOverrides};
+use genshin_scanner::scanner::common::ocr_factory::create_ocr_model;
 
 fn main() -> Result<()> {
     env_logger::Builder::new()
@@ -41,35 +41,35 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
             run_sel_verify(&args[2], &args[3])
-        }
+        },
         "--sel-ocr" => {
             if args.len() < 3 {
                 eprintln!("Usage: ocr_test --sel-ocr <screenshot_or_dir>");
                 std::process::exit(1);
             }
             run_sel_ocr(&args[2])
-        }
+        },
         "--equip" => {
             if args.len() < 3 {
                 eprintln!("Usage: ocr_test --equip <image_path>");
                 std::process::exit(1);
             }
             run_equip_test(&args[2])
-        }
+        },
         "--char-name" => {
             if args.len() < 3 {
                 eprintln!("Usage: ocr_test --char-name <image_path>");
                 std::process::exit(1);
             }
             run_char_name_test(&args[2])
-        }
+        },
         "--eval-ocr" => {
             if args.len() < 3 {
                 eprintln!("Usage: ocr_test --eval-ocr <debug_images_dir>");
                 std::process::exit(1);
             }
             run_eval_ocr(&args[2])
-        }
+        },
         "--reprocess" => {
             if args.len() < 3 {
                 eprintln!("Usage: ocr_test --reprocess <images_dir> [--output <json_path>]");
@@ -81,7 +81,7 @@ fn main() -> Result<()> {
                 None
             };
             run_reprocess(&args[2], output)
-        }
+        },
         _ => run_ocr_test(&args),
     }
 }
@@ -100,7 +100,12 @@ fn run_ocr_test(args: &[String]) -> Result<()> {
     // Optionally crop right side
     let img = if crop_right > 0 && crop_right < img.width() {
         let new_w = img.width() - crop_right;
-        println!("Cropping {}px from right -> {}x{}", crop_right, new_w, img.height());
+        println!(
+            "Cropping {}px from right -> {}x{}",
+            crop_right,
+            new_w,
+            img.height()
+        );
         image::imageops::crop_imm(&img, 0, 0, new_w, img.height()).to_image()
     } else {
         img
@@ -120,17 +125,25 @@ fn run_ocr_test(args: &[String]) -> Result<()> {
     println!("ppocrv5: {:?}", result_v5);
 
     // Also try stat parsing
-    let parsed_v4 = genshin_scanner::scanner::common::stat_parser::parse_stat_from_text(result_v4.trim());
-    let parsed_v5 = genshin_scanner::scanner::common::stat_parser::parse_stat_from_text(result_v5.trim());
+    let parsed_v4 =
+        genshin_scanner::scanner::common::stat_parser::parse_stat_from_text(result_v4.trim());
+    let parsed_v5 =
+        genshin_scanner::scanner::common::stat_parser::parse_stat_from_text(result_v5.trim());
 
     println!();
     if let Some(p) = &parsed_v4 {
-        println!("ppocrv4 parsed: key={}, value={}, inactive={}", p.key, p.value, p.inactive);
+        println!(
+            "ppocrv4 parsed: key={}, value={}, inactive={}",
+            p.key, p.value, p.inactive
+        );
     } else {
         println!("ppocrv4 parsed: None");
     }
     if let Some(p) = &parsed_v5 {
-        println!("ppocrv5 parsed: key={}, value={}, inactive={}", p.key, p.value, p.inactive);
+        println!(
+            "ppocrv5 parsed: key={}, value={}, inactive={}",
+            p.key, p.value, p.inactive
+        );
     } else {
         println!("ppocrv5 parsed: None");
     }
@@ -141,8 +154,8 @@ fn run_ocr_test(args: &[String]) -> Result<()> {
 /// Test selection view OCR on full screen captures.
 /// Crops each region, binarizes, and OCRs. Also runs solver validation.
 fn run_sel_ocr(path: &str) -> Result<()> {
-    use genshin_scanner::scanner::common::stat_parser;
     use genshin_scanner::scanner::common::roll_solver::{self, OcrCandidate, SolverInput};
+    use genshin_scanner::scanner::common::stat_parser;
 
     // Selection view crop regions (base 1920x1080)
     const MAIN_STAT: (f64, f64, f64, f64) = (1440.0, 217.0, 250.0, 30.0);
@@ -168,9 +181,13 @@ fn run_sel_ocr(path: &str) -> Result<()> {
         for pixel in cropped.pixels_mut() {
             let brightness = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
             if brightness > 160 {
-                pixel[0] = 0; pixel[1] = 0; pixel[2] = 0;
+                pixel[0] = 0;
+                pixel[1] = 0;
+                pixel[2] = 0;
             } else {
-                pixel[0] = 255; pixel[1] = 255; pixel[2] = 255;
+                pixel[0] = 255;
+                pixel[1] = 255;
+                pixel[2] = 255;
             }
         }
         cropped
@@ -197,9 +214,13 @@ fn run_sel_ocr(path: &str) -> Result<()> {
         println!("\n=== {} ({}x{}) ===", label, img.width(), img.height());
 
         // Rarity
-        let rarity = if check_star(img, STAR5_POS) { 5 }
-            else if check_star(img, STAR4_POS) { 4 }
-            else { 3 };
+        let rarity = if check_star(img, STAR5_POS) {
+            5
+        } else if check_star(img, STAR4_POS) {
+            4
+        } else {
+            3
+        };
         println!("rarity: {}*", rarity);
 
         // Level
@@ -207,7 +228,11 @@ fn run_sel_ocr(path: &str) -> Result<()> {
         let level_text = ocr.image_to_text(&level_img, false).unwrap_or_default();
         let level_text = level_text.trim().to_string();
         let digits: String = level_text.chars().filter(|c| c.is_ascii_digit()).collect();
-        let level: i32 = if digits.is_empty() { -1 } else { digits.parse().unwrap_or(-1) };
+        let level: i32 = if digits.is_empty() {
+            -1
+        } else {
+            digits.parse().unwrap_or(-1)
+        };
         println!("level: OCR='{}' parsed={}", level_text, level);
 
         // Main stat
@@ -229,14 +254,26 @@ fn run_sel_ocr(path: &str) -> Result<()> {
             let text = ocr.image_to_text(&sub_img, false).unwrap_or_default();
             let text = text.trim().to_string();
             if text.is_empty() || text.contains("件套") {
-                println!("sub{}: {}", i, if text.contains("件套") { format!("stop marker ({})", text) } else { "(empty)".to_string() });
+                println!(
+                    "sub{}: {}",
+                    i,
+                    if text.contains("件套") {
+                        format!("stop marker ({})", text)
+                    } else {
+                        "(empty)".to_string()
+                    }
+                );
                 break;
             }
             if let Some(parsed) = stat_parser::parse_stat_from_text(&text) {
-                println!("sub{}: OCR='{}' => key='{}' val={} inactive={}",
-                    i, text, parsed.key, parsed.value, parsed.inactive);
+                println!(
+                    "sub{}: OCR='{}' => key='{}' val={} inactive={}",
+                    i, text, parsed.key, parsed.value, parsed.inactive
+                );
                 sub_candidates.push(vec![OcrCandidate {
-                    key: parsed.key, value: parsed.value, inactive: parsed.inactive,
+                    key: parsed.key,
+                    value: parsed.value,
+                    inactive: parsed.inactive,
                 }]);
                 parsed_count += 1;
             } else {
@@ -255,29 +292,51 @@ fn run_sel_ocr(path: &str) -> Result<()> {
             };
             match roll_solver::solve(&input) {
                 Some(result) => {
-                    println!("solver: OK total_rolls={} init={}", result.total_rolls, result.initial_substat_count);
+                    println!(
+                        "solver: OK total_rolls={} init={}",
+                        result.total_rolls, result.initial_substat_count
+                    );
                     for s in &result.substats {
-                        println!("  solved: {}={} rolls={} inactive={}", s.key, s.value, s.roll_count, s.inactive);
+                        println!(
+                            "  solved: {}={} rolls={} inactive={}",
+                            s.key, s.value, s.roll_count, s.inactive
+                        );
                     }
-                }
+                },
                 None => println!("solver: FAILED"),
             }
         }
 
         // Set name (adjust Y for missing subs)
         let missing = 4usize.saturating_sub(parsed_count);
-        let set_rect = (SET_NAME.0, SET_NAME.1 - missing as f64 * SUB_SPACING, SET_NAME.2, SET_NAME.3);
+        let set_rect = (
+            SET_NAME.0,
+            SET_NAME.1 - missing as f64 * SUB_SPACING,
+            SET_NAME.2,
+            SET_NAME.3,
+        );
         let set_img = crop_binarize(img, set_rect);
         let set_text = ocr.image_to_text(&set_img, false).unwrap_or_default();
         let set_text = set_text.trim().to_string();
         let cleaned = set_text
-            .trim_end_matches('：').trim_end_matches(':')
-            .trim_end_matches('；').trim_end_matches(';')
+            .trim_end_matches('：')
+            .trim_end_matches(':')
+            .trim_end_matches('；')
+            .trim_end_matches(';')
             .trim();
         if let Some(set_key) = fuzzy_match_map(cleaned, &mappings.artifact_set_map) {
-            println!("set: OCR='{}' => '{}' (y_adj=-{})", set_text, set_key, missing as f64 * SUB_SPACING);
+            println!(
+                "set: OCR='{}' => '{}' (y_adj=-{})",
+                set_text,
+                set_key,
+                missing as f64 * SUB_SPACING
+            );
         } else {
-            println!("set: OCR='{}' => (no match) (y_adj=-{})", set_text, missing as f64 * SUB_SPACING);
+            println!(
+                "set: OCR='{}' => (no match) (y_adj=-{})",
+                set_text,
+                missing as f64 * SUB_SPACING
+            );
         }
     }
 
@@ -309,9 +368,9 @@ fn run_sel_ocr(path: &str) -> Result<()> {
 
 /// OCR each screenshot, build a GoodArtifact, and verify against ground truth export.
 fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
-    use genshin_scanner::scanner::common::stat_parser;
+    use genshin_scanner::scanner::common::models::{GoodArtifact, GoodExport, GoodSubStat};
     use genshin_scanner::scanner::common::roll_solver::{self, OcrCandidate, SolverInput};
-    use genshin_scanner::scanner::common::models::{GoodArtifact, GoodSubStat, GoodExport};
+    use genshin_scanner::scanner::common::stat_parser;
 
     // Selection view crop regions (base 1920x1080)
     const LEVEL: (f64, f64, f64, f64) = (1443.0, 310.0, 100.0, 26.0);
@@ -337,9 +396,13 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
         for pixel in cropped.pixels_mut() {
             let brightness = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
             if brightness > 160 {
-                pixel[0] = 0; pixel[1] = 0; pixel[2] = 0;
+                pixel[0] = 0;
+                pixel[1] = 0;
+                pixel[2] = 0;
             } else {
-                pixel[0] = 255; pixel[1] = 255; pixel[2] = 255;
+                pixel[0] = 255;
+                pixel[1] = 255;
+                pixel[2] = 255;
             }
         }
         cropped
@@ -387,18 +450,34 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
         let img = image::open(entry.path())?.to_rgb8();
 
         // Rarity
-        let rarity = if check_star(&img, STAR5_POS) { 5 }
-            else if check_star(&img, STAR4_POS) { 4 }
-            else { 3 };
+        let rarity = if check_star(&img, STAR5_POS) {
+            5
+        } else if check_star(&img, STAR4_POS) {
+            4
+        } else {
+            3
+        };
 
         // Level
         let level_img = crop_binarize(&img, LEVEL);
         let level_text = v4.image_to_text(&level_img, false).unwrap_or_default();
-        let digits: String = level_text.trim().chars().filter(|c| c.is_ascii_digit()).collect();
-        let level: i32 = if digits.is_empty() { -1 } else { digits.parse().unwrap_or(-1) };
+        let digits: String = level_text
+            .trim()
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
+        let level: i32 = if digits.is_empty() {
+            -1
+        } else {
+            digits.parse().unwrap_or(-1)
+        };
 
         if level < 0 {
-            println!("[SKIP] {} — level parse failed ('{}')", label, level_text.trim());
+            println!(
+                "[SKIP] {} — level parse failed ('{}')",
+                label,
+                level_text.trim()
+            );
             skipped += 1;
             continue;
         }
@@ -415,7 +494,9 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
             }
             if let Some(parsed) = stat_parser::parse_stat_from_text(&text) {
                 sub_candidates.push(vec![OcrCandidate {
-                    key: parsed.key.clone(), value: parsed.value, inactive: parsed.inactive,
+                    key: parsed.key.clone(),
+                    value: parsed.value,
+                    inactive: parsed.inactive,
                 }]);
                 parsed_subs.push((parsed.key, parsed.value, parsed.inactive));
             } else {
@@ -440,16 +521,34 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
             let mut active = Vec::new();
             let mut inactive = Vec::new();
             for s in &result.substats {
-                let sub = GoodSubStat { key: s.key.clone(), value: s.value, initial_value: None, rolls: vec![] };
-                if s.inactive { inactive.push(sub); } else { active.push(sub); }
+                let sub = GoodSubStat {
+                    key: s.key.clone(),
+                    value: s.value,
+                    initial_value: None,
+                    rolls: vec![],
+                };
+                if s.inactive {
+                    inactive.push(sub);
+                } else {
+                    active.push(sub);
+                }
             }
             (active, inactive)
         } else {
             let mut active = Vec::new();
             let mut inactive = Vec::new();
             for (key, value, is_inactive) in &parsed_subs {
-                let sub = GoodSubStat { key: key.clone(), value: *value, initial_value: None, rolls: vec![] };
-                if *is_inactive { inactive.push(sub); } else { active.push(sub); }
+                let sub = GoodSubStat {
+                    key: key.clone(),
+                    value: *value,
+                    initial_value: None,
+                    rolls: vec![],
+                };
+                if *is_inactive {
+                    inactive.push(sub);
+                } else {
+                    active.push(sub);
+                }
             }
             (active, inactive)
         };
@@ -457,17 +556,29 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
         // Set name (adjust Y for sub count)
         let parsed_count = parsed_subs.len();
         let missing = 4usize.saturating_sub(parsed_count);
-        let set_rect = (SET_NAME.0, SET_NAME.1 - missing as f64 * SUB_SPACING, SET_NAME.2, SET_NAME.3);
+        let set_rect = (
+            SET_NAME.0,
+            SET_NAME.1 - missing as f64 * SUB_SPACING,
+            SET_NAME.2,
+            SET_NAME.3,
+        );
         let set_img = crop_binarize(&img, set_rect);
         let set_text = v4.image_to_text(&set_img, false).unwrap_or_default();
-        let cleaned = set_text.trim()
-            .trim_end_matches('：').trim_end_matches(':')
-            .trim_end_matches('；').trim_end_matches(';')
+        let cleaned = set_text
+            .trim()
+            .trim_end_matches('：')
+            .trim_end_matches(':')
+            .trim_end_matches('；')
+            .trim_end_matches(';')
             .trim();
         let set_key = fuzzy_match_map(cleaned, &mappings.artifact_set_map).unwrap_or_default();
 
         if set_key.is_empty() {
-            println!("[SKIP] {} — set name not matched (OCR: '{}')", label, set_text.trim());
+            println!(
+                "[SKIP] {} — set name not matched (OCR: '{}')",
+                label,
+                set_text.trim()
+            );
             skipped += 1;
             continue;
         }
@@ -482,8 +593,8 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
         let main_key = stat_parser::parse_stat_from_text(main_text.trim())
             .map(|p| {
                 match slot_key.as_str() {
-                    "flower" => "hp".to_string(),  // always flat HP
-                    "plume" => "atk".to_string(),   // always flat ATK
+                    "flower" => "hp".to_string(), // always flat HP
+                    "plume" => "atk".to_string(), // always flat ATK
                     _ => stat_parser::main_stat_key_fixup(&p.key),
                 }
             })
@@ -514,18 +625,28 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
                 && gt.substats.len() == scanned.substats.len()
                 && gt.unactivated_substats.len() == scanned.unactivated_substats.len()
                 && scanned.substats.iter().all(|ss| {
-                    gt.substats.iter().any(|gs| gs.key == ss.key && (gs.value - ss.value).abs() < VALUE_TOLERANCE)
+                    gt.substats
+                        .iter()
+                        .any(|gs| gs.key == ss.key && (gs.value - ss.value).abs() < VALUE_TOLERANCE)
                 })
                 && scanned.unactivated_substats.iter().all(|ss| {
-                    gt.unactivated_substats.iter().any(|gs| gs.key == ss.key && (gs.value - ss.value).abs() < VALUE_TOLERANCE)
+                    gt.unactivated_substats
+                        .iter()
+                        .any(|gs| gs.key == ss.key && (gs.value - ss.value).abs() < VALUE_TOLERANCE)
                 })
         });
 
         if found {
-            println!("[MATCH] {} — {}* lv{} {} {} ({} subs)", label, rarity, level, set_key, main_key, parsed_count);
+            println!(
+                "[MATCH] {} — {}* lv{} {} {} ({} subs)",
+                label, rarity, level, set_key, main_key, parsed_count
+            );
             matched += 1;
         } else {
-            println!("[MISS]  {} — {}* lv{} {} {} ({} subs)", label, rarity, level, set_key, main_key, parsed_count);
+            println!(
+                "[MISS]  {} — {}* lv{} {} {} ({} subs)",
+                label, rarity, level, set_key, main_key, parsed_count
+            );
             for s in &scanned.substats {
                 println!("          sub: {}={}", s.key, s.value);
             }
@@ -540,10 +661,20 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
     }
 
     println!("\n========================================");
-    println!("Results: {} matched, {} missed, {} skipped", matched, unmatched, skipped);
-    println!("Match rate: {:.1}% ({}/{})",
-        if matched + unmatched > 0 { matched as f64 / (matched + unmatched) as f64 * 100.0 } else { 0.0 },
-        matched, matched + unmatched);
+    println!(
+        "Results: {} matched, {} missed, {} skipped",
+        matched, unmatched, skipped
+    );
+    println!(
+        "Match rate: {:.1}% ({}/{})",
+        if matched + unmatched > 0 {
+            matched as f64 / (matched + unmatched) as f64 * 100.0
+        } else {
+            0.0
+        },
+        matched,
+        matched + unmatched
+    );
     println!("========================================");
 
     Ok(())
@@ -551,7 +682,7 @@ fn run_sel_verify(dir: &str, json_path: &str) -> Result<()> {
 
 fn run_reprocess(images_dir: &str, output_path: Option<&str>) -> Result<()> {
     use genshin_scanner::scanner::artifact::{
-        GoodArtifactScanner, ArtifactOcrRegions, ArtifactScanResult, GoodArtifactScannerConfig,
+        ArtifactOcrRegions, ArtifactScanResult, GoodArtifactScanner, GoodArtifactScannerConfig,
     };
     use genshin_scanner::scanner::common::coord_scaler::CoordScaler;
     use genshin_scanner::scanner::common::models::GoodExport;
@@ -603,21 +734,25 @@ fn run_reprocess(images_dir: &str, output_path: Option<&str>) -> Result<()> {
         ) {
             Ok(ArtifactScanResult::Artifact(artifact)) => {
                 artifacts.push(artifact);
-            }
+            },
             Ok(ArtifactScanResult::Stop) => {
                 eprintln!("[{:04}] low rarity, skipped", idx);
-            }
+            },
             Ok(ArtifactScanResult::Skip) => {
                 eprintln!("[{:04}] skipped", idx);
-            }
+            },
             Err(e) => {
                 eprintln!("[{:04}] ERROR: {}", idx, e);
                 errors += 1;
-            }
+            },
         }
     }
 
-    eprintln!("Reprocessed: {} artifacts, {} errors", artifacts.len(), errors);
+    eprintln!(
+        "Reprocessed: {} artifacts, {} errors",
+        artifacts.len(),
+        errors
+    );
 
     let export = GoodExport::new(None, None, Some(artifacts));
     let json = serde_json::to_string_pretty(&export)?;
@@ -634,11 +769,20 @@ fn run_reprocess(images_dir: &str, output_path: Option<&str>) -> Result<()> {
 
 /// Parse a character name from OCR text using the same logic as the scanner.
 /// Extracts the name part after "/" and fuzzy matches against the character map.
-fn parse_char_name(text: &str, char_map: &std::collections::HashMap<String, String>) -> Option<String> {
+fn parse_char_name(
+    text: &str,
+    char_map: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    let slash_char = if text.contains('/') { Some('/') } else if text.contains('\u{FF0F}') { Some('\u{FF0F}') } else { None };
+    let slash_char = if text.contains('/') {
+        Some('/')
+    } else if text.contains('\u{FF0F}') {
+        Some('\u{FF0F}')
+    } else {
+        None
+    };
     if let Some(slash) = slash_char {
         let idx = text.find(slash).unwrap();
         let raw_name: String = text[idx + slash.len_utf8()..]
@@ -733,9 +877,15 @@ fn run_eval_ocr(debug_dir: &str) -> Result<()> {
 
             let v4_matched = name_v4.is_some();
             let v5_matched = name_v5.is_some();
-            if v4_matched { v4_ok += 1; }
-            if v5_matched { v5_ok += 1; }
-            if !v4_matched && !v5_matched { both_fail += 1; }
+            if v4_matched {
+                v4_ok += 1;
+            }
+            if v5_matched {
+                v5_ok += 1;
+            }
+            if !v4_matched && !v5_matched {
+                both_fail += 1;
+            }
 
             if name_v4 != name_v5 {
                 disagree.push(format!(
@@ -750,8 +900,18 @@ fn run_eval_ocr(debug_dir: &str) -> Result<()> {
         }
 
         println!("Total: {} characters", entries.len());
-        println!("v4 matched: {}/{} ({:.1}%)", v4_ok, entries.len(), v4_ok as f64 / entries.len() as f64 * 100.0);
-        println!("v5 matched: {}/{} ({:.1}%)", v5_ok, entries.len(), v5_ok as f64 / entries.len() as f64 * 100.0);
+        println!(
+            "v4 matched: {}/{} ({:.1}%)",
+            v4_ok,
+            entries.len(),
+            v4_ok as f64 / entries.len() as f64 * 100.0
+        );
+        println!(
+            "v5 matched: {}/{} ({:.1}%)",
+            v5_ok,
+            entries.len(),
+            v5_ok as f64 / entries.len() as f64 * 100.0
+        );
         println!("Both failed: {}", both_fail);
         if !disagree.is_empty() {
             println!("Disagreements ({}):", disagree.len());
@@ -801,9 +961,15 @@ fn run_eval_ocr(debug_dir: &str) -> Result<()> {
 
             let v4_matched = !loc_v4.is_empty();
             let v5_matched = !loc_v5.is_empty();
-            if v4_matched { v4_ok += 1; }
-            if v5_matched { v5_ok += 1; }
-            if !v4_matched && !v5_matched { both_fail += 1; }
+            if v4_matched {
+                v4_ok += 1;
+            }
+            if v5_matched {
+                v5_ok += 1;
+            }
+            if !v4_matched && !v5_matched {
+                both_fail += 1;
+            }
 
             if loc_v4 != loc_v5 {
                 disagree.push(format!(
@@ -819,8 +985,18 @@ fn run_eval_ocr(debug_dir: &str) -> Result<()> {
 
         println!("Total: {} weapons ({} equipped)", entries.len(), has_text);
         if has_text > 0 {
-            println!("v4 matched: {}/{} ({:.1}%)", v4_ok, has_text, v4_ok as f64 / has_text as f64 * 100.0);
-            println!("v5 matched: {}/{} ({:.1}%)", v5_ok, has_text, v5_ok as f64 / has_text as f64 * 100.0);
+            println!(
+                "v4 matched: {}/{} ({:.1}%)",
+                v4_ok,
+                has_text,
+                v4_ok as f64 / has_text as f64 * 100.0
+            );
+            println!(
+                "v5 matched: {}/{} ({:.1}%)",
+                v5_ok,
+                has_text,
+                v5_ok as f64 / has_text as f64 * 100.0
+            );
             println!("Both failed: {}", both_fail);
         }
         if !disagree.is_empty() {
@@ -870,9 +1046,15 @@ fn run_eval_ocr(debug_dir: &str) -> Result<()> {
 
             let v4_matched = !loc_v4.is_empty();
             let v5_matched = !loc_v5.is_empty();
-            if v4_matched { v4_ok += 1; }
-            if v5_matched { v5_ok += 1; }
-            if !v4_matched && !v5_matched { both_fail += 1; }
+            if v4_matched {
+                v4_ok += 1;
+            }
+            if v5_matched {
+                v5_ok += 1;
+            }
+            if !v4_matched && !v5_matched {
+                both_fail += 1;
+            }
 
             if loc_v4 != loc_v5 {
                 disagree.push(format!(
@@ -888,8 +1070,18 @@ fn run_eval_ocr(debug_dir: &str) -> Result<()> {
 
         println!("Total: {} artifacts ({} equipped)", entries.len(), has_text);
         if has_text > 0 {
-            println!("v4 matched: {}/{} ({:.1}%)", v4_ok, has_text, v4_ok as f64 / has_text as f64 * 100.0);
-            println!("v5 matched: {}/{} ({:.1}%)", v5_ok, has_text, v5_ok as f64 / has_text as f64 * 100.0);
+            println!(
+                "v4 matched: {}/{} ({:.1}%)",
+                v4_ok,
+                has_text,
+                v4_ok as f64 / has_text as f64 * 100.0
+            );
+            println!(
+                "v5 matched: {}/{} ({:.1}%)",
+                v5_ok,
+                has_text,
+                v5_ok as f64 / has_text as f64 * 100.0
+            );
             println!("Both failed: {}", both_fail);
         }
         if !disagree.is_empty() {
@@ -927,13 +1119,27 @@ fn run_equip_test(image_path: &str) -> Result<()> {
     // v4 path
     let loc_v4 = equip_parser::parse_equip_location(&text_v4, &mappings.character_name_map);
     println!("v4 OCR:   {:?}", text_v4);
-    println!("v4 match: {:?}", if loc_v4.is_empty() { "(empty)" } else { &loc_v4 });
+    println!(
+        "v4 match: {:?}",
+        if loc_v4.is_empty() {
+            "(empty)"
+        } else {
+            &loc_v4
+        }
+    );
 
     // v5 path
     let loc_v5 = equip_parser::parse_equip_location(&text_v5, &mappings.character_name_map);
     println!();
     println!("v5 OCR:   {:?}", text_v5);
-    println!("v5 match: {:?}", if loc_v5.is_empty() { "(empty)" } else { &loc_v5 });
+    println!(
+        "v5 match: {:?}",
+        if loc_v5.is_empty() {
+            "(empty)"
+        } else {
+            &loc_v5
+        }
+    );
 
     // Combined path (v4 primary, v5 fallback — as scanner does it)
     println!();

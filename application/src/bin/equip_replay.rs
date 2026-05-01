@@ -8,7 +8,6 @@
 ///   cargo run --bin equip_replay --features dev-tools -- --json path/to/equip_*.json --dump-images
 ///
 /// Right-click to cancel at any time.
-
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -25,11 +24,9 @@ use genshin_scanner::scanner::common::game_controller::GenshinGameController;
 use genshin_scanner::scanner::common::mappings::MappingManager;
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .format_timestamp(None)
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .init();
 
     let args: Vec<String> = std::env::args().collect();
     let json_path: PathBuf = args
@@ -64,11 +61,13 @@ fn main() -> Result<()> {
         .build()?;
     info!(
         "Window: left={}, top={}, w={}, h={}",
-        game_info.window.left, game_info.window.top,
-        game_info.window.width, game_info.window.height
+        game_info.window.left,
+        game_info.window.top,
+        game_info.window.width,
+        game_info.window.height
     );
 
-    let mut ctrl = GenshinGameController::new(game_info)?;
+    let mut ctrl = GenshinGameController::new(game_info, Default::default())?;
     let user_config = load_config_or_default();
     let overrides = user_config.to_overrides();
     let mappings = MappingManager::new(&overrides)?;
@@ -92,8 +91,12 @@ fn main() -> Result<()> {
     info!("=== Results ===");
     info!(
         "Total: {}, Success: {}, Already correct: {}, Not found: {}, Errors: {}, Aborted: {}",
-        result.summary.total, result.summary.success, result.summary.already_correct,
-        result.summary.not_found, result.summary.errors, result.summary.aborted,
+        result.summary.total,
+        result.summary.success,
+        result.summary.already_correct,
+        result.summary.not_found,
+        result.summary.errors,
+        result.summary.aborted,
     );
 
     // Print failures

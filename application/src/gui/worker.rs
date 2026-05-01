@@ -203,12 +203,7 @@ fn spawn_with_safety_net(
 
         if let Err(panic_info) = result {
             let msg = panic_message(&panic_info);
-            yas::log_error!(
-                "{} 崩溃: {}",
-                "{} crashed: {}",
-                task_name_for_crash,
-                msg
-            );
+            yas::log_error!("{} 崩溃: {}", "{} crashed: {}", task_name_for_crash, msg);
             if let Ok(mut guard) = status_for_crash.lock() {
                 // Only overwrite if still Running — don't clobber a proper Failed/Completed
                 if matches!(*guard, TaskStatus::Running(_)) {
@@ -363,7 +358,10 @@ pub fn spawn_scan(state: &AppState) -> TaskHandle {
                             format!("Stopped; partial data exported to {}", path),
                         )
                     } else {
-                        UiText::new(format!("已导出至 {}", path), format!("Exported to {}", path))
+                        UiText::new(
+                            format!("已导出至 {}", path),
+                            format!("Exported to {}", path),
+                        )
                     };
                     *status.lock().unwrap() = TaskStatus::Completed(msg);
                 },

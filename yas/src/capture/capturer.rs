@@ -20,7 +20,7 @@ pub trait Capturer<T: image::GenericImage> {
             left: rect.left + relative_to.x,
             top: rect.top + relative_to.y,
             width: rect.width,
-            height: rect.height
+            height: rect.height,
         };
         self.capture_rect(new_rect)
     }

@@ -1,8 +1,8 @@
-use anyhow::Result;
-use image::{RgbaImage, RgbImage};
-use image::buffer::ConvertBuffer;
 use crate::capture::Capturer;
 use crate::positioning::Rect;
+use anyhow::Result;
+use image::buffer::ConvertBuffer;
+use image::{RgbImage, RgbaImage};
 
 pub struct ScreenshotsCapturer {
     screens: Vec<screenshots::Screen>,
@@ -19,12 +19,8 @@ impl ScreenshotsCapturer {
 impl Capturer<RgbaImage> for ScreenshotsCapturer {
     fn capture_rect(&self, rect: Rect<i32>) -> Result<RgbaImage> {
         let screen = &self.screens[0];
-        let capture_result = screen.capture_area(
-            rect.left,
-            rect.top,
-            rect.width as u32,
-            rect.height as u32
-        );
+        let capture_result =
+            screen.capture_area(rect.left, rect.top, rect.width as u32, rect.height as u32);
         capture_result
     }
 }

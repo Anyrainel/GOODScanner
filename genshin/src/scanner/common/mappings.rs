@@ -4,8 +4,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Result};
-use yas::{log_debug, log_info, log_warn};
 use serde::{Deserialize, Serialize};
+use yas::{log_debug, log_info, log_warn};
 
 const MAPPINGS_URL: &str = "https://ggartifact.com/good/mappings.json";
 const MAPPINGS_CACHE_PATH: &str = "data/mappings.json";
@@ -37,18 +37,30 @@ fn load_meta() -> MappingsMeta {
 fn save_meta(meta: &MappingsMeta) {
     if let Some(parent) = Path::new(MAPPINGS_META_PATH).parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            log_warn!("无法创建缓存目录: {}", "Cannot create cache directory: {}", e);
+            log_warn!(
+                "无法创建缓存目录: {}",
+                "Cannot create cache directory: {}",
+                e
+            );
         }
     }
     match serde_json::to_string(meta) {
         Ok(json) => {
             if let Err(e) = fs::write(MAPPINGS_META_PATH, json) {
-                log_warn!("无法保存映射缓存信息: {}", "Cannot save mapping cache metadata: {}", e);
+                log_warn!(
+                    "无法保存映射缓存信息: {}",
+                    "Cannot save mapping cache metadata: {}",
+                    e
+                );
             }
-        }
+        },
         Err(e) => {
-            log_warn!("无法序列化缓存信息: {}", "Cannot serialize cache metadata: {}", e);
-        }
+            log_warn!(
+                "无法序列化缓存信息: {}",
+                "Cannot serialize cache metadata: {}",
+                e
+            );
+        },
     }
 }
 
@@ -192,7 +204,7 @@ fn fetch_if_needed() -> Result<()> {
                     );
                 }
             }
-        }
+        },
         Err(e) => {
             if cache_exists {
                 log_warn!(
@@ -206,10 +218,12 @@ fn fetch_if_needed() -> Result<()> {
                      / Failed to fetch game data (no local cache). Check your network connection, \
                      or manually download {} to the data/ folder.\n\
                      错误 / Error: {}",
-                    MAPPINGS_URL, MAPPINGS_URL, e
+                    MAPPINGS_URL,
+                    MAPPINGS_URL,
+                    e
                 );
             }
-        }
+        },
     }
 
     Ok(())

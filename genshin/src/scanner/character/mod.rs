@@ -1,5 +1,5 @@
-mod scanner;
 mod config;
+mod scanner;
 
-pub use scanner::GoodCharacterScanner;
 pub use config::GoodCharacterScannerConfig;
+pub use scanner::GoodCharacterScanner;

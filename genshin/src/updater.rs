@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use yas::{log_debug, log_info, log_warn};
 use serde::Deserialize;
+use yas::{log_debug, log_info, log_warn};
 
 /// Asset filename for the OCR scanner binary.
 pub const ASSET_SCANNER: &str = "GOODScanner.exe";
@@ -32,8 +32,7 @@ const DOWNLOAD_MIRRORS: &[&str] = &[
 ];
 
 /// Base URL for the releases/latest redirect (non-API).
-const RELEASES_LATEST_URL: &str =
-    "https://github.com/Anyrainel/GOODScanner/releases/latest";
+const RELEASES_LATEST_URL: &str = "https://github.com/Anyrainel/GOODScanner/releases/latest";
 
 /// Minimum plausible exe size (1 MB).  The real binary is 20+ MB;
 /// anything smaller is almost certainly an error page or truncated download.
@@ -173,12 +172,16 @@ fn get_tag_via_redirect() -> Option<String> {
             Err(e) => {
                 log_debug!("连接失败: {}", "Connection failed: {}", e);
                 continue;
-            }
+            },
         };
 
         // Look for 3xx redirect with Location header
         if !resp.status().is_redirection() {
-            log_debug!("非重定向响应: {}", "Non-redirect response: {}", resp.status());
+            log_debug!(
+                "非重定向响应: {}",
+                "Non-redirect response: {}",
+                resp.status()
+            );
             continue;
         }
 
@@ -238,12 +241,8 @@ pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
         })
         .ok_or_else(|| anyhow!("无法获取最新版本信息 / Cannot determine latest version"))?;
 
-    let latest_int = parse_calver_tag(&latest_tag).ok_or_else(|| {
-        anyhow!(
-            "无法解析版本号 / Cannot parse release tag: {}",
-            latest_tag
-        )
-    })?;
+    let latest_int = parse_calver_tag(&latest_tag)
+        .ok_or_else(|| anyhow!("无法解析版本号 / Cannot parse release tag: {}", latest_tag))?;
 
     if latest_int <= current_int {
         return Ok(UpdateStatus::UpToDate);
@@ -281,14 +280,14 @@ pub fn cleanup_old_exe() {
                 Ok(()) => {
                     log_debug!("已清理旧版本", "Cleaned up old exe");
                     return;
-                }
+                },
                 Err(e) => {
                     if attempt < 4 {
                         std::thread::sleep(Duration::from_millis(500));
                     } else {
                         log_debug!("清理旧版本失败: {}", "Failed to clean up old exe: {}", e);
                     }
-                }
+                },
             }
         }
     }
@@ -338,16 +337,11 @@ pub fn download_and_replace(download_url: &str) -> Result<PathBuf> {
         match client.get(&url).send() {
             Ok(resp) if resp.status().is_success() => match resp.bytes() {
                 Ok(bytes) => {
-                    log_info!(
-                        "下载完成（{} 字节）",
-                        "Downloaded ({} bytes)",
-                        bytes.len(),
-                    );
+                    log_info!("下载完成（{} 字节）", "Downloaded ({} bytes)", bytes.len(),);
 
                     // Must be a PE executable of plausible size
                     if bytes.get(..2) != Some(b"MZ") {
-                        last_error =
-                            "下载文件不是有效的exe / Not a valid PE executable".into();
+                        last_error = "下载文件不是有效的exe / Not a valid PE executable".into();
                         log_warn!("{}", "{}", last_error);
                         continue;
                     }
@@ -378,33 +372,25 @@ pub fn download_and_replace(download_url: &str) -> Result<PathBuf> {
                         if let Err(re) = std::fs::rename(&old_path, &exe_path) {
                             log_warn!("回滚失败: {}", "Rollback failed: {}", re);
                         }
-                        return Err(anyhow!(
-                            "无法写入新版本 / Cannot write new version: {}",
-                            e
-                        ));
+                        return Err(anyhow!("无法写入新版本 / Cannot write new version: {}", e));
                     }
 
                     log_info!("更新完成！请重启程序。", "Update complete! Please restart.");
                     return Ok(exe_path);
-                }
+                },
                 Err(e) => {
                     last_error = format!("{}", e);
                     log_warn!("下载失败: {}", "Download failed: {}", last_error);
-                }
+                },
             },
             Ok(resp) => {
                 last_error = format!("HTTP {}", resp.status());
-                log_warn!(
-                    "源 {} 失败: {}",
-                    "Source {} failed: {}",
-                    i + 1,
-                    last_error,
-                );
-            }
+                log_warn!("源 {} 失败: {}", "Source {} failed: {}", i + 1, last_error,);
+            },
             Err(e) => {
                 last_error = format!("{}", e);
                 log_warn!("连接失败: {}", "Connection failed: {}", last_error);
-            }
+            },
         }
     }
 

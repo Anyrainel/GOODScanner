@@ -1,5 +1,5 @@
-mod scanner;
 mod config;
+mod scanner;
 
-pub use scanner::{GoodArtifactScanner, ArtifactOcrRegions, ArtifactScanResult};
 pub use config::GoodArtifactScannerConfig;
+pub use scanner::{ArtifactOcrRegions, ArtifactScanResult, GoodArtifactScanner};

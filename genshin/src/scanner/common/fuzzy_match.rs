@@ -103,18 +103,27 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
     // 拉→菈 alone gives 菈鸟玛, 鸟→乌 alone gives 拉乌玛 — neither matches).
     // Single-pass char-by-char avoids cascading issues with bidirectional pairs.
     {
-        let combined: String = cleaned.chars().map(|c| {
-            let cs: String = c.to_string();
-            for &(from, to) in OCR_CONFUSIONS {
-                if cs == from {
-                    return to.chars().next().unwrap_or(c);
+        let combined: String = cleaned
+            .chars()
+            .map(|c| {
+                let cs: String = c.to_string();
+                for &(from, to) in OCR_CONFUSIONS {
+                    if cs == from {
+                        return to.chars().next().unwrap_or(c);
+                    }
                 }
-            }
-            c
-        }).collect();
+                c
+            })
+            .collect();
         if combined != cleaned {
             if let Some(val) = map.get(&combined) {
-                log_debug!("[fuzzy] 组合OCR混淆匹配: cleaned={:?} → {} ({})", "[fuzzy] combined OCR confusion match: cleaned={:?} → {} ({})", cleaned, combined, val);
+                log_debug!(
+                    "[fuzzy] 组合OCR混淆匹配: cleaned={:?} → {} ({})",
+                    "[fuzzy] combined OCR confusion match: cleaned={:?} → {} ({})",
+                    cleaned,
+                    combined,
+                    val
+                );
                 return Some((combined, val.clone()));
             }
         }
@@ -138,7 +147,13 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
         }
     }
     if let Some(ref m) = best_match {
-        log_debug!("[fuzzy] 子串匹配(cleaned⊃key): cleaned={:?} → {} ({})", "[fuzzy] substring match (cleaned⊃key): cleaned={:?} → {} ({})", cleaned, m.0, m.1);
+        log_debug!(
+            "[fuzzy] 子串匹配(cleaned⊃key): cleaned={:?} → {} ({})",
+            "[fuzzy] substring match (cleaned⊃key): cleaned={:?} → {} ({})",
+            cleaned,
+            m.0,
+            m.1
+        );
         return best_match;
     }
 
@@ -150,7 +165,13 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
         }
     }
     if let Some(ref m) = best_match {
-        log_debug!("[fuzzy] 反向子串匹配(key⊃cleaned): cleaned={:?} → {} ({})", "[fuzzy] reverse substring (key⊃cleaned): cleaned={:?} → {} ({})", cleaned, m.0, m.1);
+        log_debug!(
+            "[fuzzy] 反向子串匹配(key⊃cleaned): cleaned={:?} → {} ({})",
+            "[fuzzy] reverse substring (key⊃cleaned): cleaned={:?} → {} ({})",
+            cleaned,
+            m.0,
+            m.1
+        );
         return best_match;
     }
 
@@ -169,8 +190,15 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
     }
 
     if let Some(ref m) = best_match {
-        log_debug!("[fuzzy] Levenshtein匹配: cleaned={:?} → {} ({}) (dist={}, map_size={})", "[fuzzy] Levenshtein match: cleaned={:?} → {} ({}) (dist={}, map_size={})",
-            cleaned, m.0, m.1, min_dist, map.len());
+        log_debug!(
+            "[fuzzy] Levenshtein匹配: cleaned={:?} → {} ({}) (dist={}, map_size={})",
+            "[fuzzy] Levenshtein match: cleaned={:?} → {} ({}) (dist={}, map_size={})",
+            cleaned,
+            m.0,
+            m.1,
+            min_dist,
+            map.len()
+        );
         return best_match;
     }
 
@@ -201,14 +229,26 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
 
     if best_lcs_len >= LCS_MIN_CHARS && is_unique {
         if let Some(ref m) = best_lcs_match {
-            log_debug!("[fuzzy] LCS唯一性匹配: cleaned={:?} → {} ({}) (lcs_len={}, map_size={})", "[fuzzy] LCS uniqueness match: cleaned={:?} → {} ({}) (lcs_len={}, map_size={})",
-                cleaned, m.0, m.1, best_lcs_len, map.len());
+            log_debug!(
+                "[fuzzy] LCS唯一性匹配: cleaned={:?} → {} ({}) (lcs_len={}, map_size={})",
+                "[fuzzy] LCS uniqueness match: cleaned={:?} → {} ({}) (lcs_len={}, map_size={})",
+                cleaned,
+                m.0,
+                m.1,
+                best_lcs_len,
+                map.len()
+            );
         }
         return best_lcs_match;
     }
 
-    log_debug!("[fuzzy] 无匹配: cleaned={:?} (chars={}, map_size={})", "[fuzzy] NO MATCH: cleaned={:?} (chars={}, map_size={})",
-        cleaned, cleaned_chars.len(), map.len());
+    log_debug!(
+        "[fuzzy] 无匹配: cleaned={:?} (chars={}, map_size={})",
+        "[fuzzy] NO MATCH: cleaned={:?} (chars={}, map_size={})",
+        cleaned,
+        cleaned_chars.len(),
+        map.len()
+    );
     None
 }
 
@@ -245,8 +285,12 @@ fn edit_distance_chars(a: &[char], b: &[char]) -> usize {
     let m = a.len();
     let n = b.len();
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m { dp[i][0] = i; }
-    for j in 0..=n { dp[0][j] = j; }
+    for i in 0..=m {
+        dp[i][0] = i;
+    }
+    for j in 0..=n {
+        dp[0][j] = j;
+    }
     for i in 1..=m {
         for j in 1..=n {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
@@ -296,10 +340,7 @@ mod tests {
         map.insert("战狂".to_string(), "Berserker".to_string());
         map.insert("赌徒".to_string(), "Gambler".to_string());
         // OCR misreads "教官" as "教e" — should match via Levenshtein (distance 1)
-        assert_eq!(
-            fuzzy_match_map("教e", &map),
-            Some("Instructor".to_string())
-        );
+        assert_eq!(fuzzy_match_map("教e", &map), Some("Instructor".to_string()));
     }
 
     #[test]
@@ -398,10 +439,7 @@ mod tests {
         );
 
         // Also test with the colon stripped (as find_set_key_in_text does)
-        assert_eq!(
-            fuzzy_match_map("教e", &map),
-            Some("Instructor".to_string()),
-        );
+        assert_eq!(fuzzy_match_map("教e", &map), Some("Instructor".to_string()),);
 
         // Other short set names should also work
         assert_eq!(

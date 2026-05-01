@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::positioning::{Pos, Rect, Scalable, Size};
 use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum WindowInfoType {
@@ -20,7 +20,7 @@ impl TryInto<i32> for WindowInfoType {
     fn try_into(self) -> Result<i32, Self::Error> {
         match self {
             WindowInfoType::InvariantInt(v) => Ok(v),
-            _ => Err(anyhow!(String::from("not an i32 type")))
+            _ => Err(anyhow!(String::from("not an i32 type"))),
         }
     }
 }

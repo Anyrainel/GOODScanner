@@ -5,12 +5,12 @@ use crossbeam_channel;
 
 use yas::{log_debug, log_info, log_warn};
 
+use super::ui_actions::{d_action, d_cell};
 use crate::scanner::artifact::GoodArtifactScanner;
 use crate::scanner::common::backpack_scanner::{
     self, BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction,
 };
 use crate::scanner::common::constants::*;
-use super::ui_actions::{d_action, d_cell};
 use crate::scanner::common::debug_dump::DumpCtx;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::grid_icon_detector::{GridIconResult, GridMode};
@@ -56,10 +56,7 @@ struct PageToggle {
 const PANEL_POOL_RECT: (f64, f64, f64, f64) = (1330.0, 478.0, 370.0, 187.0);
 
 impl LockManager {
-    pub fn new(
-        mappings: Arc<MappingManager>,
-        pools: Arc<SharedOcrPools>,
-    ) -> Self {
+    pub fn new(mappings: Arc<MappingManager>, pools: Arc<SharedOcrPools>) -> Self {
         Self { mappings, pools }
     }
 
@@ -88,17 +85,27 @@ impl LockManager {
         max_target_level: i32,
         dump_images: bool,
         progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
-    ) -> (Vec<InstructionResult>, Vec<(usize, GoodArtifact)>, HashMap<usize, usize>, bool, usize) {
+    ) -> (
+        Vec<InstructionResult>,
+        Vec<(usize, GoodArtifact)>,
+        HashMap<usize, usize>,
+        bool,
+        usize,
+    ) {
         let mut results: HashMap<String, InstructionResult> = HashMap::new();
         let mut scanned_artifacts: Vec<(usize, GoodArtifact)> = Vec::new();
         let mut ocr_failures: usize = 0;
 
-        let make_error_results = |targets: &[LockTarget], status: InstructionStatus| -> Vec<InstructionResult> {
-            targets.iter().map(|t| InstructionResult {
-                id: t.result_id.clone(),
-                status: status.clone(),
-            }).collect()
-        };
+        let make_error_results =
+            |targets: &[LockTarget], status: InstructionStatus| -> Vec<InstructionResult> {
+                targets
+                    .iter()
+                    .map(|t| InstructionResult {
+                        id: t.result_id.clone(),
+                        status: status.clone(),
+                    })
+                    .collect()
+            };
 
         if targets.is_empty() {
             return (Vec::new(), scanned_artifacts, HashMap::new(), false, 0);
@@ -115,14 +122,26 @@ impl LockManager {
 
         // --- Open backpack to artifact tab (same as artifact scanner) ---
         let total = match backpack_scanner::open_backpack_to_tab(
-            ctrl, "artifact", 1200, 400, &count_ocr_guard,
+            ctrl,
+            "artifact",
+            1200,
+            400,
+            &count_ocr_guard,
         ) {
             Ok((count, _max)) => {
-                log_debug!("[lock_manager] 共 {} 个圣遗物", "[lock_manager] {} artifacts total", count);
+                log_debug!(
+                    "[lock_manager] 共 {} 个圣遗物",
+                    "[lock_manager] {} artifacts total",
+                    count
+                );
                 count as usize
-            }
+            },
             Err(e) => {
-                log_warn!("无法读取圣遗物数量: {}", "Cannot read artifact count: {}", e);
+                log_warn!(
+                    "无法读取圣遗物数量: {}",
+                    "Cannot read artifact count: {}",
+                    e
+                );
                 return (
                     make_error_results(targets, InstructionStatus::OcrError),
                     scanned_artifacts,
@@ -130,16 +149,22 @@ impl LockManager {
                     false,
                     0,
                 );
-            }
+            },
         };
 
         if total == 0 {
-            log_info!("[lock_manager] 背包中没有圣遗物，无法执行锁定操作", "[lock_manager] No artifacts in backpack, cannot perform lock operations");
+            log_info!(
+                "[lock_manager] 背包中没有圣遗物，无法执行锁定操作",
+                "[lock_manager] No artifacts in backpack, cannot perform lock operations"
+            );
             return (
-                targets.iter().map(|t| InstructionResult {
-                    id: t.result_id.clone(),
-                    status: InstructionStatus::NotFound,
-                }).collect(),
+                targets
+                    .iter()
+                    .map(|t| InstructionResult {
+                        id: t.result_id.clone(),
+                        status: InstructionStatus::NotFound,
+                    })
+                    .collect(),
                 scanned_artifacts,
                 HashMap::new(),
                 true, // empty backpack is a "complete" scan
@@ -168,7 +193,8 @@ impl LockManager {
 
         // Per-page 3-pass voter (payload carries the (row, col) needed to
         // re-click the grid cell for lock toggling).
-        let mut voter: PagedGridVoter<(usize, usize)> = PagedGridVoter::new(total, GridMode::Artifact);
+        let mut voter: PagedGridVoter<(usize, usize)> =
+            PagedGridVoter::new(total, GridMode::Artifact);
 
         // Scan-wide flags.
         let mut rarity_stopped = false;
@@ -183,7 +209,10 @@ impl LockManager {
         // when a max target level has been computed (fast mode).
         let scan_config = BackpackScanConfig {
             delay_scroll,
-            panel_wait: PanelWaitMode::Fingerprint { timeout_ms: panel_timeout, initial_wait_ms: initial_wait },
+            panel_wait: PanelWaitMode::Fingerprint {
+                timeout_ms: panel_timeout,
+                initial_wait_ms: initial_wait,
+            },
             extra_delay: capture_delay,
             probe_last_cell_per_page: max_target_level >= 0,
             detect_grid_duplicates: false,
@@ -493,30 +522,42 @@ impl LockManager {
         // enabled, pages may be skipped (level-based page-skip) and the scan
         // stops early — the scanned data is always partial, so never produce
         // a snapshot.
-        let scanned_all = scanned_artifacts.last().map(|(idx, _)| *idx + 1 >= total).unwrap_or(false);
-        let scan_complete = !stop_on_all_matched
-            && (scanned_all || rarity_stopped)
-            && !ctrl.is_cancelled();
+        let scanned_all = scanned_artifacts
+            .last()
+            .map(|(idx, _)| *idx + 1 >= total)
+            .unwrap_or(false);
+        let scan_complete =
+            !stop_on_all_matched && (scanned_all || rarity_stopped) && !ctrl.is_cancelled();
 
         // Mark unmatched targets.
         let was_cancelled = ctrl.is_cancelled();
         for target in targets {
             if !results.contains_key(&target.result_id) {
-                results.insert(target.result_id.clone(), InstructionResult {
-                    id: target.result_id.clone(),
-                    status: if was_cancelled {
-                        InstructionStatus::Aborted
-                    } else {
-                        InstructionStatus::NotFound
+                results.insert(
+                    target.result_id.clone(),
+                    InstructionResult {
+                        id: target.result_id.clone(),
+                        status: if was_cancelled {
+                            InstructionStatus::Aborted
+                        } else {
+                            InstructionStatus::NotFound
+                        },
                     },
-                });
+                );
             }
         }
 
-        let ordered_results: Vec<InstructionResult> = targets.iter()
+        let ordered_results: Vec<InstructionResult> = targets
+            .iter()
             .filter_map(|t| results.remove(&t.result_id))
             .collect();
 
-        (ordered_results, scanned_artifacts, matched, scan_complete, ocr_failures)
+        (
+            ordered_results,
+            scanned_artifacts,
+            matched,
+            scan_complete,
+            ocr_failures,
+        )
     }
 }

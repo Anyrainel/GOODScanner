@@ -1,9 +1,9 @@
-use anyhow::Result;
-use image::{RgbaImage, RgbImage};
-use image::buffer::ConvertBuffer;
-use libwayshot::{WayshotConnection, CaptureRegion};
 use crate::capture::Capturer;
 use crate::positioning::Rect;
+use anyhow::Result;
+use image::buffer::ConvertBuffer;
+use image::{RgbImage, RgbaImage};
+use libwayshot::{CaptureRegion, WayshotConnection};
 
 pub struct LibwayshotCapturer {
     conn: WayshotConnection,

@@ -3,10 +3,14 @@ use std::time::SystemTime;
 
 use anyhow::{anyhow, Result};
 use image::RgbImage;
-use yas::{log_debug, log_warn};
+use yas::{log_debug, log_info, log_warn};
 
 use yas::cancel::CancelToken;
-use yas::capture::{Capturer, GenericCapturer};
+#[cfg(target_os = "windows")]
+use yas::capture::PrintWindowCapturer;
+#[cfg(all(target_os = "windows", feature = "capturer_wgc"))]
+use yas::capture::WgcCapturer;
+use yas::capture::{CaptureMethod, Capturer, GenericCapturer};
 use yas::game_info::GameInfo;
 use yas::ocr::ImageToText;
 use yas::positioning::Rect;
@@ -45,11 +49,33 @@ pub fn color_distance(c1: &image::Rgb<u8>, c2: &image::Rgb<u8>) -> usize {
 }
 
 impl GenshinGameController {
-    pub fn new(game_info: GameInfo) -> Result<Self> {
+    pub fn new(game_info: GameInfo, capture_method: CaptureMethod) -> Result<Self> {
         let window_size = game_info.window.to_rect_usize().size();
         let scaler = CoordScaler::new(window_size.width as u32, window_size.height as u32);
+        let hdr_mode = super::pixel_profile::is_hdr_mode();
+        match (capture_method, hdr_mode) {
+            (CaptureMethod::BitBlt, false) => log_info!(
+                "截图方式: BitBlt（非HDR模式，使用低开销GDI截图）",
+                "Capture method: BitBlt (non-HDR mode; using low-overhead GDI capture)"
+            ),
+            (CaptureMethod::Wgc, true) => log_info!(
+                "截图方式: WGC（HDR模式，使用Windows色调映射后的截图）",
+                "Capture method: WGC (HDR mode; using Windows tone-mapped capture)"
+            ),
+            (method, true) => log_info!(
+                "截图方式: {:?}（HDR模式，显式使用该截图方式）",
+                "Capture method: {:?} (HDR mode; explicitly requested)",
+                method
+            ),
+            (method, false) => log_info!(
+                "截图方式: {:?}（非HDR模式，显式使用该截图方式）",
+                "Capture method: {:?} (non-HDR mode; explicitly requested)",
+                method
+            ),
+        }
 
-        let capturer: Rc<dyn Capturer<RgbImage>> = Self::create_capturer(&game_info)?;
+        let capturer: Rc<dyn Capturer<RgbImage>> =
+            Self::create_capturer(&game_info, capture_method)?;
 
         Ok(Self {
             game_info,
@@ -61,8 +87,37 @@ impl GenshinGameController {
         })
     }
 
-    fn create_capturer(_game_info: &GameInfo) -> Result<Rc<dyn Capturer<RgbImage>>> {
-        Ok(Rc::new(GenericCapturer::new()?))
+    fn create_capturer(
+        game_info: &GameInfo,
+        method: CaptureMethod,
+    ) -> Result<Rc<dyn Capturer<RgbImage>>> {
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd = game_info.hwnd;
+            return match method {
+                CaptureMethod::BitBlt => Ok(Rc::new(GenericCapturer::new()?)),
+                CaptureMethod::PrintWindow => Ok(Rc::new(PrintWindowCapturer::new(hwnd)?)),
+                CaptureMethod::Wgc => {
+                    #[cfg(feature = "capturer_wgc")]
+                    {
+                        let hdr = super::pixel_profile::is_hdr_mode();
+                        let wp = super::pixel_profile::hdr_white_point();
+                        Ok(Rc::new(WgcCapturer::new(hwnd, hdr, wp)?))
+                    }
+                    #[cfg(not(feature = "capturer_wgc"))]
+                    {
+                        Err(anyhow!(
+                            "WGC capture not compiled in (enable capturer_wgc feature)"
+                        ))
+                    }
+                },
+            };
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (game_info, method);
+            Ok(Rc::new(GenericCapturer::new()?))
+        }
     }
 }
 
@@ -153,11 +208,11 @@ impl GenshinGameController {
         // centered around (58, 50) with radius ~25px.
         // Sample several points across the icon face area.
         let check_points: &[(f64, f64)] = &[
-            (62.0, 51.0),  // Center of icon face
-            (53.0, 47.0),  // Inner-left
-            (49.0, 35.0),  // Upper portion
-            (55.0, 70.0),  // Lower portion
-            (67.0, 77.0),  // Lower-right
+            (62.0, 51.0), // Center of icon face
+            (53.0, 47.0), // Inner-left
+            (49.0, 35.0), // Upper portion
+            (55.0, 70.0), // Lower portion
+            (67.0, 77.0), // Lower-right
         ];
 
         let mut bright_count = 0;
@@ -186,7 +241,10 @@ impl GenshinGameController {
     /// Returns true if main UI was detected, false if still uncertain.
     pub fn return_to_main_ui(&mut self, max_attempts: u32) -> bool {
         if self.is_likely_main_world() {
-            log_debug!("[return_to_main_ui] 已在主界面", "[return_to_main_ui] already in main world");
+            log_debug!(
+                "[return_to_main_ui] 已在主界面",
+                "[return_to_main_ui] already in main world"
+            );
             return true;
         }
 
@@ -198,7 +256,11 @@ impl GenshinGameController {
             utils::sleep(900);
 
             if self.is_likely_main_world() {
-                log_debug!("[return_to_main_ui] 按{}次Escape后到达主界面", "[return_to_main_ui] reached main world after {} Escape(s)", i + 1);
+                log_debug!(
+                    "[return_to_main_ui] 按{}次Escape后到达主界面",
+                    "[return_to_main_ui] reached main world after {} Escape(s)",
+                    i + 1
+                );
                 return true;
             }
         }
@@ -208,7 +270,10 @@ impl GenshinGameController {
         }
 
         // Fallback: Enter (dismiss any stuck dialog) + Escape
-        log_debug!("[return_to_main_ui] 回退策略: Enter + Escape", "[return_to_main_ui] fallback: Enter + Escape");
+        log_debug!(
+            "[return_to_main_ui] 回退策略: Enter + Escape",
+            "[return_to_main_ui] fallback: Enter + Escape"
+        );
         self.key_press(enigo::Key::Return);
         utils::sleep(500);
         self.key_press(enigo::Key::Escape);
@@ -216,9 +281,16 @@ impl GenshinGameController {
 
         let result = self.is_likely_main_world();
         if result {
-            log_debug!("[return_to_main_ui] 回退后到达主界面", "[return_to_main_ui] reached main world after fallback");
+            log_debug!(
+                "[return_to_main_ui] 回退后到达主界面",
+                "[return_to_main_ui] reached main world after fallback"
+            );
         } else {
-            log_warn!("[return_to_main_ui] 尝试{}次+回退后可能仍未在主界面", "[return_to_main_ui] may not be in main world after {} attempts + fallback", max_attempts);
+            log_warn!(
+                "[return_to_main_ui] 尝试{}次+回退后可能仍未在主界面",
+                "[return_to_main_ui] may not be in main world after {} attempts + fallback",
+                max_attempts
+            );
         }
         result
     }
@@ -230,7 +302,9 @@ impl GenshinGameController {
     pub fn click_at(&mut self, base_x: f64, base_y: f64) {
         let x = self.game_info.window.left as f64 + self.scaler.scale_x(base_x);
         let y = self.game_info.window.top as f64 + self.scaler.scale_y(base_y);
-        self.system_control.mouse_move_to(x as i32, y as i32).unwrap();
+        self.system_control
+            .mouse_move_to(x as i32, y as i32)
+            .unwrap();
         // Settle delay: SetCursorPos (move) and SendInput (click) are different
         // Windows APIs. Under WGC's continuous frame-copy load, the input queue
         // can lag behind the cursor update. 10ms lets the position register
@@ -243,7 +317,9 @@ impl GenshinGameController {
     pub fn move_to(&mut self, base_x: f64, base_y: f64) {
         let x = self.game_info.window.left as f64 + self.scaler.scale_x(base_x);
         let y = self.game_info.window.top as f64 + self.scaler.scale_y(base_y);
-        self.system_control.mouse_move_to(x as i32, y as i32).unwrap();
+        self.system_control
+            .mouse_move_to(x as i32, y as i32)
+            .unwrap();
     }
 
     /// Press a keyboard key.
@@ -313,8 +389,13 @@ impl GenshinGameController {
     /// Save the full game window as a PNG file.
     pub fn save_screenshot(&self, path: &str) -> Result<()> {
         let im = self.capture_game()?;
-        im.save(path).map_err(|e| anyhow!("截图保存失败 / Failed to save screenshot: {}", e))?;
-        log_debug!("[screenshot] 已保存完整截图: {}", "[screenshot] saved full: {}", path);
+        im.save(path)
+            .map_err(|e| anyhow!("截图保存失败 / Failed to save screenshot: {}", e))?;
+        log_debug!(
+            "[screenshot] 已保存完整截图: {}",
+            "[screenshot] saved full: {}",
+            path
+        );
         Ok(())
     }
 
@@ -329,8 +410,17 @@ impl GenshinGameController {
         base_h: f64,
     ) -> Result<()> {
         let im = self.capture_region(base_x, base_y, base_w, base_h)?;
-        im.save(path).map_err(|e| anyhow!("截图保存失败 / Failed to save screenshot: {}", e))?;
-        log_debug!("[screenshot] 已保存区域截图({},{},{},{}) -> {}", "[screenshot] saved region ({},{},{},{}) -> {}", base_x, base_y, base_w, base_h, path);
+        im.save(path)
+            .map_err(|e| anyhow!("截图保存失败 / Failed to save screenshot: {}", e))?;
+        log_debug!(
+            "[screenshot] 已保存区域截图({},{},{},{}) -> {}",
+            "[screenshot] saved region ({},{},{},{}) -> {}",
+            base_x,
+            base_y,
+            base_w,
+            base_h,
+            path
+        );
         Ok(())
     }
 }
@@ -377,7 +467,8 @@ impl GenshinGameController {
                 log_debug!(
                     "[controller] 面板稳定(等待{}ms, 截图{}次)",
                     "[controller] panel stable (wait {}ms, {} caps)",
-                    wait_ms, capture_count
+                    wait_ms,
+                    capture_count
                 );
                 return Ok(());
             }
@@ -395,11 +486,11 @@ impl GenshinGameController {
         log_debug!(
             "[controller] 面板稳定超时({}ms, 截图{}次)",
             "[controller] panel stable timed out ({}ms, {} caps)",
-            timeout_ms, capture_count
+            timeout_ms,
+            capture_count
         );
         Ok(())
     }
-
 
     /// Wait until the detail panel has finished loading a new item.
     ///
@@ -458,7 +549,8 @@ impl GenshinGameController {
                     log_debug!(
                         "[controller] 面板加载完成(等待{}ms, 截图{}次)",
                         "[controller] panel loaded (wait {}ms, {} caps)",
-                        wait_ms, capture_count
+                        wait_ms,
+                        capture_count
                     );
                     return Ok(());
                 }
@@ -479,7 +571,8 @@ impl GenshinGameController {
         log_debug!(
             "[controller] 面板加载超时({}ms, 截图{}次)",
             "[controller] panel timed out ({}ms, {} caps)",
-            timeout_ms, capture_count
+            timeout_ms,
+            capture_count
         );
         Ok(())
     }

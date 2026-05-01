@@ -8,7 +8,8 @@ keywords = ["GenshinImpact", "artifacts", "scanner", "ocr"]
 license = "GPL-2.0-or-later"
 
 [features]
-default = []
+default = ["capturer_wgc"]
+capturer_wgc = ["yas/capturer_wgc"]
 capture = [
     "dep:auto-artifactarium",
     "dep:protobuf",

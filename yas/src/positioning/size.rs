@@ -13,13 +13,14 @@ pub struct Size<T> {
 
 impl<T> Size<T> {
     pub fn new(width: T, height: T) -> Size<T> {
-        Size {
-            width, height
-        }
+        Size { width, height }
     }
 }
 
-impl<T> Display for Size<T> where T: Display {
+impl<T> Display for Size<T>
+where
+    T: Display,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Size({}, {})", self.height, self.width)
     }
@@ -42,7 +43,7 @@ impl Scalable for Size<f64> {
     fn scale(&self, factor: f64) -> Self {
         Size {
             height: self.height * factor,
-            width: self.width * factor
+            width: self.width * factor,
         }
     }
 }

@@ -1,4 +1,4 @@
-pub mod common;
-pub mod character;
-pub mod weapon;
 pub mod artifact;
+pub mod character;
+pub mod common;
+pub mod weapon;

@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use anyhow::{anyhow, Result};
-use yas::{log_error, log_info, log_warn};
 use tiny_http::{Header, Method, Response, Server};
+use yas::{log_error, log_info, log_warn};
 
 use crate::cli::{GoodUserConfig, ScanCoreConfig};
 use crate::manager::models::*;
@@ -39,7 +39,9 @@ use crate::scanner::common::scan_runner::{
 /// Format a timestamp string from SystemTime (local time approximation via UNIX epoch offset).
 fn timestamp_string() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = dur.as_secs();
     let millis = dur.subsec_millis();
     let h = (secs / 3600) % 24;
@@ -58,7 +60,12 @@ fn save_request(endpoint: &str, body: &str) {
     let filename = format!("{}_{}.json", endpoint, ts);
     let path = log_dir.join(&filename);
     if let Err(e) = std::fs::write(&path, body) {
-        log_error!("保存请求失败: {}: {}", "Failed to save request {}: {}", filename, e);
+        log_error!(
+            "保存请求失败: {}: {}",
+            "Failed to save request {}: {}",
+            filename,
+            e
+        );
     }
 }
 
@@ -150,7 +157,8 @@ impl ManageExecutor for GameExecutor {
         progress_fn: Option<&ProgressFn<'_>>,
         cancel_token: yas::cancel::CancelToken,
     ) -> (ManageResult, Option<Vec<GoodArtifact>>) {
-        self.manager.execute(&mut self.ctrl, request, progress_fn, cancel_token)
+        self.manager
+            .execute(&mut self.ctrl, request, progress_fn, cancel_token)
     }
 
     fn execute_equip(
@@ -159,7 +167,8 @@ impl ManageExecutor for GameExecutor {
         progress_fn: Option<&ProgressFn<'_>>,
         cancel_token: yas::cancel::CancelToken,
     ) -> ManageResult {
-        self.manager.execute_equip(&mut self.ctrl, request, progress_fn, cancel_token)
+        self.manager
+            .execute_equip(&mut self.ctrl, request, progress_fn, cancel_token)
     }
 
     fn execute_scan(
@@ -209,7 +218,11 @@ struct ScanDataCache<T> {
 
 impl<T> ScanDataCache<T> {
     fn empty() -> Self {
-        Self { job_id: None, data: None, incomplete_job_id: None }
+        Self {
+            job_id: None,
+            data: None,
+            incomplete_job_id: None,
+        }
     }
 
     fn set(&mut self, job_id: String, data: Vec<T>) {
@@ -230,10 +243,7 @@ impl<T> ScanDataCache<T> {
 }
 
 /// Allowed production origins.
-const ALLOWED_ORIGINS: &[&str] = &[
-    "https://ggartifact.com",
-    "http://ggartifact.com",
-];
+const ALLOWED_ORIGINS: &[&str] = &["https://ggartifact.com", "http://ggartifact.com"];
 
 /// Check if an origin is allowed.
 ///
@@ -259,7 +269,12 @@ fn is_origin_allowed(origin: &str) -> bool {
 /// Extract the Origin header from a request.
 fn get_origin(request: &tiny_http::Request) -> Option<String> {
     for header in request.headers() {
-        if header.field.as_str().as_str().eq_ignore_ascii_case("origin") {
+        if header
+            .field
+            .as_str()
+            .as_str()
+            .eq_ignore_ascii_case("origin")
+        {
             return Some(header.value.as_str().to_string());
         }
     }
@@ -340,24 +355,27 @@ where
     F: FnMut() -> anyhow::Result<Box<dyn ManageExecutor>>,
 {
     let addr = format!("127.0.0.1:{}", port);
-    let server = Server::http(&addr)
-        .map_err(|e| {
-            let msg = format!("{}", e);
-            if msg.contains("Address already in use") || msg.contains("address is already in use")
-                || msg.contains("AddrInUse") || msg.contains("10048")
-            {
-                anyhow!(
-                    "端口 {} 已被占用，请更换端口 / Port {} is already in use. \
+    let server = Server::http(&addr).map_err(|e| {
+        let msg = format!("{}", e);
+        if msg.contains("Address already in use")
+            || msg.contains("address is already in use")
+            || msg.contains("AddrInUse")
+            || msg.contains("10048")
+        {
+            anyhow!(
+                "端口 {} 已被占用，请更换端口 / Port {} is already in use. \
                      Please choose a different port.",
-                    port, port
-                )
-            } else {
-                anyhow!(
-                    "HTTP服务器启动失败 / HTTP server start failed on port {}: {}",
-                    port, msg
-                )
-            }
-        })?;
+                port,
+                port
+            )
+        } else {
+            anyhow!(
+                "HTTP服务器启动失败 / HTTP server start failed on port {}: {}",
+                port,
+                msg
+            )
+        }
+    })?;
     let server = Arc::new(server);
 
     log_info!(
@@ -397,7 +415,10 @@ where
         while !shutdown_flag.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
-        log_info!("收到关闭信号，停止HTTP服务器", "Shutdown signal received, stopping HTTP server");
+        log_info!(
+            "收到关闭信号，停止HTTP服务器",
+            "Shutdown signal received, stopping HTTP server"
+        );
         shutdown_server.unblock();
         // Drop the original sender so job_rx.recv() unblocks once the HTTP thread also exits
         drop(job_tx);
@@ -416,15 +437,12 @@ where
             // If absent, allow (CORS is a browser-enforced mechanism).
             let origin = get_origin(&request);
             let cors_origin: Option<String> = match &origin {
-                Some(o) if is_origin_allowed(o) => {
-                    Some(o.trim_end_matches('/').to_string())
-                }
+                Some(o) if is_origin_allowed(o) => Some(o.trim_end_matches('/').to_string()),
                 Some(o) => {
                     log_warn!("拒绝非法来源: {}", "Rejected disallowed origin: {}", o);
-                    respond_json(request, 403,
-                        r#"{"error":"Origin not allowed"}"#, None);
+                    respond_json(request, 403, r#"{"error":"Origin not allowed"}"#, None);
                     continue;
-                }
+                },
                 None => None,
             };
             let cors_ref = cors_origin.as_deref();
@@ -438,7 +456,11 @@ where
                     }
                 }
                 if let Err(e) = request.respond(resp) {
-                    log_warn!("CORS preflight 响应失败: {}", "CORS preflight response failed: {}", e);
+                    log_warn!(
+                        "CORS preflight 响应失败: {}",
+                        "CORS preflight response failed: {}",
+                        e
+                    );
                 }
                 continue;
             }
@@ -446,15 +468,15 @@ where
             match (method, url.as_str()) {
                 (Method::Post, "/manage") => {
                     handle_manage(request, &http_enabled, &http_state, &http_job_tx, cors_ref);
-                }
+                },
 
                 (Method::Post, "/equip") => {
                     handle_equip(request, &http_enabled, &http_state, &http_job_tx, cors_ref);
-                }
+                },
 
                 (Method::Post, "/scan") => {
                     handle_scan(request, &http_enabled, &http_state, &http_job_tx, cors_ref);
-                }
+                },
 
                 // Lightweight poll — no result payload.
                 // Returns state + jobId + progress (running) or summary (completed).
@@ -463,21 +485,26 @@ where
                     let json = state.status_json();
                     drop(state);
                     respond_json(request, 200, &json, cors_ref);
-                }
+                },
 
                 // Full result — requires jobId query param, idempotent.
                 (Method::Get, url) if url.starts_with("/result") => {
                     // Parse jobId from query string: /result?jobId=xxx
-                    let query_job_id = url.split('?')
+                    let query_job_id = url
+                        .split('?')
                         .nth(1)
                         .and_then(|qs| qs.split('&').find(|p| p.starts_with("jobId=")))
                         .map(|p| &p[6..]);
 
                     match query_job_id {
                         None | Some("") => {
-                            respond_json(request, 400,
-                                r#"{"error":"missing required query parameter: jobId"}"#, cors_ref);
-                        }
+                            respond_json(
+                                request,
+                                400,
+                                r#"{"error":"missing required query parameter: jobId"}"#,
+                                cors_ref,
+                            );
+                        },
                         Some(requested_id) => {
                             let state = http_state.lock().unwrap();
                             match state.state {
@@ -485,41 +512,62 @@ where
                                     let actual_id = state.job_id.as_deref().unwrap_or("");
                                     if actual_id != requested_id {
                                         drop(state);
-                                        respond_json(request, 404,
-                                            r#"{"error":"job not found"}"#, cors_ref);
+                                        respond_json(
+                                            request,
+                                            404,
+                                            r#"{"error":"job not found"}"#,
+                                            cors_ref,
+                                        );
                                     } else if let Some(ref result) = state.result {
-                                        let json = serde_json::to_string(result).unwrap_or_else(|_| {
-                                            r#"{"error":"serialization failed"}"#.to_string()
-                                        });
+                                        let json =
+                                            serde_json::to_string(result).unwrap_or_else(|_| {
+                                                r#"{"error":"serialization failed"}"#.to_string()
+                                            });
                                         drop(state);
                                         respond_json(request, 200, &json, cors_ref);
                                     } else {
                                         drop(state);
-                                        respond_json(request, 500,
-                                            r#"{"error":"result data missing"}"#, cors_ref);
+                                        respond_json(
+                                            request,
+                                            500,
+                                            r#"{"error":"result data missing"}"#,
+                                            cors_ref,
+                                        );
                                     }
-                                }
+                                },
                                 JobPhase::Running => {
                                     let actual_id = state.job_id.as_deref().unwrap_or("");
                                     if actual_id != requested_id {
                                         drop(state);
-                                        respond_json(request, 404,
-                                            r#"{"error":"job not found"}"#, cors_ref);
+                                        respond_json(
+                                            request,
+                                            404,
+                                            r#"{"error":"job not found"}"#,
+                                            cors_ref,
+                                        );
                                     } else {
                                         drop(state);
-                                        respond_json(request, 409,
-                                            r#"{"error":"job still running"}"#, cors_ref);
+                                        respond_json(
+                                            request,
+                                            409,
+                                            r#"{"error":"job still running"}"#,
+                                            cors_ref,
+                                        );
                                     }
-                                }
+                                },
                                 JobPhase::Idle => {
                                     drop(state);
-                                    respond_json(request, 404,
-                                        r#"{"error":"job not found"}"#, cors_ref);
-                                }
+                                    respond_json(
+                                        request,
+                                        404,
+                                        r#"{"error":"job not found"}"#,
+                                        cors_ref,
+                                    );
+                                },
                             }
-                        }
+                        },
                     }
-                }
+                },
 
                 // Health check — includes game window liveness.
                 (Method::Get, "/health") => {
@@ -533,26 +581,26 @@ where
                         is_enabled, is_busy, game_alive
                     );
                     respond_json(request, 200, &json, cors_ref);
-                }
+                },
 
                 // GET /characters?jobId=xxx
                 (Method::Get, url) if url.starts_with("/characters") => {
                     serve_cache(request, url, &http_character_cache, "characters", cors_ref);
-                }
+                },
 
                 // GET /weapons?jobId=xxx
                 (Method::Get, url) if url.starts_with("/weapons") => {
                     serve_cache(request, url, &http_weapon_cache, "weapons", cors_ref);
-                }
+                },
 
                 // GET /artifacts?jobId=xxx (jobId optional for backwards compat)
                 (Method::Get, url) if url.starts_with("/artifacts") => {
                     serve_artifact_cache(request, url, &http_artifact_cache, cors_ref);
-                }
+                },
 
                 _ => {
                     respond_json(request, 404, r#"{"error":"Not Found"}"#, cors_ref);
-                }
+                },
             }
         }
     });
@@ -566,7 +614,11 @@ where
 
     while let Ok((job_id, request)) = job_rx.recv() {
         if shutdown.load(Ordering::Relaxed) {
-            log_info!("[job {}] 服务器关闭中，跳过", "[job {}] Server shutting down, skipping job", job_id);
+            log_info!(
+                "[job {}] 服务器关闭中，跳过",
+                "[job {}] Server shutting down, skipping job",
+                job_id
+            );
             break;
         }
         log_info!(
@@ -587,25 +639,28 @@ where
             match init_executor() {
                 Ok(e) => {
                     executor = Some(e);
-                }
+                },
                 Err(e) => {
                     log_error!(
                         "[job {}] 游戏初始化失败:\n{:#}",
                         "[job {}] Game init failed:\n{:#}",
-                        job_id, e
+                        job_id,
+                        e
                     );
                     let mut state = job_state.lock().unwrap();
                     let total_count = match &request {
                         JobRequest::Manage(r) => r.lock.len() + r.unlock.len(),
                         JobRequest::Equip(r) => r.equip.len(),
-                        JobRequest::Scan(r) => r.characters as usize + r.weapons as usize + r.artifacts as usize,
+                        JobRequest::Scan(r) => {
+                            r.characters as usize + r.weapons as usize + r.artifacts as usize
+                        },
                     };
-                    let err_results: Vec<_> = (0..total_count).map(|idx| {
-                        crate::manager::models::InstructionResult {
+                    let err_results: Vec<_> = (0..total_count)
+                        .map(|idx| crate::manager::models::InstructionResult {
                             id: format!("item_{}", idx),
                             status: crate::manager::models::InstructionStatus::UiError,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     let summary = crate::manager::models::ManageSummary::from_results(&err_results);
                     let result = crate::manager::models::ManageResult {
                         results: err_results,
@@ -613,7 +668,7 @@ where
                     };
                     *state = JobState::completed(job_id.clone(), result);
                     continue;
-                }
+                },
             }
         }
 
@@ -637,16 +692,17 @@ where
 
         // Linear progress_fn for manage/equip: writes into JobState.progress.
         let linear_state = job_state.clone();
-        let linear_progress_fn = move |completed: usize, total: usize, current_id: &str, phase: &str| {
-            if let Ok(mut state) = linear_state.lock() {
-                state.progress = Some(JobProgress {
-                    completed,
-                    total,
-                    current_id: current_id.to_string(),
-                    phase: phase.to_string(),
-                });
-            }
-        };
+        let linear_progress_fn =
+            move |completed: usize, total: usize, current_id: &str, phase: &str| {
+                if let Ok(mut state) = linear_state.lock() {
+                    state.progress = Some(JobProgress {
+                        completed,
+                        total,
+                        current_id: current_id.to_string(),
+                        phase: phase.to_string(),
+                    });
+                }
+            };
 
         // Scan progress_fn: `phase` is the category key ("characters" /
         // "weapons" / "artifacts"). Updates the per-category slot in
@@ -683,67 +739,109 @@ where
             Scan(anyhow::Result<ScanResult>),
         }
 
-        let outcome = match std::panic::catch_unwind(
-            std::panic::AssertUnwindSafe(|| match request {
+        let outcome =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
                 JobRequest::Manage(manage_req) => {
                     let has_lock = !manage_req.lock.is_empty() || !manage_req.unlock.is_empty();
-                    let (result, snapshot) = exec.execute(manage_req, Some(&linear_progress_fn), cancel_token);
-                    JobOutcome::ManageEquip { result, artifact_snapshot: snapshot, invalidates_cache: has_lock }
-                }
+                    let (result, snapshot) =
+                        exec.execute(manage_req, Some(&linear_progress_fn), cancel_token);
+                    JobOutcome::ManageEquip {
+                        result,
+                        artifact_snapshot: snapshot,
+                        invalidates_cache: has_lock,
+                    }
+                },
                 JobRequest::Equip(equip_req) => {
-                    let result = exec.execute_equip(equip_req, Some(&linear_progress_fn), cancel_token);
-                    JobOutcome::ManageEquip { result, artifact_snapshot: None, invalidates_cache: true }
-                }
-                JobRequest::Scan(scan_req) => {
-                    JobOutcome::Scan(exec.execute_scan(&scan_req, Some(&scan_progress_fn), cancel_token))
-                }
-            })
-        ) {
-            Ok(r) => r,
-            Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "unknown panic".to_string()
-                };
-                log_error!("[job {}] 执行时发生panic: {}", "[job {}] Panic during execution: {}", job_id, msg);
-                let summary = ManageSummary {
-                    total: 0, success: 0, already_correct: 0, not_found: 0,
-                    errors: 1, aborted: 0,
-                };
-                let result = ManageResult { results: Vec::new(), summary };
-                *job_state.lock().unwrap() = JobState::completed(job_id.clone(), result);
-                continue;
-            }
-        };
+                    let result =
+                        exec.execute_equip(equip_req, Some(&linear_progress_fn), cancel_token);
+                    JobOutcome::ManageEquip {
+                        result,
+                        artifact_snapshot: None,
+                        invalidates_cache: true,
+                    }
+                },
+                JobRequest::Scan(scan_req) => JobOutcome::Scan(exec.execute_scan(
+                    &scan_req,
+                    Some(&scan_progress_fn),
+                    cancel_token,
+                )),
+            })) {
+                Ok(r) => r,
+                Err(panic_info) => {
+                    let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    log_error!(
+                        "[job {}] 执行时发生panic: {}",
+                        "[job {}] Panic during execution: {}",
+                        job_id,
+                        msg
+                    );
+                    let summary = ManageSummary {
+                        total: 0,
+                        success: 0,
+                        already_correct: 0,
+                        not_found: 0,
+                        errors: 1,
+                        aborted: 0,
+                    };
+                    let result = ManageResult {
+                        results: Vec::new(),
+                        summary,
+                    };
+                    *job_state.lock().unwrap() = JobState::completed(job_id.clone(), result);
+                    continue;
+                },
+            };
 
         match outcome {
-            JobOutcome::ManageEquip { result, artifact_snapshot, invalidates_cache } => {
+            JobOutcome::ManageEquip {
+                result,
+                artifact_snapshot,
+                invalidates_cache,
+            } => {
                 // Update artifact cache based on scan completeness
                 match artifact_snapshot {
                     Some(snapshot) => {
                         let count = snapshot.len();
                         if dump_job_data {
-                            save_job_good_export(&job_id, "manage", None, None, Some(snapshot.clone()));
+                            save_job_good_export(
+                                &job_id,
+                                "manage",
+                                None,
+                                None,
+                                Some(snapshot.clone()),
+                            );
                         }
                         artifact_cache.lock().unwrap().set(job_id.clone(), snapshot);
-                        log_info!("[job {}] 圣遗物快照已更新（{} 个）", "[job {}] Artifact snapshot updated ({} items)", job_id, count);
-                    }
+                        log_info!(
+                            "[job {}] 圣遗物快照已更新（{} 个）",
+                            "[job {}] Artifact snapshot updated ({} items)",
+                            job_id,
+                            count
+                        );
+                    },
                     None => {
                         if invalidates_cache {
                             let mut cache = artifact_cache.lock().unwrap();
                             if cache.data.is_some() {
                                 cache.invalidate();
-                                log_info!("[job {}] 游戏内状态已变更，快照已失效", "[job {}] In-game state changed, artifact snapshot invalidated", job_id);
+                                log_info!(
+                                    "[job {}] 游戏内状态已变更，快照已失效",
+                                    "[job {}] In-game state changed, artifact snapshot invalidated",
+                                    job_id
+                                );
                             }
                         }
-                    }
+                    },
                 }
                 let mut state = job_state.lock().unwrap();
                 *state = JobState::completed(job_id.clone(), result);
-            }
+            },
             JobOutcome::Scan(scan_result) => {
                 match scan_result {
                     Ok(sr) => {
@@ -769,16 +867,19 @@ where
                                     id: "characters".to_string(),
                                     status: InstructionStatus::Success,
                                 });
-                            }
+                            },
                             PhaseResult::Incomplete => {
-                                character_cache.lock().unwrap().mark_incomplete(job_id.clone());
+                                character_cache
+                                    .lock()
+                                    .unwrap()
+                                    .mark_incomplete(job_id.clone());
                                 phases_incomplete += 1;
                                 results.push(InstructionResult {
                                     id: "characters".to_string(),
                                     status: InstructionStatus::Aborted,
                                 });
-                            }
-                            PhaseResult::NotAttempted => {}
+                            },
+                            PhaseResult::NotAttempted => {},
                         }
 
                         match sr.weapons {
@@ -792,7 +893,7 @@ where
                                     id: "weapons".to_string(),
                                     status: InstructionStatus::Success,
                                 });
-                            }
+                            },
                             PhaseResult::Incomplete => {
                                 weapon_cache.lock().unwrap().mark_incomplete(job_id.clone());
                                 phases_incomplete += 1;
@@ -800,8 +901,8 @@ where
                                     id: "weapons".to_string(),
                                     status: InstructionStatus::Aborted,
                                 });
-                            }
-                            PhaseResult::NotAttempted => {}
+                            },
+                            PhaseResult::NotAttempted => {},
                         }
 
                         match sr.artifacts {
@@ -815,16 +916,19 @@ where
                                     id: "artifacts".to_string(),
                                     status: InstructionStatus::Success,
                                 });
-                            }
+                            },
                             PhaseResult::Incomplete => {
-                                artifact_cache.lock().unwrap().mark_incomplete(job_id.clone());
+                                artifact_cache
+                                    .lock()
+                                    .unwrap()
+                                    .mark_incomplete(job_id.clone());
                                 phases_incomplete += 1;
                                 results.push(InstructionResult {
                                     id: "artifacts".to_string(),
                                     status: InstructionStatus::Aborted,
                                 });
-                            }
-                            PhaseResult::NotAttempted => {}
+                            },
+                            PhaseResult::NotAttempted => {},
                         }
 
                         if dump_job_data
@@ -844,25 +948,39 @@ where
                         log_info!(
                             "[job {}] 扫描结束（{} 完成, {} 中断）",
                             "[job {}] Scan finished ({} complete, {} aborted)",
-                            job_id, phases_complete, phases_incomplete
+                            job_id,
+                            phases_complete,
+                            phases_incomplete
                         );
                         let summary = ManageSummary::from_results(&results);
                         let result = ManageResult { results, summary };
                         let mut state = job_state.lock().unwrap();
                         *state = JobState::completed(job_id.clone(), result);
-                    }
+                    },
                     Err(e) => {
-                        log_error!("[job {}] 扫描失败: {:#}", "[job {}] Scan failed: {:#}", job_id, e);
+                        log_error!(
+                            "[job {}] 扫描失败: {:#}",
+                            "[job {}] Scan failed: {:#}",
+                            job_id,
+                            e
+                        );
                         let summary = ManageSummary {
-                            total: 0, success: 0, already_correct: 0, not_found: 0,
-                            errors: 1, aborted: 0,
+                            total: 0,
+                            success: 0,
+                            already_correct: 0,
+                            not_found: 0,
+                            errors: 1,
+                            aborted: 0,
                         };
-                        let result = ManageResult { results: Vec::new(), summary };
+                        let result = ManageResult {
+                            results: Vec::new(),
+                            summary,
+                        };
                         let mut state = job_state.lock().unwrap();
                         *state = JobState::completed(job_id.clone(), result);
-                    }
+                    },
                 }
-            }
+            },
         }
 
         log_info!("[job {}] 执行完成", "[job {}] Execution completed", job_id);
@@ -922,16 +1040,19 @@ fn serve_cache<T: serde::Serialize>(
     let query_job_id = parse_job_id(url);
     match query_job_id {
         None => {
-            respond_json(request, 400,
-                r#"{"error":"missing required query parameter: jobId"}"#, cors_origin);
-        }
+            respond_json(
+                request,
+                400,
+                r#"{"error":"missing required query parameter: jobId"}"#,
+                cors_origin,
+            );
+        },
         Some(requested_id) => {
             let c = cache.lock().unwrap();
             if let (Some(cached_id), Some(data)) = (&c.job_id, &c.data) {
                 if cached_id == requested_id {
-                    let json = serde_json::to_string(data).unwrap_or_else(|_| {
-                        r#"{"error":"serialization failed"}"#.to_string()
-                    });
+                    let json = serde_json::to_string(data)
+                        .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
                     drop(c);
                     respond_json(request, 200, &json, cors_origin);
                     return;
@@ -939,16 +1060,22 @@ fn serve_cache<T: serde::Serialize>(
             }
             if c.incomplete_job_id.as_deref() == Some(requested_id) {
                 drop(c);
-                respond_json(request, 503,
+                respond_json(
+                    request,
+                    503,
                     &format!(r#"{{"error":"{} scan incomplete for this jobId"}}"#, label),
-                    cors_origin);
+                    cors_origin,
+                );
                 return;
             }
             drop(c);
-            respond_json(request, 404,
+            respond_json(
+                request,
+                404,
                 &format!(r#"{{"error":"no {} data for this jobId"}}"#, label),
-                cors_origin);
-        }
+                cors_origin,
+            );
+        },
     }
 }
 
@@ -969,9 +1096,8 @@ fn serve_artifact_cache(
     if let (Some(cached_id), Some(data)) = (&c.job_id, &c.data) {
         // If jobId provided, it must match; otherwise serve the latest.
         if query_job_id.map_or(true, |q| q == cached_id) {
-            let json = serde_json::to_string(data).unwrap_or_else(|_| {
-                r#"{"error":"serialization failed"}"#.to_string()
-            });
+            let json = serde_json::to_string(data)
+                .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
             drop(c);
             respond_json(request, 200, &json, cors_origin);
             return;
@@ -980,18 +1106,25 @@ fn serve_artifact_cache(
     if let Some(requested_id) = query_job_id {
         if c.incomplete_job_id.as_deref() == Some(requested_id) {
             drop(c);
-            respond_json(request, 503,
+            respond_json(
+                request,
+                503,
                 r#"{"error":"artifacts scan incomplete for this jobId"}"#,
-                cors_origin);
+                cors_origin,
+            );
             return;
         }
     }
     drop(c);
-    respond_json(request, 404,
-        &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(
-            "没有可用的圣遗物数据 / No artifact data available"
-        )),
-        cors_origin);
+    respond_json(
+        request,
+        404,
+        &format!(
+            r#"{{"error":"{}"}}"#,
+            yas::lang::localize("没有可用的圣遗物数据 / No artifact data available")
+        ),
+        cors_origin,
+    );
 }
 
 /// Handle POST /manage: validate origin, check busy, enforce size limit, submit job.
@@ -1004,11 +1137,19 @@ fn handle_manage(
 ) {
     // Check if manager is enabled
     if !enabled.load(Ordering::Relaxed) {
-        log_warn!("管理器已暂停，拒绝请求", "Manager paused, rejecting request");
+        log_warn!(
+            "管理器已暂停，拒绝请求",
+            "Manager paused, rejecting request"
+        );
         respond_json(
             request,
             503,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests.")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(
+                    "管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests."
+                )
+            ),
             cors_origin,
         );
         return;
@@ -1050,7 +1191,13 @@ fn handle_manage(
         respond_json(
             request,
             400,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!("读取请求体失败: {} / Failed to read body: {}", e, e))),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(&format!(
+                    "读取请求体失败: {} / Failed to read body: {}",
+                    e, e
+                ))
+            ),
             cors_origin,
         );
         return;
@@ -1064,10 +1211,13 @@ fn handle_manage(
         respond_json(
             request,
             413,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!(
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(&format!(
                 "请求体过大（{} 字节，上限 {} 字节）/ Request body too large: {} bytes (max {})",
                 body.len(), MAX_BODY_SIZE, body.len(), MAX_BODY_SIZE
-            ))),
+            ))
+            ),
             cors_origin,
         );
         return;
@@ -1080,25 +1230,36 @@ fn handle_manage(
             respond_json(
                 request,
                 400,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))),
+                &format!(
+                    r#"{{"error":"{}"}}"#,
+                    yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))
+                ),
                 cors_origin,
             );
             return;
-        }
+        },
     };
 
     if manage_request.lock.is_empty() && manage_request.unlock.is_empty() {
         respond_json(
             request,
             400,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("lock 和 unlock 列表均为空 / Both lock and unlock lists are empty")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(
+                    "lock 和 unlock 列表均为空 / Both lock and unlock lists are empty"
+                )
+            ),
             cors_origin,
         );
         return;
     }
 
     // Validate ALL entries upfront — reject the whole request on any invalid entry.
-    for (list_name, artifacts) in [("lock", &manage_request.lock), ("unlock", &manage_request.unlock)] {
+    for (list_name, artifacts) in [
+        ("lock", &manage_request.lock),
+        ("unlock", &manage_request.unlock),
+    ] {
         for (idx, artifact) in artifacts.iter().enumerate() {
             if let Some(err) = validate_artifact(artifact) {
                 respond_json(
@@ -1118,7 +1279,10 @@ fn handle_manage(
     log_info!(
         "[job {}] 收到 {} 条管理请求（lock: {}, unlock: {}）",
         "[job {}] Received {} manage items (lock: {}, unlock: {})",
-        job_id, total, manage_request.lock.len(), manage_request.unlock.len()
+        job_id,
+        total,
+        manage_request.lock.len(),
+        manage_request.unlock.len()
     );
 
     // Set state to Running
@@ -1128,13 +1292,19 @@ fn handle_manage(
     }
 
     // Send to execution thread
-    if job_tx.send((job_id.clone(), JobRequest::Manage(manage_request))).is_err() {
+    if job_tx
+        .send((job_id.clone(), JobRequest::Manage(manage_request)))
+        .is_err()
+    {
         let mut s = state.lock().unwrap();
         *s = JobState::idle();
         respond_json(
             request,
             500,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("执行线程不可用 / Execution thread unavailable")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize("执行线程不可用 / Execution thread unavailable")
+            ),
             cors_origin,
         );
         return;
@@ -1154,11 +1324,19 @@ fn handle_equip(
     cors_origin: Option<&str>,
 ) {
     if !enabled.load(Ordering::Relaxed) {
-        log_warn!("管理器已暂停，拒绝请求", "Manager paused, rejecting request");
+        log_warn!(
+            "管理器已暂停，拒绝请求",
+            "Manager paused, rejecting request"
+        );
         respond_json(
             request,
             503,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests.")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(
+                    "管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests."
+                )
+            ),
             cors_origin,
         );
         return;
@@ -1197,7 +1375,13 @@ fn handle_equip(
         respond_json(
             request,
             400,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!("读取请求体失败: {} / Failed to read body: {}", e, e))),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(&format!(
+                    "读取请求体失败: {} / Failed to read body: {}",
+                    e, e
+                ))
+            ),
             cors_origin,
         );
         return;
@@ -1210,10 +1394,13 @@ fn handle_equip(
         respond_json(
             request,
             413,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!(
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(&format!(
                 "请求体过大（{} 字节，上限 {} 字节）/ Request body too large: {} bytes (max {})",
                 body.len(), MAX_BODY_SIZE, body.len(), MAX_BODY_SIZE
-            ))),
+            ))
+            ),
             cors_origin,
         );
         return;
@@ -1225,18 +1412,24 @@ fn handle_equip(
             respond_json(
                 request,
                 400,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))),
+                &format!(
+                    r#"{{"error":"{}"}}"#,
+                    yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))
+                ),
                 cors_origin,
             );
             return;
-        }
+        },
     };
 
     if equip_request.equip.is_empty() {
         respond_json(
             request,
             400,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("equip 列表为空 / Equip list is empty")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize("equip 列表为空 / Equip list is empty")
+            ),
             cors_origin,
         );
         return;
@@ -1261,7 +1454,8 @@ fn handle_equip(
     log_info!(
         "[job {}] 收到 {} 条装备请求",
         "[job {}] Received {} equip instructions",
-        job_id, total
+        job_id,
+        total
     );
 
     {
@@ -1269,13 +1463,19 @@ fn handle_equip(
         *s = JobState::running(job_id.clone(), total);
     }
 
-    if job_tx.send((job_id.clone(), JobRequest::Equip(equip_request))).is_err() {
+    if job_tx
+        .send((job_id.clone(), JobRequest::Equip(equip_request)))
+        .is_err()
+    {
         let mut s = state.lock().unwrap();
         *s = JobState::idle();
         respond_json(
             request,
             500,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("执行线程不可用 / Execution thread unavailable")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize("执行线程不可用 / Execution thread unavailable")
+            ),
             cors_origin,
         );
         return;
@@ -1294,11 +1494,19 @@ fn handle_scan(
     cors_origin: Option<&str>,
 ) {
     if !enabled.load(Ordering::Relaxed) {
-        log_warn!("管理器已暂停，拒绝请求", "Manager paused, rejecting request");
+        log_warn!(
+            "管理器已暂停，拒绝请求",
+            "Manager paused, rejecting request"
+        );
         respond_json(
             request,
             503,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests.")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(
+                    "管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests."
+                )
+            ),
             cors_origin,
         );
         return;
@@ -1322,7 +1530,13 @@ fn handle_scan(
         respond_json(
             request,
             400,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!("读取请求体失败: {} / Failed to read body: {}", e, e))),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(&format!(
+                    "读取请求体失败: {} / Failed to read body: {}",
+                    e, e
+                ))
+            ),
             cors_origin,
         );
         return;
@@ -1336,18 +1550,24 @@ fn handle_scan(
             respond_json(
                 request,
                 400,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))),
+                &format!(
+                    r#"{{"error":"{}"}}"#,
+                    yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))
+                ),
                 cors_origin,
             );
             return;
-        }
+        },
     };
 
     if !scan_request.characters && !scan_request.weapons && !scan_request.artifacts {
         respond_json(
             request,
             400,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("至少需要一个扫描目标 / At least one scan target must be true")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize("至少需要一个扫描目标 / At least one scan target must be true")
+            ),
             cors_origin,
         );
         return;
@@ -1361,7 +1581,10 @@ fn handle_scan(
     log_info!(
         "[job {}] 收到扫描请求（角色: {}, 武器: {}, 圣遗物: {}）",
         "[job {}] Received scan request (characters: {}, weapons: {}, artifacts: {})",
-        job_id, scan_chars, scan_wpns, scan_arts
+        job_id,
+        scan_chars,
+        scan_wpns,
+        scan_arts
     );
 
     {
@@ -1369,13 +1592,19 @@ fn handle_scan(
         *s = JobState::running_scan(job_id.clone(), scan_chars, scan_wpns, scan_arts);
     }
 
-    if job_tx.send((job_id.clone(), JobRequest::Scan(scan_request))).is_err() {
+    if job_tx
+        .send((job_id.clone(), JobRequest::Scan(scan_request)))
+        .is_err()
+    {
         let mut s = state.lock().unwrap();
         *s = JobState::idle();
         respond_json(
             request,
             500,
-            &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("执行线程不可用 / Execution thread unavailable")),
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize("执行线程不可用 / Execution thread unavailable")
+            ),
             cors_origin,
         );
         return;
@@ -1391,7 +1620,9 @@ fn handle_scan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::common::models::{GoodArtifact, GoodCharacter, GoodTalent, GoodWeapon, GoodSubStat};
+    use crate::scanner::common::models::{
+        GoodArtifact, GoodCharacter, GoodSubStat, GoodTalent, GoodWeapon,
+    };
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1428,7 +1659,11 @@ mod tests {
             if let Some(pf) = progress_fn {
                 pf(0, total, "", "锁定变更 / Lock changes");
             }
-            let per_item_delay = if total > 0 { self.delay_ms / total as u64 } else { self.delay_ms };
+            let per_item_delay = if total > 0 {
+                self.delay_ms / total as u64
+            } else {
+                self.delay_ms
+            };
             for (idx, r) in result.results.iter().enumerate() {
                 if per_item_delay > 0 {
                     std::thread::sleep(Duration::from_millis(per_item_delay));
@@ -1470,18 +1705,29 @@ mod tests {
             // values inside each category bar.
             let phases: Vec<(&'static str, bool)> = match &outcome {
                 Ok(sr) => vec![
-                    ("characters", !matches!(sr.characters, PhaseResult::NotAttempted)),
+                    (
+                        "characters",
+                        !matches!(sr.characters, PhaseResult::NotAttempted),
+                    ),
                     ("weapons", !matches!(sr.weapons, PhaseResult::NotAttempted)),
-                    ("artifacts", !matches!(sr.artifacts, PhaseResult::NotAttempted)),
+                    (
+                        "artifacts",
+                        !matches!(sr.artifacts, PhaseResult::NotAttempted),
+                    ),
                 ],
                 Err(_) => vec![],
             };
-            let active_phases: Vec<&'static str> = phases.iter()
+            let active_phases: Vec<&'static str> = phases
+                .iter()
                 .filter_map(|(k, active)| if *active { Some(*k) } else { None })
                 .collect();
             let fake_total: usize = 10;
             let total_ticks = active_phases.len() * fake_total;
-            let per_tick_delay = if total_ticks > 0 { self.delay_ms / total_ticks as u64 } else { 0 };
+            let per_tick_delay = if total_ticks > 0 {
+                self.delay_ms / total_ticks as u64
+            } else {
+                0
+            };
             for phase_key in &active_phases {
                 if let Some(pf) = progress_fn {
                     pf(0, fake_total, "", phase_key);
@@ -1552,7 +1798,12 @@ mod tests {
         responses: VecDeque<(ManageResult, Option<Vec<GoodArtifact>>)>,
         delay_ms: u64,
     ) -> (u16, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
-        start_test_server_full(responses, VecDeque::new(), delay_ms, Arc::new(AtomicBool::new(true)))
+        start_test_server_full(
+            responses,
+            VecDeque::new(),
+            delay_ms,
+            Arc::new(AtomicBool::new(true)),
+        )
     }
 
     fn start_test_server_with_enabled(
@@ -1568,7 +1819,12 @@ mod tests {
         scan_responses: VecDeque<anyhow::Result<ScanResult>>,
         delay_ms: u64,
     ) -> (u16, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
-        start_test_server_full(responses, scan_responses, delay_ms, Arc::new(AtomicBool::new(true)))
+        start_test_server_full(
+            responses,
+            scan_responses,
+            delay_ms,
+            Arc::new(AtomicBool::new(true)),
+        )
     }
 
     fn start_test_server_full(
@@ -1643,10 +1899,7 @@ mod tests {
 
         let mut responses = VecDeque::new();
         // Job 1: single item, no snapshot (tests accept + artifacts 404)
-        responses.push_back((
-            make_result(&[("a", InstructionStatus::Success)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("a", InstructionStatus::Success)]), None));
         // Job 2: 3 items, no snapshot (tests full lifecycle)
         responses.push_back((
             make_result(&[
@@ -1666,14 +1919,8 @@ mod tests {
             Some(artifacts),
         ));
         // Jobs 4-5: sequential jobs (tests state reset)
-        responses.push_back((
-            make_result(&[("j1", InstructionStatus::Success)]),
-            None,
-        ));
-        responses.push_back((
-            make_result(&[("j2", InstructionStatus::NotFound)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("j1", InstructionStatus::Success)]), None));
+        responses.push_back((make_result(&[("j2", InstructionStatus::NotFound)]), None));
 
         let (port, shutdown, handle) = start_test_server(responses, 0);
         let client = reqwest::blocking::Client::new();
@@ -1733,10 +1980,7 @@ mod tests {
 
         // CORS: preflight OPTIONS
         let resp = client
-            .request(
-                reqwest::Method::OPTIONS,
-                format!("{}/manage", base),
-            )
+            .request(reqwest::Method::OPTIONS, format!("{}/manage", base))
             .header("Origin", "https://ggartifact.com")
             .send()
             .unwrap();
@@ -1787,10 +2031,7 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 404);
 
         // unknown route returns 404
-        let resp = client
-            .get(format!("{}/nonexistent", base))
-            .send()
-            .unwrap();
+        let resp = client.get(format!("{}/nonexistent", base)).send().unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         // artifacts: 404 before any scan (no jobId required)
@@ -1798,7 +2039,10 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 404);
 
         // artifacts: 404 with unknown jobId
-        let resp = client.get(format!("{}/artifacts?jobId=nonexistent", base)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId=nonexistent", base))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         // === Job 1: basic accept + artifacts stays 404 ===
@@ -1818,7 +2062,10 @@ mod tests {
         poll_until_completed(port);
 
         // No snapshot → artifacts 404 for this jobId
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job1_early_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job1_early_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         // === Job 2: full lifecycle (submit/poll/result) ===
@@ -1845,7 +2092,10 @@ mod tests {
         assert_eq!(body["summary"]["already_correct"], 1);
 
         // Get full result (with jobId)
-        let resp = client.get(format!("{}/result?jobId={}", base, job_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["results"][0]["id"], "i1");
@@ -1856,7 +2106,10 @@ mod tests {
         assert_eq!(body["results"][2]["status"], "already_correct");
 
         // Result is idempotent
-        let resp = client.get(format!("{}/result?jobId={}", base, job_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         // === Job 3: artifacts snapshot ===
@@ -1868,10 +2121,15 @@ mod tests {
             .send()
             .unwrap();
         let job3_id = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job3_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job3_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert!(body.is_array());
@@ -1894,10 +2152,15 @@ mod tests {
             .send()
             .unwrap();
         let job1_id = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/result?jobId={}", base, job1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job1_id))
+            .send()
+            .unwrap();
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["results"][0]["id"], "j1");
         assert_eq!(body["results"][0]["status"], "success");
@@ -1909,16 +2172,24 @@ mod tests {
             .send()
             .unwrap();
         let job2_id = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/result?jobId={}", base, job2_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job2_id))
+            .send()
+            .unwrap();
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["results"][0]["id"], "j2");
         assert_eq!(body["results"][0]["status"], "not_found");
 
         // Job 1's result is gone — replaced by job 2
-        let resp = client.get(format!("{}/result?jobId={}", base, job1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         stop_server(&shutdown, handle);
@@ -1938,19 +2209,13 @@ mod tests {
             make_result(&[("a", InstructionStatus::Success)]),
             Some(vec![make_artifact("GladiatorsFinale", "flower", 20, true)]),
         ));
-        responses.push_back((
-            make_result(&[("b", InstructionStatus::Aborted)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("b", InstructionStatus::Aborted)]), None));
         // Pair 2: populate → success no snapshot (stop_on_all_matched) → 503
         responses.push_back((
             make_result(&[("c", InstructionStatus::Success)]),
             Some(vec![make_artifact("GladiatorsFinale", "flower", 20, true)]),
         ));
-        responses.push_back((
-            make_result(&[("d", InstructionStatus::Success)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("d", InstructionStatus::Success)]), None));
         // Pair 3: populate with 2 items → success no snapshot (update_inv off) → not 200
         responses.push_back((
             make_result(&[("e", InstructionStatus::Success)]),
@@ -1959,10 +2224,7 @@ mod tests {
                 make_artifact("WanderersTroupe", "plume", 16, false),
             ]),
         ));
-        responses.push_back((
-            make_result(&[("f", InstructionStatus::Success)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("f", InstructionStatus::Success)]), None));
 
         let (port, shutdown, handle) = start_test_server(responses, 0);
         let client = reqwest::blocking::Client::new();
@@ -1976,10 +2238,15 @@ mod tests {
             .send()
             .unwrap();
         let job_a = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_a)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_a))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         client
@@ -1991,7 +2258,10 @@ mod tests {
         poll_until_completed(port);
 
         // Cache invalidated — old jobId no longer works
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_a)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_a))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
         // Also 404 without jobId (no data at all after invalidation)
         let resp = client.get(format!("{}/artifacts", base)).send().unwrap();
@@ -2005,10 +2275,15 @@ mod tests {
             .send()
             .unwrap();
         let job_c = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_c)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_c))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         client
@@ -2019,7 +2294,10 @@ mod tests {
             .unwrap();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_c)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_c))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         // === Pair 3: update_inventory off after on ===
@@ -2030,10 +2308,15 @@ mod tests {
             .send()
             .unwrap();
         let job_e = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_e)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_e))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body.as_array().unwrap().len(), 2);
@@ -2046,9 +2329,15 @@ mod tests {
             .unwrap();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_e)).send().unwrap();
-        assert_ne!(resp.status().as_u16(), 200,
-            "/artifacts must not serve stale data after a scan with update_inventory OFF");
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_e))
+            .send()
+            .unwrap();
+        assert_ne!(
+            resp.status().as_u16(),
+            200,
+            "/artifacts must not serve stale data after a scan with update_inventory OFF"
+        );
 
         stop_server(&shutdown, handle);
     }
@@ -2060,8 +2349,7 @@ mod tests {
 
         let responses = VecDeque::new();
         let enabled = Arc::new(AtomicBool::new(false));
-        let (port, shutdown, handle) =
-            start_test_server_with_enabled(responses, 0, enabled);
+        let (port, shutdown, handle) = start_test_server_with_enabled(responses, 0, enabled);
         let client = reqwest::blocking::Client::new();
 
         let resp = client
@@ -2083,20 +2371,14 @@ mod tests {
 
         let mut responses = VecDeque::new();
         // Job 1: busy-state test (3s delay is enough — we check at 500ms)
-        responses.push_back((
-            make_result(&[("a", InstructionStatus::Success)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("a", InstructionStatus::Success)]), None));
         // Job 2: populate snapshot for cache-clear test
         responses.push_back((
             make_result(&[("c", InstructionStatus::Success)]),
             Some(vec![make_artifact("GladiatorsFinale", "flower", 20, true)]),
         ));
         // Job 3: slow job, check cache cleared mid-execution
-        responses.push_back((
-            make_result(&[("d", InstructionStatus::Success)]),
-            None,
-        ));
+        responses.push_back((make_result(&[("d", InstructionStatus::Success)]), None));
 
         let (port, shutdown, handle) = start_test_server(responses, 3000);
         let client = reqwest::blocking::Client::new();
@@ -2150,10 +2432,15 @@ mod tests {
             .send()
             .unwrap();
         let job_c = resp.json::<serde_json::Value>().unwrap()["jobId"]
-            .as_str().unwrap().to_string();
+            .as_str()
+            .unwrap()
+            .to_string();
         poll_until_completed(port);
 
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_c)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_c))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         // Submit slow job and check cache while running
@@ -2168,9 +2455,15 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1500));
 
         // Cache must already be invalidated mid-execution
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, job_c)).send().unwrap();
-        assert_ne!(resp.status().as_u16(), 200,
-            "/artifacts must be cleared as soon as a lock job starts, not after it finishes");
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_c))
+            .send()
+            .unwrap();
+        assert_ne!(
+            resp.status().as_u16(),
+            200,
+            "/artifacts must be cleared as soon as a lock job starts, not after it finishes"
+        );
 
         poll_until_completed(port);
         stop_server(&shutdown, handle);
@@ -2214,7 +2507,10 @@ mod tests {
         poll_until_completed(port);
 
         // Check result
-        let resp = client.get(format!("{}/result?jobId={}", base, job_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         let results = body["results"].as_array().unwrap();
@@ -2231,7 +2527,11 @@ mod tests {
             level,
             constellation: 0,
             ascension: 6,
-            talent: GoodTalent { auto: 1, skill: 1, burst: 1 },
+            talent: GoodTalent {
+                auto: 1,
+                skill: 1,
+                burst: 1,
+            },
             element: None,
         }
     }
@@ -2263,19 +2563,18 @@ mod tests {
                 make_character("Furina", 90),
                 make_character("RaidenShogun", 80),
             ]),
-            weapons: PhaseResult::Complete(vec![
-                make_weapon("SkywardHarp", 90),
-            ]),
-            artifacts: PhaseResult::Complete(vec![
-                make_artifact("GladiatorsFinale", "flower", 20, true),
-            ]),
+            weapons: PhaseResult::Complete(vec![make_weapon("SkywardHarp", 90)]),
+            artifacts: PhaseResult::Complete(vec![make_artifact(
+                "GladiatorsFinale",
+                "flower",
+                20,
+                true,
+            )]),
         }));
 
         // Scan 2: characters only
         scan_responses.push_back(Ok(ScanResult {
-            characters: PhaseResult::Complete(vec![
-                make_character("Nahida", 90),
-            ]),
+            characters: PhaseResult::Complete(vec![make_character("Nahida", 90)]),
             weapons: PhaseResult::NotAttempted,
             artifacts: PhaseResult::NotAttempted,
         }));
@@ -2285,16 +2584,13 @@ mod tests {
 
         // Scan 4: characters complete, weapons aborted, artifacts never reached
         scan_responses.push_back(Ok(ScanResult {
-            characters: PhaseResult::Complete(vec![
-                make_character("Furina", 90),
-            ]),
+            characters: PhaseResult::Complete(vec![make_character("Furina", 90)]),
             weapons: PhaseResult::Incomplete,
             artifacts: PhaseResult::Incomplete,
         }));
 
-        let (port, shutdown, handle) = start_test_server_with_scans(
-            manage_responses, scan_responses, 0,
-        );
+        let (port, shutdown, handle) =
+            start_test_server_with_scans(manage_responses, scan_responses, 0);
         let client = reqwest::blocking::Client::new();
         let base = format!("http://127.0.0.1:{}", port);
 
@@ -2358,7 +2654,10 @@ mod tests {
         assert_eq!(body["summary"]["success"], 3);
 
         // /result returns per-phase results
-        let resp = client.get(format!("{}/result?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         let results = body["results"].as_array().unwrap();
@@ -2368,7 +2667,10 @@ mod tests {
         assert_eq!(results[2]["id"], "artifacts");
 
         // /characters returns character data
-        let resp = client.get(format!("{}/characters?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body.as_array().unwrap().len(), 2);
@@ -2376,25 +2678,40 @@ mod tests {
         assert_eq!(body[1]["key"], "RaidenShogun");
 
         // /weapons returns weapon data
-        let resp = client.get(format!("{}/weapons?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body.as_array().unwrap().len(), 1);
         assert_eq!(body[0]["key"], "SkywardHarp");
 
         // /artifacts returns artifact data
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body.as_array().unwrap().len(), 1);
         assert_eq!(body[0]["setKey"], "GladiatorsFinale");
 
         // wrong jobId → 404
-        let resp = client.get(format!("{}/characters?jobId=wrong", base)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId=wrong", base))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
-        let resp = client.get(format!("{}/weapons?jobId=wrong", base)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId=wrong", base))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
-        let resp = client.get(format!("{}/artifacts?jobId=wrong", base)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId=wrong", base))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         // === Scan 2: characters only — weapons/artifacts keep scan1 data ===
@@ -2415,31 +2732,46 @@ mod tests {
         poll_until_completed(port);
 
         // /result shows 1 phase
-        let resp = client.get(format!("{}/result?jobId={}", base, scan2_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, scan2_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["results"].as_array().unwrap().len(), 1);
         assert_eq!(body["results"][0]["id"], "characters");
 
         // /characters with scan2 jobId returns new data
-        let resp = client.get(format!("{}/characters?jobId={}", base, scan2_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan2_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body.as_array().unwrap().len(), 1);
         assert_eq!(body[0]["key"], "Nahida");
 
         // /characters with scan1 jobId → 404 (overwritten)
-        let resp = client.get(format!("{}/characters?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         // /weapons still has scan1 data (scan2 didn't scan weapons)
-        let resp = client.get(format!("{}/weapons?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body[0]["key"], "SkywardHarp");
 
         // /artifacts still has scan1 data
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         // === Scan 3: error — caches not updated ===
@@ -2457,15 +2789,24 @@ mod tests {
         poll_until_completed(port);
 
         // /result shows error
-        let resp = client.get(format!("{}/result?jobId={}", base, scan3_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, scan3_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["summary"]["errors"], 1);
 
         // Previous scan data still intact (error didn't wipe caches)
-        let resp = client.get(format!("{}/characters?jobId={}", base, scan2_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan2_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
-        let resp = client.get(format!("{}/weapons?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         // === Scan 4: characters complete, weapons + artifacts aborted ===
@@ -2483,35 +2824,59 @@ mod tests {
         poll_until_completed(port);
 
         // /result: 1 success (characters) + 2 aborted (weapons, artifacts)
-        let resp = client.get(format!("{}/result?jobId={}", base, scan4_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, scan4_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["summary"]["success"], 1);
         assert_eq!(body["summary"]["aborted"], 2);
 
         // Completed phase: /characters returns 200 for scan4
-        let resp = client.get(format!("{}/characters?jobId={}", base, scan4_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan4_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body[0]["key"], "Furina");
 
         // Aborted phases: /weapons and /artifacts return 503 for scan4
-        let resp = client.get(format!("{}/weapons?jobId={}", base, scan4_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId={}", base, scan4_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 503);
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, scan4_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, scan4_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 503);
 
         // Old jobIds are no longer the cached id for characters (overwritten by scan4);
         // nothing was written for weapons/artifacts in scan4, so scan1 data is still served.
-        let resp = client.get(format!("{}/characters?jobId={}", base, scan2_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan2_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
-        let resp = client.get(format!("{}/weapons?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
-        let resp = client.get(format!("{}/artifacts?jobId={}", base, scan1_id)).send().unwrap();
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
         // Unknown jobId still returns 404 (not 503).
-        let resp = client.get(format!("{}/weapons?jobId=nonexistent", base)).send().unwrap();
+        let resp = client
+            .get(format!("{}/weapons?jobId=nonexistent", base))
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
         stop_server(&shutdown, handle);
@@ -2576,8 +2941,12 @@ mod tests {
         poll_until_completed(port);
 
         // Every running snapshot must have reported total=5.
-        assert_eq!(total_observed, Some(5),
-            "total field not reported through /status; observed: {:?}", observed);
+        assert_eq!(
+            total_observed,
+            Some(5),
+            "total field not reported through /status; observed: {:?}",
+            observed
+        );
 
         // Must observe at least one intermediate tick (completed > 0 && < total).
         // If we only see [0] and [5] the client has no per-item feedback.
@@ -2588,8 +2957,12 @@ mod tests {
 
         // Completed must monotonically increase.
         for w in observed.windows(2) {
-            assert!(w[1].0 >= w[0].0,
-                "completed regressed: {:?} -> {:?}", w[0], w[1]);
+            assert!(
+                w[1].0 >= w[0].0,
+                "completed regressed: {:?} -> {:?}",
+                w[0],
+                w[1]
+            );
         }
 
         stop_server(&shutdown, handle);
@@ -2606,15 +2979,17 @@ mod tests {
         scan_responses.push_back(Ok(ScanResult {
             characters: PhaseResult::Complete(vec![make_character("Furina", 90)]),
             weapons: PhaseResult::Complete(vec![make_weapon("SkywardHarp", 90)]),
-            artifacts: PhaseResult::Complete(vec![
-                make_artifact("GladiatorsFinale", "flower", 20, true),
-            ]),
+            artifacts: PhaseResult::Complete(vec![make_artifact(
+                "GladiatorsFinale",
+                "flower",
+                20,
+                true,
+            )]),
         }));
 
         // 1500ms across 30 ticks (3 phases × 10 items each) → 50ms per tick.
-        let (port, shutdown, handle) = start_test_server_with_scans(
-            VecDeque::new(), scan_responses, 1500,
-        );
+        let (port, shutdown, handle) =
+            start_test_server_with_scans(VecDeque::new(), scan_responses, 1500);
         let client = reqwest::blocking::Client::new();
         let base = format!("http://127.0.0.1:{}", port);
 
@@ -2642,9 +3017,16 @@ mod tests {
                 node["total"].as_u64(),
                 node["state"].as_str(),
             ) {
-                let entry = CatObs { completed: c, total: t, state: s.to_string() };
-                if obs.last().map(|p| (p.completed, p.total, p.state.as_str())
-                    == (entry.completed, entry.total, entry.state.as_str())) != Some(true) {
+                let entry = CatObs {
+                    completed: c,
+                    total: t,
+                    state: s.to_string(),
+                };
+                if obs.last().map(|p| {
+                    (p.completed, p.total, p.state.as_str())
+                        == (entry.completed, entry.total, entry.state.as_str())
+                }) != Some(true)
+                {
                     obs.push(entry);
                 }
             }
@@ -2657,9 +3039,11 @@ mod tests {
             if body["state"] == "running" {
                 let sp = &body["scanProgress"];
                 // progress.* should NOT be populated for scan jobs.
-                assert!(body["progress"].is_null(),
+                assert!(
+                    body["progress"].is_null(),
                     "scan should use scanProgress, not the linear progress field; body={}",
-                    body);
+                    body
+                );
                 if sp.is_object() {
                     record(&mut chars_obs, &sp["characters"]);
                     record(&mut weapons_obs, &sp["weapons"]);
@@ -2679,12 +3063,21 @@ mod tests {
 
         // Each category must report intermediate completed values (not just 0 and total).
         let has_mid = |obs: &[CatObs]| obs.iter().any(|o| o.completed > 0 && o.completed < o.total);
-        assert!(has_mid(&chars_obs),
-            "expected intermediate characters progress; observed: {:?}", chars_obs);
-        assert!(has_mid(&weapons_obs),
-            "expected intermediate weapons progress; observed: {:?}", weapons_obs);
-        assert!(has_mid(&artifacts_obs),
-            "expected intermediate artifacts progress; observed: {:?}", artifacts_obs);
+        assert!(
+            has_mid(&chars_obs),
+            "expected intermediate characters progress; observed: {:?}",
+            chars_obs
+        );
+        assert!(
+            has_mid(&weapons_obs),
+            "expected intermediate weapons progress; observed: {:?}",
+            weapons_obs
+        );
+        assert!(
+            has_mid(&artifacts_obs),
+            "expected intermediate artifacts progress; observed: {:?}",
+            artifacts_obs
+        );
 
         // Each category transitioned from pending → running (FakeExecutor emits
         // running ticks; pending is only visible if we poll before that category
@@ -2697,8 +3090,11 @@ mod tests {
         // Completed must monotonically increase within each category.
         for obs in [&chars_obs, &weapons_obs, &artifacts_obs] {
             for w in obs.windows(2) {
-                assert!(w[1].completed >= w[0].completed,
-                    "completed regressed: {:?}", obs);
+                assert!(
+                    w[1].completed >= w[0].completed,
+                    "completed regressed: {:?}",
+                    obs
+                );
             }
         }
 
@@ -2743,49 +3139,75 @@ mod tests {
                     }))
                 }
             };
-            let _ = run_server(port, init, Arc::new(AtomicBool::new(true)), shutdown_clone, false);
+            let _ = run_server(
+                port,
+                init,
+                Arc::new(AtomicBool::new(true)),
+                shutdown_clone,
+                false,
+            );
         });
 
         // Wait for server to come up.
         let client = reqwest::blocking::Client::new();
         let health_url = format!("http://127.0.0.1:{}/health", port);
         for _ in 0..50 {
-            if client.get(&health_url).send().is_ok() { break; }
+            if client.get(&health_url).send().is_ok() {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
         let base = format!("http://127.0.0.1:{}", port);
 
         // Job 1: init fails. Summary shows 1 error, server stays usable.
-        let resp = client.post(format!("{}/manage", base))
+        let resp = client
+            .post(format!("{}/manage", base))
             .header("Content-Type", "application/json")
             .body(make_manage_body(&["x"]))
-            .send().unwrap();
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 202);
         poll_until_completed(port);
-        let body: serde_json::Value = client.get(format!("{}/status", base))
-            .send().unwrap().json().unwrap();
+        let body: serde_json::Value = client
+            .get(format!("{}/status", base))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         assert_eq!(body["summary"]["errors"], 1);
 
         // Job 2: init fails again — same 1 error summary, not a panic.
-        let resp = client.post(format!("{}/manage", base))
+        let resp = client
+            .post(format!("{}/manage", base))
             .header("Content-Type", "application/json")
             .body(make_manage_body(&["y"]))
-            .send().unwrap();
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 202);
         poll_until_completed(port);
-        let body: serde_json::Value = client.get(format!("{}/status", base))
-            .send().unwrap().json().unwrap();
+        let body: serde_json::Value = client
+            .get(format!("{}/status", base))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         assert_eq!(body["summary"]["errors"], 1);
 
         // Job 3: init succeeds — job runs and reports Success.
-        let resp = client.post(format!("{}/manage", base))
+        let resp = client
+            .post(format!("{}/manage", base))
             .header("Content-Type", "application/json")
             .body(make_manage_body(&["a"]))
-            .send().unwrap();
+            .send()
+            .unwrap();
         assert_eq!(resp.status().as_u16(), 202);
         poll_until_completed(port);
-        let body: serde_json::Value = client.get(format!("{}/status", base))
-            .send().unwrap().json().unwrap();
+        let body: serde_json::Value = client
+            .get(format!("{}/status", base))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         assert_eq!(body["summary"]["success"], 1);
 
         // Init was attempted 3 times (two failures + one success).

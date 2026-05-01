@@ -1,12 +1,12 @@
+pub use misc::*;
+use serde::Deserialize;
 use std::fmt::Arguments;
 use std::fs;
+use std::io::stdin;
 use std::path::Path;
+use std::process;
 use std::thread;
 use std::time::Duration;
-use serde::Deserialize;
-use std::io::stdin;
-use std::process;
-pub use misc::*;
 
 #[cfg(target_os = "macos")]
 mod macos;

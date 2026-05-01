@@ -1,28 +1,32 @@
-#[cfg(feature = "ort")]
-use std::sync::Mutex;
-use std::path::Path;
-use std::time::Duration;
+use crate::ocr::paddle_paddle_model::preprocess::resize_img;
+use crate::ocr::ImageToText;
+use crate::positioning::Shape3D;
 use anyhow::Result;
 use image::{EncodableLayout, RgbImage};
-#[cfg(feature = "tract_onnx")]
-use tract_onnx::tract_hir::shapefactoid;
-use crate::ocr::ImageToText;
-use crate::ocr::paddle_paddle_model::preprocess::resize_img;
-use crate::positioning::Shape3D;
 #[cfg(feature = "ort")]
-use ort::{session::{Session, builder::GraphOptimizationLevel}, value::Value};
+use ort::{
+    session::{builder::GraphOptimizationLevel, Session},
+    value::Value,
+};
+use std::path::Path;
+#[cfg(feature = "ort")]
+use std::sync::Mutex;
+use std::time::Duration;
 #[cfg(feature = "tract_onnx")]
 use tract_onnx::prelude::*;
 #[cfg(feature = "tract_onnx")]
 use tract_onnx::tract_hir::infer::InferenceOp;
-
 #[cfg(feature = "tract_onnx")]
-use super::preprocess::normalize_image_to_tensor;
+use tract_onnx::tract_hir::shapefactoid;
+
 #[cfg(feature = "ort")]
 use super::preprocess::normalize_image_to_ndarray;
+#[cfg(feature = "tract_onnx")]
+use super::preprocess::normalize_image_to_tensor;
 
 #[cfg(feature = "tract_onnx")]
-type ModelType = RunnableModel<InferenceFact, Box<dyn InferenceOp>, Graph<InferenceFact, Box<dyn InferenceOp>>>;
+type ModelType =
+    RunnableModel<InferenceFact, Box<dyn InferenceOp>, Graph<InferenceFact, Box<dyn InferenceOp>>>;
 
 pub struct PPOCRModel {
     index_to_word: Vec<String>,
@@ -44,7 +48,11 @@ fn parse_index_to_word(s: &str, use_whitespace: bool) -> Vec<String> {
 }
 
 impl PPOCRModel {
-    pub fn new_from_file<P1, P2>(onnx_file: P1, words_file: P2) -> Result<PPOCRModel> where P1: AsRef<Path>, P2: AsRef<Path> {
+    pub fn new_from_file<P1, P2>(onnx_file: P1, words_file: P2) -> Result<PPOCRModel>
+    where
+        P1: AsRef<Path>,
+        P2: AsRef<Path>,
+    {
         let words_str = std::fs::read_to_string(words_file)?;
         let index_to_word = parse_index_to_word(&words_str, true);
 
@@ -56,7 +64,8 @@ impl PPOCRModel {
 
         #[cfg(feature = "tract_onnx")]
         let model = {
-            let fact = InferenceFact::new().with_datum_type(DatumType::F32)
+            let fact = InferenceFact::new()
+                .with_datum_type(DatumType::F32)
                 .with_shape(shapefactoid!(_, 3, _, _));
 
             tract_onnx::onnx()
@@ -84,7 +93,8 @@ impl PPOCRModel {
 
         #[cfg(feature = "tract_onnx")]
         let model = {
-            let fact = InferenceFact::new().with_datum_type(DatumType::F32)
+            let fact = InferenceFact::new()
+                .with_datum_type(DatumType::F32)
                 .with_shape(shapefactoid!(_, 3, _, _));
 
             tract_onnx::onnx()
@@ -138,7 +148,7 @@ impl ImageToText<RgbImage> for PPOCRModel {
             // }
             // log::info!("[OCR调试] 张量前几个值 (C=0): {:?}", first_vals);
         }
-        
+
         #[cfg(feature = "ort")]
         let tensor_value = Value::from_array(tensor)?;
         #[cfg(feature = "ort")]
@@ -176,7 +186,7 @@ impl ImageToText<RgbImage> for PPOCRModel {
             }
             text_index.push(max_index);
         }
-        
+
         #[cfg(feature = "ort")]
         {
             // log::info!("[OCR调试] 输出形状: {:?}", shape_dims);
@@ -205,7 +215,7 @@ impl ImageToText<RgbImage> for PPOCRModel {
         let mut s = String::new();
         let mut last_index: i32 = -1;
         let mut out_of_bounds_count = 0;
-        
+
         for (_pos, &index) in text_index.iter().enumerate() {
             // 如果当前索引不为0且与上一个索引不同，则添加到结果
             if index != 0 && (index as i32) != last_index {
@@ -228,11 +238,16 @@ impl ImageToText<RgbImage> for PPOCRModel {
             // 总是更新 last_index（包括0）
             last_index = index as i32;
         }
-        
+
         if out_of_bounds_count > 0 {
-            log_debug!("PaddleOCR 本次识别共有 {} 个字符索引越界被跳过，最终识别结果: '{}'", "PaddleOCR {} characters skipped due to index out of bounds, final result: '{}'", out_of_bounds_count, s);
+            log_debug!(
+                "PaddleOCR 本次识别共有 {} 个字符索引越界被跳过，最终识别结果: '{}'",
+                "PaddleOCR {} characters skipped due to index out of bounds, final result: '{}'",
+                out_of_bounds_count,
+                s
+            );
         }
-        
+
         // log::info!("[OCR调试] 最终识别结果: {}", s);
 
         // println!("{:?}", text_index);
@@ -249,22 +264,18 @@ impl ImageToText<RgbImage> for PPOCRModel {
 
 #[macro_export]
 macro_rules! ppocr_model {
-    ($onnx:literal, $index_to_word:literal) => {
-        {
-            let model_bytes = include_bytes!($onnx);
-            let index_to_word_str = include_str!($index_to_word);
+    ($onnx:literal, $index_to_word:literal) => {{
+        let model_bytes = include_bytes!($onnx);
+        let index_to_word_str = include_str!($index_to_word);
 
-            let mut index_to_word_vec: Vec<String> = Vec::new();
-            for line in index_to_word_str.lines() {
-                index_to_word_vec.push(String::from(line));
-            }
-            index_to_word_vec.push(String::from(" "));
-
-            $crate::ocr::PPOCRModel::new(
-                model_bytes, index_to_word_vec,
-            )
+        let mut index_to_word_vec: Vec<String> = Vec::new();
+        for line in index_to_word_str.lines() {
+            index_to_word_vec.push(String::from(line));
         }
-    };
+        index_to_word_vec.push(String::from(" "));
+
+        $crate::ocr::PPOCRModel::new(model_bytes, index_to_word_vec)
+    }};
 }
 
 pub struct PPOCRChV4RecInfer {
@@ -274,7 +285,7 @@ pub struct PPOCRChV4RecInfer {
 impl PPOCRChV4RecInfer {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            model: ppocr_model!("./ch_PP-OCRv4_rec_infer.onnx", "./ppocr_keys_v1.txt")?
+            model: ppocr_model!("./ch_PP-OCRv4_rec_infer.onnx", "./ppocr_keys_v1.txt")?,
         })
     }
 }

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use super::fuzzy_match::fuzzy_match_map;
+use std::collections::HashMap;
 
 /// Parse equipped character from equip text.
 ///

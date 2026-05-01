@@ -6,8 +6,6 @@ pub struct Shape3D<T> {
 
 impl<T> Shape3D<T> {
     pub fn new(x: T, y: T, z: T) -> Shape3D<T> {
-        Shape3D {
-            x, y, z
-        }
+        Shape3D { x, y, z }
     }
 }

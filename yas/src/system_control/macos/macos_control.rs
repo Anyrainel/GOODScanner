@@ -4,13 +4,13 @@ use crate::system_control::system_control::SystemControl;
 use crate::utils;
 
 pub struct MacOSControl {
-    enigo: Enigo
+    enigo: Enigo,
 }
 
 impl MacOSControl {
     pub fn new() -> MacOSControl {
         MacOSControl {
-            enigo: Enigo::new()
+            enigo: Enigo::new(),
         }
     }
 
@@ -41,24 +41,24 @@ impl MacOSControl {
                 enigo.mouse_move_relative(0, -delta);
                 utils::sleep(10);
             }
-    
+
             enigo.mouse_up(MouseButton::Left);
             utils::sleep(10);
-    
+
             enigo.mouse_down(MouseButton::Left);
             utils::sleep(5);
             enigo.mouse_up(MouseButton::Left);
             utils::sleep(5);
-    
+
             enigo.mouse_move_relative(0, times * delta);
             utils::sleep(20);
         }
     }
-    
+
     pub fn mac_scroll_fast(length: i32) {
         mac_scroll(length, 4, 30);
     }
-    
+
     pub fn mac_scroll_slow(length: i32) {
         mac_scroll(length, 4, 5);
     }

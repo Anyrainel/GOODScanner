@@ -3,8 +3,8 @@
 //! Provides FakeOcr (queue-based ImageToText mock) and synthetic image builders.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use anyhow::Result;
 use image::RgbImage;
@@ -31,9 +31,7 @@ impl FakeOcr {
     /// Create a FakeOcr with a list of successful OCR results.
     pub fn new(responses: Vec<&str>) -> Self {
         Self {
-            responses: Mutex::new(
-                responses.into_iter().map(|s| Ok(s.to_string())).collect(),
-            ),
+            responses: Mutex::new(responses.into_iter().map(|s| Ok(s.to_string())).collect()),
             call_count: Mutex::new(0),
         }
     }
@@ -119,7 +117,7 @@ pub fn paint_rarity_stars(image: &mut RgbImage, rarity: i32) {
 /// Paint the lock icon as "present" (dark) at the artifact lock position.
 /// Artifact lock pos1: (1683, 428), pos2: (1708, 428)
 pub fn paint_artifact_lock(image: &mut RgbImage, locked: bool, y_shift: f64) {
-    let dark: [u8; 3] = [60, 60, 60];   // brightness ~60 < 116 (ICON_BRIGHT_PRESENT)
+    let dark: [u8; 3] = [60, 60, 60]; // brightness ~60 < 116 (ICON_BRIGHT_PRESENT)
     let light: [u8; 3] = [230, 230, 230]; // brightness ~230 > 208 (ICON_BRIGHT_ABSENT)
     let color = if locked { dark } else { light };
     let y = (428.0 + y_shift) as u32;

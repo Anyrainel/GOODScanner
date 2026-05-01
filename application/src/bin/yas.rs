@@ -1,8 +1,8 @@
 // Hide console window in GUI mode. CLI mode reattaches below.
 #![windows_subsystem = "windows"]
 
-use yas::utils::press_any_key_to_continue;
 use genshin_scanner::cli::GoodScannerApplication;
+use yas::utils::press_any_key_to_continue;
 
 /// Attach to the parent process's console (e.g. cmd.exe, PowerShell).
 /// If no parent console exists, allocate a new one.
@@ -30,7 +30,11 @@ fn init_cli() {
     let config = genshin_scanner::cli::load_config_or_default();
     yas::lang::set_lang(&config.lang);
 
-    let level = if config.verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info };
+    let level = if config.verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
     env_logger::Builder::new()
         .filter_level(level)
         .format(|buf, record| {
@@ -67,7 +71,7 @@ pub fn main() {
             eprintln!("{}", e);
             press_any_key_to_continue();
             std::process::exit(if e.use_stderr() { 1 } else { 0 });
-        }
+        },
     };
 
     let application = GoodScannerApplication::new(matches);

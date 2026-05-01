@@ -1,21 +1,21 @@
-use std::sync::{Arc, atomic};
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread::JoinHandle;
-use std::thread;
-use image::{GenericImage, RgbImage};
 use crate::capture::{Capturer, GenericCapturer};
 use crate::positioning::Rect;
 use anyhow::Result;
+use image::{GenericImage, RgbImage};
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{atomic, Arc};
+use std::thread;
+use std::thread::JoinHandle;
 
 pub struct StreamingCapturer {
     region: Rect<i32>,
     capturer: Box<dyn Capturer<RgbImage> + Send>,
 
-    is_cancelled: Arc<AtomicBool>
+    is_cancelled: Arc<AtomicBool>,
 }
 
-impl StreamingCapturer where {
+impl StreamingCapturer {
     pub fn new(region: Rect<i32>) -> Self {
         Self {
             region,
@@ -24,10 +24,14 @@ impl StreamingCapturer where {
         }
     }
 
-    pub fn start_transform<F, S>(self, tx: Sender<S>, transform: F) -> (JoinHandle<Result<()>>, impl Fn())
+    pub fn start_transform<F, S>(
+        self,
+        tx: Sender<S>,
+        transform: F,
+    ) -> (JoinHandle<Result<()>>, impl Fn())
     where
         F: Fn(RgbImage) -> S + Send + Sync + 'static,
-        S: Send + Sync + 'static
+        S: Send + Sync + 'static,
     {
         let is_cancelled = self.is_cancelled.clone();
 

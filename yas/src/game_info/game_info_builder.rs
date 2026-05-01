@@ -37,7 +37,7 @@ impl GameInfoBuilder {
             crate::game_info::os::get_game_info(&window_names)
             // crate::game_info::os::get_game_info(&["原神", "Genshin Impact", "云·原神"])
         }
-        
+
         #[cfg(target_os = "linux")]
         crate::game_info::os::get_game_info()
     }

@@ -12,28 +12,88 @@ pub struct ParsedStat {
 /// Stat key entry: either a simple string key or flat/percent variants
 enum StatKeyEntry {
     Simple(&'static str),
-    FlatPercent { flat: &'static str, percent: &'static str },
+    FlatPercent {
+        flat: &'static str,
+        percent: &'static str,
+    },
 }
 
 /// Chinese stat name → GOOD stat key mapping
 /// For HP/ATK/DEF, flat vs percent is determined by presence of "%" in OCR text
 const STAT_KEY_ENTRIES: &[(&str, StatKeyEntry)] = &[
-    ("\u{751F}\u{547D}\u{503C}", StatKeyEntry::FlatPercent { flat: "hp", percent: "hp_" }),           // 生命值
-    ("\u{653B}\u{51FB}\u{529B}", StatKeyEntry::FlatPercent { flat: "atk", percent: "atk_" }),          // 攻击力
-    ("\u{9632}\u{5FA1}\u{529B}", StatKeyEntry::FlatPercent { flat: "def", percent: "def_" }),          // 防御力
-    ("\u{5143}\u{7D20}\u{7CBE}\u{901A}", StatKeyEntry::Simple("eleMas")),                              // 元素精通
-    ("\u{5143}\u{7D20}\u{5145}\u{80FD}\u{6548}\u{7387}", StatKeyEntry::Simple("enerRech_")),           // 元素充能效率
-    ("\u{66B4}\u{51FB}\u{7387}", StatKeyEntry::Simple("critRate_")),                                    // 暴击率
-    ("\u{66B4}\u{51FB}\u{4F24}\u{5BB3}", StatKeyEntry::Simple("critDMG_")),                            // 暴击伤害
-    ("\u{6CBB}\u{7597}\u{52A0}\u{6210}", StatKeyEntry::Simple("heal_")),                               // 治疗加成
-    ("\u{7269}\u{7406}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("physical_dmg_")),       // 物理伤害加成
-    ("\u{706B}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("pyro_dmg_")),   // 火元素伤害加成
-    ("\u{96F7}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("electro_dmg_")),// 雷元素伤害加成
-    ("\u{6C34}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("hydro_dmg_")),  // 水元素伤害加成
-    ("\u{8349}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("dendro_dmg_")), // 草元素伤害加成
-    ("\u{98CE}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("anemo_dmg_")),  // 风元素伤害加成
-    ("\u{5CA9}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("geo_dmg_")),    // 岩元素伤害加成
-    ("\u{51B0}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}", StatKeyEntry::Simple("cryo_dmg_")),   // 冰元素伤害加成
+    (
+        "\u{751F}\u{547D}\u{503C}",
+        StatKeyEntry::FlatPercent {
+            flat: "hp",
+            percent: "hp_",
+        },
+    ), // 生命值
+    (
+        "\u{653B}\u{51FB}\u{529B}",
+        StatKeyEntry::FlatPercent {
+            flat: "atk",
+            percent: "atk_",
+        },
+    ), // 攻击力
+    (
+        "\u{9632}\u{5FA1}\u{529B}",
+        StatKeyEntry::FlatPercent {
+            flat: "def",
+            percent: "def_",
+        },
+    ), // 防御力
+    (
+        "\u{5143}\u{7D20}\u{7CBE}\u{901A}",
+        StatKeyEntry::Simple("eleMas"),
+    ), // 元素精通
+    (
+        "\u{5143}\u{7D20}\u{5145}\u{80FD}\u{6548}\u{7387}",
+        StatKeyEntry::Simple("enerRech_"),
+    ), // 元素充能效率
+    (
+        "\u{66B4}\u{51FB}\u{7387}",
+        StatKeyEntry::Simple("critRate_"),
+    ), // 暴击率
+    (
+        "\u{66B4}\u{51FB}\u{4F24}\u{5BB3}",
+        StatKeyEntry::Simple("critDMG_"),
+    ), // 暴击伤害
+    (
+        "\u{6CBB}\u{7597}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("heal_"),
+    ), // 治疗加成
+    (
+        "\u{7269}\u{7406}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("physical_dmg_"),
+    ), // 物理伤害加成
+    (
+        "\u{706B}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("pyro_dmg_"),
+    ), // 火元素伤害加成
+    (
+        "\u{96F7}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("electro_dmg_"),
+    ), // 雷元素伤害加成
+    (
+        "\u{6C34}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("hydro_dmg_"),
+    ), // 水元素伤害加成
+    (
+        "\u{8349}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("dendro_dmg_"),
+    ), // 草元素伤害加成
+    (
+        "\u{98CE}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("anemo_dmg_"),
+    ), // 风元素伤害加成
+    (
+        "\u{5CA9}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("geo_dmg_"),
+    ), // 岩元素伤害加成
+    (
+        "\u{51B0}\u{5143}\u{7D20}\u{4F24}\u{5BB3}\u{52A0}\u{6210}",
+        StatKeyEntry::Simple("cryo_dmg_"),
+    ), // 冰元素伤害加成
 ];
 
 lazy_static! {
@@ -99,25 +159,27 @@ fn clean_ocr_text(text: &str) -> String {
     // that break stat name matching (e.g., "暴击 伤害" → "暴击伤害")
     let text = strip_cjk_spaces(&text);
     let text = SPACE_DOT_REGEX.replace_all(&text, "${d1}.${d2}");
-    DOT_LETTER_REGEX.replace_all(&text, |caps: &regex::Captures| {
-        let prefix = &caps[1];
-        let letter = &caps[2];
-        let suffix = &caps[3];
-        let fixed = match letter {
-            "e" | "E" => "6",
-            "a" | "A" => "4",
-            "o" | "O" => "0",
-            "n" => "0",
-            "l" | "I" | "i" => "1",
-            "s" | "S" => "5",
-            "b" | "B" => "8",
-            "t" | "T" => "7",
-            "g" | "q" => "9",
-            "z" | "Z" => "2",
-            _ => letter,
-        };
-        format!("{}{}{}", prefix, fixed, suffix)
-    }).into_owned()
+    DOT_LETTER_REGEX
+        .replace_all(&text, |caps: &regex::Captures| {
+            let prefix = &caps[1];
+            let letter = &caps[2];
+            let suffix = &caps[3];
+            let fixed = match letter {
+                "e" | "E" => "6",
+                "a" | "A" => "4",
+                "o" | "O" => "0",
+                "n" => "0",
+                "l" | "I" | "i" => "1",
+                "s" | "S" => "5",
+                "b" | "B" => "8",
+                "t" | "T" => "7",
+                "g" | "q" => "9",
+                "z" | "Z" => "2",
+                _ => letter,
+            };
+            format!("{}{}{}", prefix, fixed, suffix)
+        })
+        .into_owned()
 }
 
 /// Try to extract a numeric value from text, with OCR digit fixup fallback.
@@ -128,7 +190,9 @@ fn try_extract_value(text: &str) -> Option<f64> {
         }
     }
     let fixed = fix_ocr_digits(text);
-    NUM_REGEX.captures(&fixed).and_then(|c| c[1].parse::<f64>().ok())
+    NUM_REGEX
+        .captures(&fixed)
+        .and_then(|c| c[1].parse::<f64>().ok())
 }
 
 /// Artifact slot mapping: Chinese slot name → GOOD slot key
@@ -234,8 +298,12 @@ fn resolve_stat_key(entry: &StatKeyEntry, has_percent: bool) -> String {
     match entry {
         StatKeyEntry::Simple(k) => k.to_string(),
         StatKeyEntry::FlatPercent { flat, percent } => {
-            if has_percent { percent.to_string() } else { flat.to_string() }
-        }
+            if has_percent {
+                percent.to_string()
+            } else {
+                flat.to_string()
+            }
+        },
     }
 }
 
@@ -304,7 +372,11 @@ pub fn try_extract_stat_key(text: &str) -> Option<(String, bool, bool)> {
         if suffix.len() < 2 || !text.contains(&suffix) {
             continue;
         }
-        return Some((resolve_stat_key(entry, has_percent), has_percent, is_inactive));
+        return Some((
+            resolve_stat_key(entry, has_percent),
+            has_percent,
+            is_inactive,
+        ));
     }
 
     None
@@ -436,7 +508,9 @@ mod tests {
     #[test]
     fn test_parse_inactive() {
         // "生命值+4.1%（待激活）"
-        let r = parse_stat_from_text("\u{751F}\u{547D}\u{503C}+4.1%\u{FF08}\u{5F85}\u{6FC0}\u{6D3B}\u{FF09}");
+        let r = parse_stat_from_text(
+            "\u{751F}\u{547D}\u{503C}+4.1%\u{FF08}\u{5F85}\u{6FC0}\u{6D3B}\u{FF09}",
+        );
         assert!(r.is_some());
         let s = r.unwrap();
         assert_eq!(s.key, "hp_");

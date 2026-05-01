@@ -6,7 +6,9 @@ pub struct WindowsSystemControl {
 
 impl WindowsSystemControl {
     pub fn new() -> WindowsSystemControl {
-        WindowsSystemControl { enigo: Enigo::new() }
+        WindowsSystemControl {
+            enigo: Enigo::new(),
+        }
     }
 
     pub fn mouse_move_to(&mut self, x: i32, y: i32) -> anyhow::Result<()> {

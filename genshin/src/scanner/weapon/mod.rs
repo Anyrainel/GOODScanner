@@ -1,5 +1,5 @@
-mod scanner;
 mod config;
+mod scanner;
 
-pub use scanner::GoodWeaponScanner;
 pub use config::GoodWeaponScannerConfig;
+pub use scanner::GoodWeaponScanner;

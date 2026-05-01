@@ -2,20 +2,20 @@ use std::ffi::{OsStr, OsString};
 use std::iter::once;
 use std::marker::PhantomPinned;
 use std::mem::transmute;
-use std::os::windows::ffi::{OsStringExt, OsStrExt};
-use std::pin::{Pin, pin};
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::pin::{pin, Pin};
 use std::ptr::{null, null_mut, slice_from_raw_parts_mut};
 
+use crate::positioning::Rect;
 use anyhow::{anyhow, Result};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::Security::*;
+use windows_sys::Win32::System::LibraryLoader::*;
+use windows_sys::Win32::System::SystemServices::*;
+use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
-use windows_sys::Win32::System::SystemServices::*;
-use windows_sys::Win32::System::LibraryLoader::*;
-use windows_sys::Win32::System::Threading::*;
-use crate::positioning::Rect;
 
 pub fn encode_lpcstr(s: &str) -> Vec<u8> {
     let mut arr: Vec<u8> = s.bytes().map(|x| x as u8).collect();
@@ -100,7 +100,7 @@ unsafe fn get_client_rect_unsafe(hwnd: HWND) -> Result<Rect<i32>> {
         left,
         top,
         width,
-        height
+        height,
     })
 }
 
@@ -110,7 +110,13 @@ pub fn get_client_rect(hwnd: HWND) -> Result<Rect<i32>> {
 
 fn admin_check_os_error(context_zh: &str, context_en: &str) -> anyhow::Error {
     let os_error = std::io::Error::last_os_error();
-    anyhow!("{}: {} / {}: {}", context_zh, os_error, context_en, os_error)
+    anyhow!(
+        "{}: {} / {}: {}",
+        context_zh,
+        os_error,
+        context_en,
+        os_error
+    )
 }
 
 unsafe fn is_admin_unsafe() -> Result<bool> {
@@ -220,11 +226,17 @@ pub fn set_dpi_awareness() {
         unsafe {
             let addr = GetProcAddress(h_lib, encode_lpcstr("SetProcessDpiAwareness").as_ptr());
             if addr.is_none() {
-                log_warn!("找不到函数SetProcessDpiAwareness，但Shcore.dll存在", "cannot find process SetProcessDpiAwareness, but Shcore.dll exists");
+                log_warn!(
+                    "找不到函数SetProcessDpiAwareness，但Shcore.dll存在",
+                    "cannot find process SetProcessDpiAwareness, but Shcore.dll exists"
+                );
                 SetProcessDPIAware();
             } else {
                 let proc = addr.unwrap();
-                let func = transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(usize) -> isize>(proc);
+                let func = transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    unsafe extern "system" fn(usize) -> isize,
+                >(proc);
                 func(2);
             }
 
@@ -236,9 +248,12 @@ pub fn set_dpi_awareness() {
 /// Returns available physical memory in bytes, or None if detection fails.
 pub fn available_memory_bytes() -> Option<u64> {
     use std::mem;
-    let mut status = unsafe { mem::zeroed::<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX>() };
-    status.dwLength = mem::size_of::<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX>() as u32;
-    let ret = unsafe { windows_sys::Win32::System::SystemInformation::GlobalMemoryStatusEx(&mut status) };
+    let mut status =
+        unsafe { mem::zeroed::<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX>() };
+    status.dwLength =
+        mem::size_of::<windows_sys::Win32::System::SystemInformation::MEMORYSTATUSEX>() as u32;
+    let ret =
+        unsafe { windows_sys::Win32::System::SystemInformation::GlobalMemoryStatusEx(&mut status) };
     if ret != 0 {
         Some(status.ullAvailPhys)
     } else {
@@ -271,9 +286,7 @@ unsafe fn iterate_window_unsafe() -> Vec<HWND> {
 }
 
 pub fn iterate_window() -> Vec<HWND> {
-    unsafe {
-        iterate_window_unsafe()
-    }
+    unsafe { iterate_window_unsafe() }
 }
 
 unsafe fn get_window_title_unsafe(hwnd: HWND) -> Option<String> {
@@ -291,7 +304,5 @@ unsafe fn get_window_title_unsafe(hwnd: HWND) -> Option<String> {
 }
 
 pub fn get_window_title(hwnd: HWND) -> Option<String> {
-    unsafe {
-        get_window_title_unsafe(hwnd)
-    }
+    unsafe { get_window_title_unsafe(hwnd) }
 }

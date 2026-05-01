@@ -52,10 +52,18 @@ pub struct GoodArtifact {
     pub astral_mark: bool,
     #[serde(default, alias = "elixerCrafted", rename = "elixirCrafted")]
     pub elixir_crafted: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "unactivatedSubstats")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        rename = "unactivatedSubstats"
+    )]
     pub unactivated_substats: Vec<GoodSubStat>,
     /// Total number of substat rolls (initial + upgrades). Set by the roll solver.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "totalRolls")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "totalRolls"
+    )]
     pub total_rolls: Option<i32>,
 }
 
@@ -66,7 +74,11 @@ pub struct GoodSubStat {
     pub value: f64,
     /// Value of the initial roll (before upgrades). Set by the roll solver
     /// when the substat has exactly 1 roll (i.e., the value IS the initial roll).
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "initialValue")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "initialValue"
+    )]
     pub initial_value: Option<f64>,
     /// Per-roll raw values from game packet data (capture only, not set by OCR scanner).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

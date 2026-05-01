@@ -1,7 +1,7 @@
 use anyhow::Result;
 use image::RgbImage;
-use yas::{log_debug, log_error, log_info, log_warn};
 use regex::Regex;
+use yas::{log_debug, log_error, log_info, log_warn};
 
 use yas::ocr::ImageToText;
 use yas::utils;
@@ -53,7 +53,11 @@ fn fingerprint_grid_cells(
     let mut fps = Vec::new();
     for r in start_row..start_row + visible_rows {
         let cum_row = scanned_row + (r - start_row);
-        let cols = if cum_row == total_row - 1 { last_row_col } else { GRID_COLS };
+        let cols = if cum_row == total_row - 1 {
+            last_row_col
+        } else {
+            GRID_COLS
+        };
         for c in 0..cols {
             fps.push(cell_fingerprint(image, scaler, r, c));
         }
@@ -65,23 +69,42 @@ fn fingerprint_grid_cells(
 /// click it to dismiss so that all rarities are visible.
 ///
 /// Must be called after the artifact tab is selected.
-pub fn dismiss_five_star_filter(ctrl: &mut GenshinGameController, tab_delay: u64, dump_images: bool) {
+pub fn dismiss_five_star_filter(
+    ctrl: &mut GenshinGameController,
+    tab_delay: u64,
+    dump_images: bool,
+) {
     let image = match ctrl.capture_game() {
         Ok(img) => img,
         Err(e) => {
-            log_warn!("[backpack] 截图失败，跳过筛选检测: {}", "[backpack] capture failed, skipping filter check: {}", e);
+            log_warn!(
+                "[backpack] 截图失败，跳过筛选检测: {}",
+                "[backpack] capture failed, skipping filter check: {}",
+                e
+            );
             return;
-        }
+        },
     };
     if dump_images {
         use crate::scanner::common::debug_dump::DumpCtx;
         let ctx = DumpCtx::new("debug_images", "artifacts", 0, "filter_check");
         ctx.dump_full(&image);
-        ctx.dump_pixel("five_star_filter_px", &image,
-            (ARTIFACT_FIVE_STAR_FILTER_POS.0, ARTIFACT_FIVE_STAR_FILTER_POS.1), 10, &ctrl.scaler);
+        ctx.dump_pixel(
+            "five_star_filter_px",
+            &image,
+            (
+                ARTIFACT_FIVE_STAR_FILTER_POS.0,
+                ARTIFACT_FIVE_STAR_FILTER_POS.1,
+            ),
+            10,
+            &ctrl.scaler,
+        );
     }
     if pixel_utils::is_five_star_filter_active(&image, &ctrl.scaler) {
-        ctrl.click_at(ARTIFACT_FIVE_STAR_FILTER_POS.0, ARTIFACT_FIVE_STAR_FILTER_POS.1);
+        ctrl.click_at(
+            ARTIFACT_FIVE_STAR_FILTER_POS.0,
+            ARTIFACT_FIVE_STAR_FILTER_POS.1,
+        );
         utils::sleep(tab_delay as u32);
     }
 }
@@ -138,7 +161,11 @@ pub fn open_backpack_to_tab(
     };
 
     if count == 0 {
-        log_info!("[backpack] 标签'{}'数量=0，重新打开背包...", "[backpack] count=0 on tab '{}', reopening backpack...", tab);
+        log_info!(
+            "[backpack] 标签'{}'数量=0，重新打开背包...",
+            "[backpack] count=0 on tab '{}', reopening backpack...",
+            tab
+        );
         if ctrl.check_rmb() {
             anyhow::bail!("cancelled");
         }
@@ -208,7 +235,10 @@ pub enum PanelWaitMode {
     /// Fixed delay then stability check (for weapons — identical items have identical panels).
     FixedDelay { delay_ms: u64 },
     /// Fingerprint-based detection: wait until panel content differs from previous AND is stable.
-    Fingerprint { timeout_ms: u64, initial_wait_ms: u64 },
+    Fingerprint {
+        timeout_ms: u64,
+        initial_wait_ms: u64,
+    },
 }
 
 /// Configuration for backpack grid scanning.
@@ -276,7 +306,6 @@ impl<'a> BackpackScanner<'a> {
         &self.ctrl.scaler
     }
 
-
     /// Open the backpack by pressing B.
     /// Assumes the game is on the main overworld UI.
     pub fn open_backpack(&mut self, delay: u64) {
@@ -292,17 +321,14 @@ impl<'a> BackpackScanner<'a> {
             _ => {
                 log_error!("[backpack] 未知标签: {}", "[backpack] unknown tab: {}", tab);
                 return;
-            }
+            },
         };
         self.ctrl.click_at(bx, by);
         utils::sleep(delay as u32);
     }
 
     /// Read the item count from the backpack header ("X/Y" format).
-    pub fn read_item_count(
-        &self,
-        ocr_model: &dyn ImageToText<RgbImage>,
-    ) -> Result<(i32, i32)> {
+    pub fn read_item_count(&self, ocr_model: &dyn ImageToText<RgbImage>) -> Result<(i32, i32)> {
         let text = self.ctrl.ocr_region(ocr_model, ITEM_COUNT_RECT)?;
         let re = Regex::new(r"(\d+)\s*/\s*(\d+)")?;
         if let Some(caps) = re.captures(&text) {
@@ -343,7 +369,6 @@ impl<'a> BackpackScanner<'a> {
             }
         }
 
-
         // Send scroll ticks with small delays to avoid overwhelming the game
         for i in 0..ticks {
             if self.ctrl.check_rmb() {
@@ -380,12 +405,18 @@ impl<'a> BackpackScanner<'a> {
         F: FnMut(&mut GenshinGameController, GridEvent) -> ScanAction,
     {
         let total_row = (total + GRID_COLS - 1) / GRID_COLS;
-        let last_row_col = if total % GRID_COLS == 0 { GRID_COLS } else { total % GRID_COLS };
+        let last_row_col = if total % GRID_COLS == 0 {
+            GRID_COLS
+        } else {
+            total % GRID_COLS
+        };
 
         log_debug!(
             "[backpack] 总计={}个物品，{}行，最后一行有{}个",
             "[backpack] total={} items, {} rows, last row has {} items",
-            total, total_row, last_row_col
+            total,
+            total_row,
+            last_row_col
         );
 
         // Click the first grid position to ensure focus
@@ -407,7 +438,8 @@ impl<'a> BackpackScanner<'a> {
                 log_debug!(
                     "[backpack] 跳转到第{}个物品(跳过{}行)",
                     "[backpack] jumping to item {} ({} rows to skip)",
-                    start_at, skip_rows
+                    start_at,
+                    skip_rows
                 );
                 let rows_to_scroll = full_pages * GRID_ROWS;
                 if !self.scroll_rows(rows_to_scroll) {
@@ -442,12 +474,17 @@ impl<'a> BackpackScanner<'a> {
                     PanelWaitMode::FixedDelay { delay_ms } => {
                         utils::sleep(*delay_ms as u32);
                         let _ = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100);
-                    }
-                    PanelWaitMode::Fingerprint { timeout_ms, initial_wait_ms } => {
+                    },
+                    PanelWaitMode::Fingerprint {
+                        timeout_ms,
+                        initial_wait_ms,
+                    } => {
                         let _ = self.ctrl.wait_until_panel_loaded(
-                            PANEL_POOL_RECT, *timeout_ms, *initial_wait_ms,
+                            PANEL_POOL_RECT,
+                            *timeout_ms,
+                            *initial_wait_ms,
                         );
-                    }
+                    },
                 }
                 if config.extra_delay > 0 {
                     utils::sleep(config.extra_delay as u32);
@@ -462,18 +499,18 @@ impl<'a> BackpackScanner<'a> {
                             },
                         );
                         match action {
-                            ScanAction::Continue => {}
+                            ScanAction::Continue => {},
                             ScanAction::SkipPage => skip_page = true,
                             ScanAction::Stop => break 'outer,
                         }
-                    }
+                    },
                     Err(e) => {
                         log_error!(
                             "[backpack] 探测截图失败: {}",
                             "[backpack] probe capture failed: {}",
                             e
                         );
-                    }
+                    },
                 }
             }
 
@@ -501,9 +538,13 @@ impl<'a> BackpackScanner<'a> {
                     if let Ok(grid_img) = self.ctrl.capture_game() {
                         let visible_rows = row - start_row;
                         page_cell_fps = fingerprint_grid_cells(
-                            &grid_img, &self.ctrl.scaler,
-                            start_row, visible_rows,
-                            total_row, scanned_row, last_row_col,
+                            &grid_img,
+                            &self.ctrl.scaler,
+                            start_row,
+                            visible_rows,
+                            total_row,
+                            scanned_row,
+                            last_row_col,
                         );
                     }
                 }
@@ -546,21 +587,24 @@ impl<'a> BackpackScanner<'a> {
                             PanelWaitMode::FixedDelay { delay_ms } => {
                                 if !is_duplicate {
                                     utils::sleep(*delay_ms as u32);
-                                    let _ = self.ctrl.ensure_panel_stable(
-                                        PANEL_POOL_RECT, 100,
-                                    );
+                                    let _ = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100);
                                 }
-                            }
-                            PanelWaitMode::Fingerprint { timeout_ms, initial_wait_ms } => {
+                            },
+                            PanelWaitMode::Fingerprint {
+                                timeout_ms,
+                                initial_wait_ms,
+                            } => {
                                 let timeout = if is_duplicate {
                                     PANEL_LOAD_FAST_TIMEOUT_MS
                                 } else {
                                     *timeout_ms
                                 };
                                 let _ = self.ctrl.wait_until_panel_loaded(
-                                    PANEL_POOL_RECT, timeout, *initial_wait_ms,
+                                    PANEL_POOL_RECT,
+                                    timeout,
+                                    *initial_wait_ms,
                                 );
-                            }
+                            },
                         }
 
                         // Extra delay after panel ready
@@ -571,11 +615,15 @@ impl<'a> BackpackScanner<'a> {
                         let image = match self.ctrl.capture_game() {
                             Ok(img) => img,
                             Err(e) => {
-                                log_error!("[backpack] 截图失败: {}", "[backpack] capture failed: {}", e);
+                                log_error!(
+                                    "[backpack] 截图失败: {}",
+                                    "[backpack] capture failed: {}",
+                                    e
+                                );
                                 scanned_count += 1;
                                 page_item_idx += 1;
                                 continue;
-                            }
+                            },
                         };
 
                         page_had_items = true;
@@ -589,15 +637,15 @@ impl<'a> BackpackScanner<'a> {
                             },
                         );
                         match action {
-                            ScanAction::Continue => {}
+                            ScanAction::Continue => {},
                             ScanAction::Stop => {
                                 scanned_count += 1;
                                 stopped = true;
                                 break 'page;
-                            }
+                            },
                             ScanAction::SkipPage => {
                                 // SkipPage is only valid from PageStarted; ignored here.
-                            }
+                            },
                         }
 
                         scanned_count += 1;
@@ -611,10 +659,8 @@ impl<'a> BackpackScanner<'a> {
                 // or exiting. Gives the caller a chance to drain per-page work
                 // while the page is still in view.
                 if page_had_items {
-                    let action = callback(
-                        &mut *self.ctrl,
-                        GridEvent::PageCompleted { page_start_idx },
-                    );
+                    let action =
+                        callback(&mut *self.ctrl, GridEvent::PageCompleted { page_start_idx });
                     if matches!(action, ScanAction::Stop) {
                         break 'outer;
                     }

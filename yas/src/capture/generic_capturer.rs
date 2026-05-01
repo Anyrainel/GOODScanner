@@ -8,10 +8,18 @@ use crate::capture::LibwayshotCapturer;
 #[cfg(all(target_os = "linux", feature = "capturer_libwayshot"))]
 pub type GenericCapturer = LibwayshotCapturer;
 
-#[cfg(all(target_os = "linux", feature = "capturer_screenshots", not(feature = "capturer_libwayshot")))]
+#[cfg(all(
+    target_os = "linux",
+    feature = "capturer_screenshots",
+    not(feature = "capturer_libwayshot")
+))]
 use crate::capture::ScreenshotsCapturer;
-#[cfg(all(target_os = "linux", feature = "capturer_screenshots", not(feature = "capturer_libwayshot")))]
+#[cfg(all(
+    target_os = "linux",
+    feature = "capturer_screenshots",
+    not(feature = "capturer_libwayshot")
+))]
 pub type GenericCapturer = ScreenshotsCapturer;
 
 // #[cfg(target_os = "macos")]
-// pub type GenericCapturer = 
+// pub type GenericCapturer =

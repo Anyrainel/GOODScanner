@@ -66,10 +66,11 @@ pub fn load_data_cache() -> Result<DataCache> {
     let cache_path = Path::new(DATA_CACHE_PATH);
     let meta = load_meta();
 
-    if !cache_path.exists()
-        || !is_cache_fresh(meta.last_fetch_time, DATA_CACHE_TTL_SECS)
-    {
-        log_info!("正在下载抓包数据缓存...", "Downloading capture data cache...");
+    if !cache_path.exists() || !is_cache_fresh(meta.last_fetch_time, DATA_CACHE_TTL_SECS) {
+        log_info!(
+            "正在下载抓包数据缓存...",
+            "Downloading capture data cache..."
+        );
         match fetch_remote() {
             Ok(data) => {
                 // Validate JSON before writing
@@ -80,7 +81,7 @@ pub fn load_data_cache() -> Result<DataCache> {
                     last_fetch_time: now_secs(),
                 });
                 log_info!("抓包数据缓存已更新", "Capture data cache updated");
-            }
+            },
             Err(e) => {
                 if cache_path.exists() {
                     log_warn!(
@@ -94,7 +95,7 @@ pub fn load_data_cache() -> Result<DataCache> {
                         e
                     );
                 }
-            }
+            },
         }
     }
 
@@ -105,8 +106,8 @@ pub fn load_data_cache() -> Result<DataCache> {
 }
 
 fn fetch_remote() -> Result<String> {
-    let resp = reqwest::blocking::get(DATA_CACHE_URL)
-        .context("HTTP request to ggartifact.com failed")?;
+    let resp =
+        reqwest::blocking::get(DATA_CACHE_URL).context("HTTP request to ggartifact.com failed")?;
     let status = resp.status();
     if !status.is_success() {
         anyhow::bail!("HTTP {} from {}", status, DATA_CACHE_URL);

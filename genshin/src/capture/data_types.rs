@@ -220,7 +220,10 @@ mod tests {
     #[test]
     fn to_good_key_basic() {
         assert_eq!(to_good_key("Furina"), "Furina");
-        assert_eq!(to_good_key("Primordial Jade Cutter"), "PrimordialJadeCutter");
+        assert_eq!(
+            to_good_key("Primordial Jade Cutter"),
+            "PrimordialJadeCutter"
+        );
         assert_eq!(to_good_key("Skyward Harp"), "SkywardHarp");
     }
 

@@ -51,10 +51,7 @@ fn main() {
 
     // Kick off background update check
     let update_state = Arc::new(Mutex::new(UpdateState::Checking));
-    update_banner::spawn_check(
-        genshin_scanner::updater::ASSET_CAPTURE,
-        &update_state,
-    );
+    update_banner::spawn_check(genshin_scanner::updater::ASSET_CAPTURE, &update_state);
 
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon_64.png"))
         .expect("Failed to load window icon");
@@ -148,15 +145,13 @@ impl eframe::App for CaptureApp {
             });
 
         // Central panel: active tab content
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.active_tab {
-                ActiveTab::Capture => {
-                    capture_tab::show(ui, l, &mut self.capture_tab, false);
-                }
-                ActiveTab::Credits => {
-                    credits::show(ui, l, credits::CreditSet::Capture);
-                }
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match self.active_tab {
+            ActiveTab::Capture => {
+                capture_tab::show(ui, l, &mut self.capture_tab, false);
+            },
+            ActiveTab::Credits => {
+                credits::show(ui, l, credits::CreditSet::Capture);
+            },
         });
 
         // Request repaint while capture or update is busy

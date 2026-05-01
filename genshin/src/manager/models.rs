@@ -181,7 +181,11 @@ pub struct PhaseProgress {
 
 impl PhaseProgress {
     pub fn pending() -> Self {
-        Self { completed: 0, total: 0, state: PhaseState::Pending }
+        Self {
+            completed: 0,
+            total: 0,
+            state: PhaseState::Pending,
+        }
     }
 }
 
@@ -218,8 +222,11 @@ pub struct JobState {
 impl JobState {
     pub fn idle() -> Self {
         Self {
-            state: JobPhase::Idle, job_id: None,
-            progress: None, scan_progress: None, result: None,
+            state: JobPhase::Idle,
+            job_id: None,
+            progress: None,
+            scan_progress: None,
+            result: None,
         }
     }
 
@@ -248,9 +255,21 @@ impl JobState {
         scan_artifacts: bool,
     ) -> Self {
         let sp = ScanProgress {
-            characters: if scan_characters { Some(PhaseProgress::pending()) } else { None },
-            weapons: if scan_weapons { Some(PhaseProgress::pending()) } else { None },
-            artifacts: if scan_artifacts { Some(PhaseProgress::pending()) } else { None },
+            characters: if scan_characters {
+                Some(PhaseProgress::pending())
+            } else {
+                None
+            },
+            weapons: if scan_weapons {
+                Some(PhaseProgress::pending())
+            } else {
+                None
+            },
+            artifacts: if scan_artifacts {
+                Some(PhaseProgress::pending())
+            } else {
+                None
+            },
         };
         Self {
             state: JobPhase::Running,
@@ -291,8 +310,7 @@ impl JobState {
                         job_id, p.completed, p.total, cid, phase
                     )
                 } else if let Some(ref sp) = self.scan_progress {
-                    let body = serde_json::to_string(sp)
-                        .unwrap_or_else(|_| "{}".to_string());
+                    let body = serde_json::to_string(sp).unwrap_or_else(|_| "{}".to_string());
                     format!(
                         r#"{{"state":"running","jobId":"{}","scanProgress":{}}}"#,
                         job_id, body
@@ -300,20 +318,25 @@ impl JobState {
                 } else {
                     format!(r#"{{"state":"running","jobId":"{}"}}"#, job_id)
                 }
-            }
+            },
             JobPhase::Completed => {
                 let job_id = self.job_id.as_deref().unwrap_or("");
                 if let Some(ref r) = self.result {
                     let s = &r.summary;
                     format!(
                         r#"{{"state":"completed","jobId":"{}","summary":{{"total":{},"success":{},"already_correct":{},"not_found":{},"errors":{},"aborted":{}}}}}"#,
-                        job_id, s.total, s.success, s.already_correct,
-                        s.not_found, s.errors, s.aborted
+                        job_id,
+                        s.total,
+                        s.success,
+                        s.already_correct,
+                        s.not_found,
+                        s.errors,
+                        s.aborted
                     )
                 } else {
                     format!(r#"{{"state":"completed","jobId":"{}"}}"#, job_id)
                 }
-            }
+            },
         }
     }
 }

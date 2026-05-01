@@ -113,7 +113,10 @@ fn spawn_capture(
                 Err(e) => {
                     yas::log_error!("创建运行时失败: {}", "Failed to create runtime: {}", e);
                     if let Ok(mut s) = state.lock() {
-                        s.error = Some(format!("创建运行时失败: {} / Failed to create runtime: {}", e, e));
+                        s.error = Some(format!(
+                            "创建运行时失败: {} / Failed to create runtime: {}",
+                            e, e
+                        ));
                     }
                     return;
                 },

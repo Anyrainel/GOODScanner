@@ -1,8 +1,8 @@
-use std::fmt::Display;
-use std::ops::Add;
-use serde::{Deserialize, Serialize};
 use crate::positioning::{Pos, Scalable, Size};
 use paste::paste;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::ops::Add;
 
 #[derive(Debug, Clone, PartialEq, Default, Copy, Serialize, Deserialize)]
 pub struct Rect<T> {
@@ -12,40 +12,52 @@ pub struct Rect<T> {
     pub height: T,
 }
 
-impl<T> Rect<T> where T: Copy {
+impl<T> Rect<T>
+where
+    T: Copy,
+{
     pub fn new(left: T, top: T, width: T, height: T) -> Rect<T> {
         Rect {
-            left, top, width, height
+            left,
+            top,
+            width,
+            height,
         }
     }
 
     pub fn origin(&self) -> Pos<T> {
         Pos {
             x: self.left,
-            y: self.top
+            y: self.top,
         }
     }
 
     pub fn size(&self) -> Size<T> {
         Size {
             width: self.width,
-            height: self.height
+            height: self.height,
         }
     }
 }
 
-impl<T> Rect<T> where T: Add<T, Output = T> + Copy {
+impl<T> Rect<T>
+where
+    T: Add<T, Output = T> + Copy,
+{
     pub fn translate(&self, pos: Pos<T>) -> Rect<T> {
         Rect {
             left: self.left + pos.x,
             top: self.top + pos.y,
             width: self.width,
-            height: self.height
+            height: self.height,
         }
     }
 }
 
-impl<T> Display for Rect<T> where T: Display + Copy {
+impl<T> Display for Rect<T>
+where
+    T: Display + Copy,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Rect {} -> {}", self.origin(), self.size())
     }
@@ -65,7 +77,7 @@ impl Scalable for Rect<f64> {
 macro_rules! convert_rect_type {
     ($t1:ty, $t2:ty) => {
         impl Rect<$t1> {
-            paste!{
+            paste! {
                 pub fn [<to_rect_ $t2>](&self) -> Rect<$t2> {
                     Rect {
                         left: self.left as $t2,
@@ -76,7 +88,7 @@ macro_rules! convert_rect_type {
                 }
             }
         }
-    }
+    };
 }
 
 convert_rect_type!(f64, i32);

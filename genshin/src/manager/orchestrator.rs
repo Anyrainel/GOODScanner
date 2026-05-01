@@ -47,12 +47,27 @@ impl ArtifactManager {
         stop_on_all_matched: bool,
         dump_images: bool,
     ) -> Self {
-        Self { mappings, pools, capture_delay, delay_scroll, panel_timeout, initial_wait, stop_on_all_matched, dump_images }
+        Self {
+            mappings,
+            pools,
+            capture_delay,
+            delay_scroll,
+            panel_timeout,
+            initial_wait,
+            stop_on_all_matched,
+            dump_images,
+        }
     }
 
-    pub fn mappings(&self) -> &Arc<MappingManager> { &self.mappings }
-    pub fn pools(&self) -> &Arc<SharedOcrPools> { &self.pools }
-    pub fn dump_images(&self) -> bool { self.dump_images }
+    pub fn mappings(&self) -> &Arc<MappingManager> {
+        &self.mappings
+    }
+    pub fn pools(&self) -> &Arc<SharedOcrPools> {
+        &self.pools
+    }
+    pub fn dump_images(&self) -> bool {
+        self.dump_images
+    }
 
     pub fn execute(
         &self,
@@ -107,22 +122,20 @@ impl ArtifactManager {
             -1 // disabled
         };
 
-        let lock_mgr = LockManager::new(
-            self.mappings.clone(),
-            self.pools.clone(),
-        );
-        let (lock_results, scanned_artifacts, matched_indices, scan_complete, ocr_failures) = lock_mgr.execute(
-            ctrl,
-            &targets,
-            self.capture_delay,
-            self.delay_scroll,
-            self.panel_timeout,
-            self.initial_wait,
-            self.stop_on_all_matched,
-            max_target_level,
-            self.dump_images,
-            progress_fn,
-        );
+        let lock_mgr = LockManager::new(self.mappings.clone(), self.pools.clone());
+        let (lock_results, scanned_artifacts, matched_indices, scan_complete, ocr_failures) =
+            lock_mgr.execute(
+                ctrl,
+                &targets,
+                self.capture_delay,
+                self.delay_scroll,
+                self.panel_timeout,
+                self.initial_wait,
+                self.stop_on_all_matched,
+                max_target_level,
+                self.dump_images,
+                progress_fn,
+            );
 
         for r in &lock_results {
             all_results.push(r.clone());
@@ -136,7 +149,11 @@ impl ArtifactManager {
             if !processed_ids.contains(&target.result_id) {
                 all_results.push(InstructionResult {
                     id: target.result_id.clone(),
-                    status: if was_cancelled { InstructionStatus::Aborted } else { InstructionStatus::Skipped },
+                    status: if was_cancelled {
+                        InstructionStatus::Aborted
+                    } else {
+                        InstructionStatus::Skipped
+                    },
                 });
             }
         }
@@ -145,13 +162,18 @@ impl ArtifactManager {
         log_info!(
             "[manager] 完成：{} 成功, {} 已正确, {} 未找到, {} 错误, {} 中断",
             "[manager] Done: {} success, {} already correct, {} not found, {} errors, {} aborted",
-            summary.success, summary.already_correct, summary.not_found, summary.errors, summary.aborted,
+            summary.success,
+            summary.already_correct,
+            summary.not_found,
+            summary.errors,
+            summary.aborted,
         );
 
         // Only produce a snapshot if the scan was complete AND had no data quality issues.
         // Solver failures (total_rolls == None on leveled artifacts) indicate bad substat data.
         // OCR failures mean artifacts were lost entirely.
-        let solver_failures = scanned_artifacts.iter()
+        let solver_failures = scanned_artifacts
+            .iter()
             .filter(|(_, a)| a.level > 0 && a.total_rolls.is_none())
             .count();
         let has_data_errors = ocr_failures > 0 || solver_failures > 0;
@@ -163,13 +185,25 @@ impl ArtifactManager {
             );
         }
 
-        let artifact_snapshot = if scan_complete && !scanned_artifacts.is_empty() && !has_data_errors {
-            Some(build_artifact_snapshot(&scanned_artifacts, &targets, &matched_indices, &all_results))
-        } else {
-            None
-        };
+        let artifact_snapshot =
+            if scan_complete && !scanned_artifacts.is_empty() && !has_data_errors {
+                Some(build_artifact_snapshot(
+                    &scanned_artifacts,
+                    &targets,
+                    &matched_indices,
+                    &all_results,
+                ))
+            } else {
+                None
+            };
 
-        (ManageResult { results: all_results, summary }, artifact_snapshot)
+        (
+            ManageResult {
+                results: all_results,
+                summary,
+            },
+            artifact_snapshot,
+        )
     }
 
     pub fn execute_equip(
@@ -201,13 +235,14 @@ impl ArtifactManager {
 
         report(0, "装备变更 / Equip changes");
 
-        log_debug!("[manager] 执行 {} 个装备目标", "[manager] executing {} equip targets", targets.len());
-
-        let equip_mgr = EquipManager::new(
-            self.mappings.clone(),
-            self.pools.clone(),
-            self.dump_images,
+        log_debug!(
+            "[manager] 执行 {} 个装备目标",
+            "[manager] executing {} equip targets",
+            targets.len()
         );
+
+        let equip_mgr =
+            EquipManager::new(self.mappings.clone(), self.pools.clone(), self.dump_images);
         let results = equip_mgr.execute(ctrl, &targets, progress_fn);
 
         report(results.len(), "装备变更 / Equip changes");
@@ -216,7 +251,11 @@ impl ArtifactManager {
         log_info!(
             "[manager] 装备完成：{} 成功, {} 已正确, {} 未找到, {} 错误, {} 中断",
             "[manager] equip done: {} ok, {} already correct, {} not found, {} errors, {} aborted",
-            summary.success, summary.already_correct, summary.not_found, summary.errors, summary.aborted,
+            summary.success,
+            summary.already_correct,
+            summary.not_found,
+            summary.errors,
+            summary.aborted,
         );
 
         ManageResult { results, summary }
@@ -229,7 +268,8 @@ fn build_artifact_snapshot(
     matched_indices: &HashMap<usize, usize>,
     results: &[InstructionResult],
 ) -> Vec<GoodArtifact> {
-    let result_success: HashSet<String> = results.iter()
+    let result_success: HashSet<String> = results
+        .iter()
         .filter(|r| r.status == InstructionStatus::Success)
         .map(|r| r.id.clone())
         .collect();
@@ -244,17 +284,20 @@ fn build_artifact_snapshot(
         }
     }
 
-    scanned_artifacts.iter().map(|(idx, artifact)| {
-        if let Some(&desired_lock) = toggled_to.get(idx) {
-            let mut updated = artifact.clone();
-            updated.lock = desired_lock;
-            // Unlocking removes astral mark (game engine forces this)
-            if !desired_lock {
-                updated.astral_mark = false;
+    scanned_artifacts
+        .iter()
+        .map(|(idx, artifact)| {
+            if let Some(&desired_lock) = toggled_to.get(idx) {
+                let mut updated = artifact.clone();
+                updated.lock = desired_lock;
+                // Unlocking removes astral mark (game engine forces this)
+                if !desired_lock {
+                    updated.astral_mark = false;
+                }
+                updated
+            } else {
+                artifact.clone()
             }
-            updated
-        } else {
-            artifact.clone()
-        }
-    }).collect()
+        })
+        .collect()
 }
