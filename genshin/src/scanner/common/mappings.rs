@@ -92,6 +92,8 @@ pub struct ConstBonus {
 pub struct MappingManager {
     /// Chinese character name → GOOD character key
     pub character_name_map: HashMap<String, String>,
+    /// GOOD character key → canonical element from mappings.json
+    pub character_element_map: HashMap<String, String>,
     /// GOOD character key → constellation talent bonus info
     pub character_const_bonus: HashMap<String, ConstBonus>,
     /// Chinese weapon name → GOOD weapon key
@@ -117,6 +119,7 @@ struct CharacterEntry {
     id: String,
     #[serde(alias = "names")]
     n: LocalizedNames,
+    e: Option<String>,
     c3: Option<String>,
     c5: Option<String>,
 }
@@ -242,13 +245,20 @@ impl MappingManager {
     fn load_from_cache(overrides: &NameOverrides) -> Result<Self> {
         let raw = std::fs::read_to_string(MAPPINGS_CACHE_PATH)?;
         let data: MappingsFile = serde_json::from_str(&raw)?;
+        Ok(Self::from_mappings_data(data, overrides))
+    }
 
+    fn from_mappings_data(data: MappingsFile, overrides: &NameOverrides) -> Self {
         let mut character_name_map = HashMap::new();
+        let mut character_element_map = HashMap::new();
         let mut character_const_bonus = HashMap::new();
 
         for entry in &data.characters {
             if let Some(zh_name) = &entry.n.zh {
                 character_name_map.insert(zh_name.clone(), entry.id.clone());
+            }
+            if let Some(element) = &entry.e {
+                character_element_map.insert(entry.id.clone(), element.clone());
             }
             if entry.c3.is_some() || entry.c5.is_some() {
                 character_const_bonus.insert(
@@ -296,12 +306,96 @@ impl MappingManager {
             }
         }
 
-        Ok(Self {
+        Self {
             character_name_map,
+            character_element_map,
             character_const_bonus,
             weapon_name_map,
             artifact_set_map,
             artifact_set_max_rarity,
-        })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_mappings(raw: &str, overrides: &NameOverrides) -> MappingManager {
+        let data: MappingsFile = serde_json::from_str(raw).unwrap();
+        MappingManager::from_mappings_data(data, overrides)
+    }
+
+    #[test]
+    fn loads_character_elements_from_mapping_cache_shape() {
+        let mappings = fixture_mappings(
+            r#"{
+                "characters": [
+                    {"id": "Cyno", "n": {"zh": "赛诺"}, "e": "electro"},
+                    {"id": "Aino", "names": {"zh": "爱诺"}, "e": "hydro", "c3": "E"}
+                ],
+                "weapons": [],
+                "artifactSets": []
+            }"#,
+            &NameOverrides::default(),
+        );
+
+        assert_eq!(
+            mappings.character_name_map.get("赛诺").map(String::as_str),
+            Some("Cyno")
+        );
+        assert_eq!(
+            mappings
+                .character_element_map
+                .get("Cyno")
+                .map(String::as_str),
+            Some("electro")
+        );
+        assert_eq!(
+            mappings
+                .character_element_map
+                .get("Aino")
+                .map(String::as_str),
+            Some("hydro")
+        );
+        assert_eq!(
+            mappings
+                .character_const_bonus
+                .get("Aino")
+                .and_then(|bonus| bonus.c3.as_deref()),
+            Some("E")
+        );
+    }
+
+    #[test]
+    fn name_overrides_do_not_replace_element_metadata() {
+        let mappings = fixture_mappings(
+            r#"{
+                "characters": [
+                    {"id": "Traveler", "n": {"zh": "旅行者"}, "e": "anemo"}
+                ],
+                "weapons": [],
+                "artifactSets": []
+            }"#,
+            &NameOverrides {
+                traveler_name: Some("自定义旅行者".to_string()),
+                ..NameOverrides::default()
+            },
+        );
+
+        assert_eq!(
+            mappings
+                .character_name_map
+                .get("自定义旅行者")
+                .map(String::as_str),
+            Some("Traveler")
+        );
+        assert_eq!(
+            mappings
+                .character_element_map
+                .get("Traveler")
+                .map(String::as_str),
+            Some("anemo")
+        );
     }
 }

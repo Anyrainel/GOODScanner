@@ -183,6 +183,7 @@ pub fn make_test_mappings() -> MappingManager {
 
     MappingManager {
         character_name_map: char_map,
+        character_element_map: HashMap::new(),
         character_const_bonus: HashMap::new(),
         weapon_name_map: weapon_map,
         artifact_set_map: set_map,

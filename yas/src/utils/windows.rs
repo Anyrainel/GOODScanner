@@ -261,10 +261,61 @@ pub fn available_memory_bytes() -> Option<u64> {
     }
 }
 
-pub fn show_window_and_set_foreground(hwnd: HWND) {
+pub fn is_window_handle_valid(hwnd: HWND) -> bool {
+    unsafe { IsWindow(hwnd) != 0 }
+}
+
+pub fn show_window_and_set_foreground(hwnd: HWND) -> Result<bool> {
     unsafe {
-        ShowWindow(hwnd, SW_RESTORE);
-        SetForegroundWindow(hwnd);
+        if IsWindow(hwnd) == 0 {
+            return Err(anyhow!(
+                "游戏窗口句柄无效 / Game window handle is no longer valid"
+            ));
+        }
+
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            // SW_RESTORE also un-maximizes a maximized/borderless window. For a
+            // visible non-minimized game window, show it without changing state.
+            ShowWindow(hwnd, SW_SHOW);
+        }
+
+        let mut foreground_ok = SetForegroundWindow(hwnd) != 0 && GetForegroundWindow() == hwnd;
+        if !foreground_ok {
+            let current_thread = GetCurrentThreadId();
+            let foreground = GetForegroundWindow();
+            let foreground_thread = if foreground.is_null() {
+                0
+            } else {
+                GetWindowThreadProcessId(foreground, null_mut())
+            };
+            let target_thread = GetWindowThreadProcessId(hwnd, null_mut());
+
+            let attach_foreground = foreground_thread != 0 && foreground_thread != current_thread;
+            let attach_target = target_thread != 0 && target_thread != current_thread;
+
+            if attach_foreground {
+                AttachThreadInput(current_thread, foreground_thread, 1);
+            }
+            if attach_target {
+                AttachThreadInput(current_thread, target_thread, 1);
+            }
+
+            BringWindowToTop(hwnd);
+            SetActiveWindow(hwnd);
+            SetFocus(hwnd);
+            foreground_ok = SetForegroundWindow(hwnd) != 0 && GetForegroundWindow() == hwnd;
+
+            if attach_target {
+                AttachThreadInput(current_thread, target_thread, 0);
+            }
+            if attach_foreground {
+                AttachThreadInput(current_thread, foreground_thread, 0);
+            }
+        }
+
+        Ok(foreground_ok)
     }
 }
 

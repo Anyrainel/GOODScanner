@@ -146,6 +146,69 @@ impl GenshinGameController {
 
 // Focus methods.
 impl GenshinGameController {
+    #[cfg(target_os = "windows")]
+    fn refresh_window_geometry(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) {
+        match utils::get_client_rect(hwnd) {
+            Ok(rect) if rect.width > 0 && rect.height > 0 => {
+                if rect != self.game_info.window {
+                    log_debug!(
+                        "[controller] 更新游戏窗口区域: {:?} -> {:?}",
+                        "[controller] refreshed game window rect: {:?} -> {:?}",
+                        self.game_info.window,
+                        rect
+                    );
+                    self.game_info.window = rect;
+                    self.scaler = CoordScaler::new(rect.width as u32, rect.height as u32);
+                }
+            },
+            Ok(rect) => {
+                log_warn!(
+                    "[controller] 游戏窗口区域无效: {:?}",
+                    "[controller] game window rect is invalid: {:?}",
+                    rect
+                );
+            },
+            Err(e) => {
+                log_warn!(
+                    "[controller] 无法刷新游戏窗口区域: {}",
+                    "[controller] cannot refresh game window rect: {}",
+                    e
+                );
+            },
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn focus_hwnd(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+        if !utils::is_window_handle_valid(hwnd) {
+            return false;
+        }
+
+        match utils::show_window_and_set_foreground(hwnd) {
+            Ok(true) => {
+                self.refresh_window_geometry(hwnd);
+                utils::sleep(500);
+                true
+            },
+            Ok(false) => {
+                self.refresh_window_geometry(hwnd);
+                yas::log_error!(
+                    "游戏窗口已恢复但未获得前台焦点；请手动点击游戏窗口后重试",
+                    "Game window was restored but did not become foreground; click the game window and retry"
+                );
+                false
+            },
+            Err(e) => {
+                log_warn!(
+                    "[controller] 切换游戏窗口焦点失败: {}",
+                    "[controller] failed to focus game window: {}",
+                    e
+                );
+                false
+            },
+        }
+    }
+
     /// Focus the game window using Win32 SetForegroundWindow.
     /// Ensures subsequent keyboard events go to Genshin, not the terminal.
     ///
@@ -156,15 +219,24 @@ impl GenshinGameController {
     pub fn focus_game_window(&mut self) {
         #[cfg(target_os = "windows")]
         {
+            let selected_hwnd = self.game_info.hwnd as windows_sys::Win32::Foundation::HWND;
+            if self.focus_hwnd(selected_hwnd) {
+                return;
+            }
+
             let window_names = ["\u{539F}\u{795E}", "Genshin Impact"]; // 原神
             let handles = utils::iterate_window();
             for hwnd in &handles {
+                if *hwnd == selected_hwnd {
+                    continue;
+                }
                 if let Some(title) = utils::get_window_title(*hwnd) {
                     let trimmed = title.trim();
                     if window_names.iter().any(|n| trimmed == *n) {
-                        utils::show_window_and_set_foreground(*hwnd);
-                        utils::sleep(500);
-                        return;
+                        if self.focus_hwnd(*hwnd) {
+                            self.game_info.hwnd = *hwnd as isize;
+                            return;
+                        }
                     }
                 }
             }

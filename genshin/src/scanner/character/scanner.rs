@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -106,6 +107,122 @@ impl GoodCharacterScanner {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scanner::common::mappings::ConstBonus;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn scanner_with_names(entries: &[(&str, &str, &str)]) -> GoodCharacterScanner {
+        let character_name_map = entries
+            .iter()
+            .map(|(name, key, _)| ((*name).to_string(), (*key).to_string()))
+            .collect();
+        let character_element_map = entries
+            .iter()
+            .map(|(_, key, element)| ((*key).to_string(), (*element).to_string()))
+            .collect();
+
+        GoodCharacterScanner {
+            config: GoodCharacterScannerConfig::default(),
+            mappings: Arc::new(MappingManager {
+                character_name_map,
+                character_element_map,
+                character_const_bonus: HashMap::<String, ConstBonus>::new(),
+                weapon_name_map: HashMap::new(),
+                artifact_set_map: HashMap::new(),
+                artifact_set_max_rarity: HashMap::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn parse_name_uses_element_to_fix_cyno_as_aino() {
+        let scanner = scanner_with_names(&[
+            ("\u{8D5B}\u{8BFA}", "Cyno", "electro"), // 赛诺
+            ("\u{7231}\u{8BFA}", "Aino", "hydro"),   // 爱诺
+        ]);
+
+        let (key, element, entity) = scanner.parse_name_and_element("\u{96F7}/\u{7231}\u{8BFA}");
+
+        assert_eq!(key.as_deref(), Some("Cyno"));
+        assert_eq!(element.as_deref(), Some("\u{96F7}"));
+        assert_eq!(entity.as_deref(), Some("\u{8D5B}\u{8BFA}"));
+    }
+
+    #[test]
+    fn parse_name_keeps_actual_aino_when_element_matches() {
+        let scanner = scanner_with_names(&[
+            ("\u{8D5B}\u{8BFA}", "Cyno", "electro"), // 赛诺
+            ("\u{7231}\u{8BFA}", "Aino", "hydro"),   // 爱诺
+        ]);
+
+        let (key, element, entity) = scanner.parse_name_and_element("\u{6C34}/\u{7231}\u{8BFA}");
+
+        assert_eq!(key.as_deref(), Some("Aino"));
+        assert_eq!(element.as_deref(), Some("\u{6C34}"));
+        assert_eq!(entity.as_deref(), Some("\u{7231}\u{8BFA}"));
+    }
+
+    #[test]
+    fn parse_name_uses_element_to_fix_xianyun_as_chongyun() {
+        let scanner = scanner_with_names(&[
+            ("\u{95F2}\u{4E91}", "Xianyun", "anemo"), // 闲云
+            ("\u{91CD}\u{4E91}", "Chongyun", "cryo"), // 重云
+        ]);
+
+        let (key, element, entity) = scanner.parse_name_and_element("\u{98CE}/\u{91CD}\u{4E91}");
+
+        assert_eq!(key.as_deref(), Some("Xianyun"));
+        assert_eq!(element.as_deref(), Some("\u{98CE}"));
+        assert_eq!(entity.as_deref(), Some("\u{95F2}\u{4E91}"));
+    }
+
+    #[test]
+    fn parse_name_keeps_actual_chongyun_when_element_matches() {
+        let scanner = scanner_with_names(&[
+            ("\u{95F2}\u{4E91}", "Xianyun", "anemo"), // 闲云
+            ("\u{91CD}\u{4E91}", "Chongyun", "cryo"), // 重云
+        ]);
+
+        let (key, element, entity) = scanner.parse_name_and_element("\u{51B0}/\u{91CD}\u{4E91}");
+
+        assert_eq!(key.as_deref(), Some("Chongyun"));
+        assert_eq!(element.as_deref(), Some("\u{51B0}"));
+        assert_eq!(entity.as_deref(), Some("\u{91CD}\u{4E91}"));
+    }
+
+    #[test]
+    fn parse_name_uses_full_scope_when_element_is_unrecognized() {
+        let scanner = scanner_with_names(&[
+            ("\u{8D5B}\u{8BFA}", "Cyno", "electro"), // 赛诺
+            ("\u{7231}\u{8BFA}", "Aino", "hydro"),   // 爱诺
+        ]);
+
+        let (key, element, entity) = scanner.parse_name_and_element("\u{4E71}/\u{7231}\u{8BFA}");
+
+        assert_eq!(key.as_deref(), Some("Aino"));
+        assert_eq!(element.as_deref(), Some("\u{4E71}"));
+        assert_eq!(entity.as_deref(), Some("\u{7231}\u{8BFA}"));
+    }
+
+    #[test]
+    fn parse_name_keeps_special_character_in_element_scope() {
+        let scanner = scanner_with_names(&[
+            ("\u{65C5}\u{884C}\u{8005}", "Traveler", "anemo"), // 旅行者
+            ("\u{8D5B}\u{8BFA}", "Cyno", "electro"),           // 赛诺
+        ]);
+
+        let (key, element, entity) =
+            scanner.parse_name_and_element("\u{706B}/\u{65C5}\u{884C}\u{8005}");
+
+        assert_eq!(key.as_deref(), Some("Traveler"));
+        assert_eq!(element.as_deref(), Some("\u{706B}"));
+        assert_eq!(entity.as_deref(), Some("\u{65C5}\u{884C}\u{8005}"));
+    }
+}
+
 // ── Static helpers ───────────────────────────────────────────────────────────
 
 impl GoodCharacterScanner {
@@ -138,19 +255,56 @@ impl GoodCharacterScanner {
 
     /// Characters that use the element field (multi-element or renameable).
     const ELEMENT_CHARACTERS: &'static [&'static str] = &["Traveler", "Manekin", "Manekina"];
+    const ELEMENT_SCOPE_EXEMPT_CHARACTERS: &'static [&'static str] =
+        &["Traveler", "Manekin", "Manekina"];
 
     /// Map Chinese element name to English GOOD element key.
     fn zh_element_to_good(zh: &str) -> Option<String> {
-        match zh.trim() {
-            "\u{706B}" => Some("Pyro".into()),    // 火
-            "\u{6C34}" => Some("Hydro".into()),   // 水
-            "\u{96F7}" => Some("Electro".into()), // 雷
-            "\u{51B0}" => Some("Cryo".into()),    // 冰
-            "\u{98CE}" => Some("Anemo".into()),   // 风
-            "\u{5CA9}" => Some("Geo".into()),     // 岩
-            "\u{8349}" => Some("Dendro".into()),  // 草
-            _ => None,
+        let zh = zh.trim();
+        for (needle, element) in [
+            ("\u{706B}", "Pyro"),    // 火
+            ("\u{6C34}", "Hydro"),   // 水
+            ("\u{96F7}", "Electro"), // 雷
+            ("\u{51B0}", "Cryo"),    // 冰
+            ("\u{98CE}", "Anemo"),   // 风
+            ("\u{5CA9}", "Geo"),     // 岩
+            ("\u{8349}", "Dendro"),  // 草
+        ] {
+            if zh.contains(needle) {
+                return Some(element.into());
+            }
         }
+        None
+    }
+
+    fn scoped_character_name_map_for_element(
+        &self,
+        element_text: &str,
+    ) -> Option<HashMap<String, String>> {
+        let Some(element) = Self::zh_element_to_good(element_text) else {
+            return None;
+        };
+
+        let scoped: HashMap<String, String> = self
+            .mappings
+            .character_name_map
+            .iter()
+            .filter(|(_, key)| {
+                Self::ELEMENT_SCOPE_EXEMPT_CHARACTERS.contains(&key.as_str())
+                    || self
+                        .mappings
+                        .character_element_map
+                        .get(key.as_str())
+                        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(&element))
+            })
+            .map(|(name, key)| (name.clone(), key.clone()))
+            .collect();
+
+        if scoped.is_empty() {
+            return None;
+        }
+
+        Some(scoped)
     }
 
     /// Parse character name and element from OCR text.
@@ -180,7 +334,11 @@ impl GoodCharacterScanner {
                     matches!(*c, '\u{4E00}'..='\u{9FFF}' | '\u{300C}' | '\u{300D}' | 'a'..='z' | 'A'..='Z' | '0'..='9')
                 })
                 .collect();
-            let pair = fuzzy_match_map_pair(&raw_name, &self.mappings.character_name_map);
+            let scoped_map = self.scoped_character_name_map_for_element(&element);
+            let search_map = scoped_map
+                .as_ref()
+                .unwrap_or(&self.mappings.character_name_map);
+            let pair = fuzzy_match_map_pair(&raw_name, search_map);
             let (entity_name, good_key) = match pair {
                 Some((n, k)) => (Some(n), Some(k)),
                 None => (None, None),
