@@ -9,9 +9,13 @@ Server: `http://127.0.0.1:{port}` (default 8765)
 | Origin | Allowed |
 |--------|---------|
 | `https://ggartifact.com` | Yes (production) |
-| `http://localhost[:port]` | Yes (development) |
-| `http://127.0.0.1[:port]` | Yes (development) |
+| `http(s)://localhost[:port]` | Yes (development) |
+| `http(s)://127.x.x.x[:port]` | Yes (loopback development) |
+| `http(s)://[::1][:port]` | Yes (IPv6 loopback development) |
 | Any other origin | Rejected (403) |
+
+Only loopback hostnames/IPs are treated as local development origins. Private
+LAN hosts such as `192.168.x.x` are still rejected.
 
 Non-browser clients (curl, Postman) that don't send an `Origin` header are allowed — CORS is a browser-enforced mechanism.
 

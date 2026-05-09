@@ -143,7 +143,7 @@ impl eframe::App for GuiApp {
                 ui.selectable_value(
                     &mut self.active_tab,
                     ActiveTab::Manager,
-                    egui::RichText::new(l.t("管理器 (beta)", "Manager (beta)")).size(20.0),
+                    egui::RichText::new(l.t("管理器", "Manager")).size(20.0),
                 );
                 #[cfg(feature = "capture")]
                 ui.selectable_value(

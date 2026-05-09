@@ -249,21 +249,71 @@ const ALLOWED_ORIGINS: &[&str] = &["https://ggartifact.com", "http://ggartifact.
 ///
 /// Allows:
 /// - `https://ggartifact.com` (production)
-/// - `http://localhost[:port]` (development)
-/// - `http://127.0.0.1[:port]` (development)
+/// - `http(s)://localhost[:port]` (development)
+/// - loopback IP origins such as `http(s)://127.0.0.1[:port]`
+///   and `http(s)://[::1][:port]` (development)
 fn is_origin_allowed(origin: &str) -> bool {
     let origin = origin.trim_end_matches('/');
-    if ALLOWED_ORIGINS.contains(&origin) {
+    ALLOWED_ORIGINS.contains(&origin) || is_loopback_origin(origin)
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    if authority.is_empty()
+        || authority.contains('/')
+        || authority.contains('?')
+        || authority.contains('#')
+    {
+        return false;
+    }
+
+    let Some(host) = parse_origin_host(authority) else {
+        return false;
+    };
+
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn parse_origin_host(authority: &str) -> Option<&str> {
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, suffix) = rest.split_once(']')?;
+        if host.is_empty() || !is_valid_port_suffix(suffix) {
+            return None;
+        }
+        return Some(host);
+    }
+
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    if host.is_empty() || host.contains(':') {
+        return None;
+    }
+    if let Some(port) = port {
+        if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    Some(host)
+}
+
+fn is_valid_port_suffix(suffix: &str) -> bool {
+    if suffix.is_empty() {
         return true;
     }
-    // Allow localhost for development (any port)
-    if origin == "http://localhost" || origin.starts_with("http://localhost:") {
-        return true;
-    }
-    if origin == "http://127.0.0.1" || origin.starts_with("http://127.0.0.1:") {
-        return true;
-    }
-    false
+    let Some(port) = suffix.strip_prefix(':') else {
+        return false;
+    };
+    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Extract the Origin header from a request.
@@ -1631,6 +1681,23 @@ mod tests {
     // Serialize all server tests to prevent concurrent tiny_http teardown,
     // which causes STATUS_HEAP_CORRUPTION on Windows.
     static SERVER_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_origin_allowlist_accepts_loopback_hosts() {
+        assert!(is_origin_allowed("https://ggartifact.com"));
+        assert!(is_origin_allowed("http://ggartifact.com"));
+        assert!(is_origin_allowed("http://localhost:3000"));
+        assert!(is_origin_allowed("https://LOCALHOST:3000"));
+        assert!(is_origin_allowed("http://127.0.0.1:5173"));
+        assert!(is_origin_allowed("https://127.12.34.56:5173"));
+        assert!(is_origin_allowed("http://[::1]:5173"));
+
+        assert!(!is_origin_allowed("https://evil.com"));
+        assert!(!is_origin_allowed("http://127.0.0.1.evil.com:5173"));
+        assert!(!is_origin_allowed("http://192.168.0.1:5173"));
+        assert!(!is_origin_allowed("http://[::2]:5173"));
+        assert!(!is_origin_allowed("ftp://127.0.0.1"));
+    }
 
     struct FakeExecutor {
         responses: Arc<Mutex<VecDeque<(ManageResult, Option<Vec<GoodArtifact>>)>>>,
