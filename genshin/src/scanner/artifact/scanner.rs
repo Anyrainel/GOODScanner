@@ -1593,6 +1593,7 @@ impl GoodArtifactScanner {
                 self.config.open_delay,
                 self.config.delay_tab,
                 &count_ocr_guard,
+                self.config.keep_five_star_filter,
             )?;
             count
         } else {
@@ -1601,11 +1602,19 @@ impl GoodArtifactScanner {
                 let mut bp = BackpackScanner::new(ctrl);
                 bp.select_tab("artifact", self.config.delay_tab);
             }
-            backpack_scanner::dismiss_five_star_filter(
-                ctrl,
-                self.config.delay_tab,
-                self.config.dump_images,
-            );
+            if self.config.keep_five_star_filter {
+                backpack_scanner::ensure_five_star_filter_active(
+                    ctrl,
+                    self.config.delay_tab,
+                    self.config.dump_images,
+                );
+            } else {
+                backpack_scanner::dismiss_five_star_filter(
+                    ctrl,
+                    self.config.delay_tab,
+                    self.config.dump_images,
+                );
+            }
             let bp = BackpackScanner::new(ctrl);
             let (count, _) = bp.read_item_count(&count_ocr_guard)?;
             count

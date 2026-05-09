@@ -1017,6 +1017,9 @@ pub struct GoodScannerConfig {
         help_heading = "扫描器配置 / Scanner Config"
     )]
     pub artifact_substat_ocr: String,
+
+    #[clap(skip = false)]
+    pub artifact_keep_five_star_filter: bool,
 }
 
 // ================================================================
@@ -1115,6 +1118,7 @@ impl GoodScannerApplication {
             initial_wait: user_config.artifact_initial_wait,
             panel_timeout: user_config.artifact_panel_timeout,
             extra_delay: user_config.artifact_extra_delay,
+            keep_five_star_filter: config.artifact_keep_five_star_filter,
         }
     }
 
@@ -1161,6 +1165,7 @@ impl GoodScannerApplication {
             char_max_count: config.char_max_count,
             weapon_max_count: config.weapon_max_count,
             artifact_max_count: config.artifact_max_count,
+            artifact_keep_five_star_filter: false,
             save_on_cancel: false,
         };
 
@@ -1279,6 +1284,8 @@ pub struct ScanCoreConfig {
     pub char_max_count: usize,
     pub weapon_max_count: usize,
     pub artifact_max_count: usize,
+    /// If true, keep the artifact tab's 5-star acquired-time filter enabled.
+    pub artifact_keep_five_star_filter: bool,
     /// If true, export partial results when the user cancels mid-scan.
     pub save_on_cancel: bool,
 }
@@ -1304,6 +1311,7 @@ impl Default for ScanCoreConfig {
             char_max_count: 0,
             weapon_max_count: 0,
             artifact_max_count: 0,
+            artifact_keep_five_star_filter: false,
             save_on_cancel: false,
         }
     }
@@ -1331,6 +1339,7 @@ impl ScanCoreConfig {
             weapon_max_count: self.weapon_max_count,
             artifact_max_count: self.artifact_max_count,
             artifact_substat_ocr: self.artifact_substat_ocr.clone(),
+            artifact_keep_five_star_filter: self.artifact_keep_five_star_filter,
         }
     }
 }

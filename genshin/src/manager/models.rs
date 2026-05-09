@@ -12,6 +12,26 @@ pub struct ScanRequest {
     pub weapons: bool,
     #[serde(default)]
     pub artifacts: bool,
+    /// Artifact scan mode. `recent` enables the in-game 5-star acquired-time filter.
+    #[serde(default, rename = "artifactMode")]
+    pub artifact_mode: ArtifactScanMode,
+    /// Optional artifact item cap. Required when `artifactMode` is `recent`.
+    #[serde(default, rename = "artifactLimit")]
+    pub artifact_limit: Option<usize>,
+}
+
+/// Artifact-specific scan behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactScanMode {
+    All,
+    Recent,
+}
+
+impl Default for ArtifactScanMode {
+    fn default() -> Self {
+        Self::All
+    }
 }
 
 /// Equip/unequip request: a list of equip instructions.

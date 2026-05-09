@@ -127,6 +127,7 @@ impl LockManager {
             1200,
             400,
             &count_ocr_guard,
+            false,
         ) {
             Ok((count, _max)) => {
                 log_debug!(

@@ -181,6 +181,13 @@ impl ManageExecutor for GameExecutor {
         config.scan_characters = request.characters;
         config.scan_weapons = request.weapons;
         config.scan_artifacts = request.artifacts;
+        if let Some(limit) = request.artifact_limit {
+            config.artifact_max_count = limit;
+        }
+        if request.artifact_mode == ArtifactScanMode::Recent {
+            config.artifact_min_rarity = 5;
+            config.artifact_keep_five_star_filter = true;
+        }
 
         run_scan_phases(
             &mut self.ctrl,
@@ -1623,18 +1630,86 @@ fn handle_scan(
         return;
     }
 
+    if scan_request.artifact_mode == ArtifactScanMode::Recent && !scan_request.artifacts {
+        respond_json(
+            request,
+            400,
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(
+                    "artifactMode=recent 需要 artifacts=true / artifactMode=recent requires artifacts=true"
+                )
+            ),
+            cors_origin,
+        );
+        return;
+    }
+
+    if scan_request.artifact_mode == ArtifactScanMode::Recent
+        && scan_request.artifact_limit.is_none()
+    {
+        respond_json(
+            request,
+            400,
+            &format!(
+                r#"{{"error":"{}"}}"#,
+                yas::lang::localize(
+                    "最近圣遗物扫描需要 artifactLimit / recent artifact scans require artifactLimit"
+                )
+            ),
+            cors_origin,
+        );
+        return;
+    }
+
+    if let Some(limit) = scan_request.artifact_limit {
+        if limit == 0 {
+            respond_json(
+                request,
+                400,
+                &format!(
+                    r#"{{"error":"{}"}}"#,
+                    yas::lang::localize(
+                        "artifactLimit 必须大于 0 / artifactLimit must be greater than 0"
+                    )
+                ),
+                cors_origin,
+            );
+            return;
+        }
+
+        if limit > 1000 {
+            respond_json(
+                request,
+                400,
+                &format!(
+                    r#"{{"error":"{}"}}"#,
+                    yas::lang::localize(
+                        "artifactLimit 不能超过 1000 / artifactLimit cannot exceed 1000"
+                    )
+                ),
+                cors_origin,
+            );
+            return;
+        }
+    }
+
     let scan_chars = scan_request.characters;
     let scan_wpns = scan_request.weapons;
     let scan_arts = scan_request.artifacts;
+    let artifact_mode = scan_request.artifact_mode;
+    let artifact_limit = scan_request.artifact_limit;
     let job_id = uuid::Uuid::new_v4().to_string();
 
     log_info!(
-        "[job {}] 收到扫描请求（角色: {}, 武器: {}, 圣遗物: {}）",
-        "[job {}] Received scan request (characters: {}, weapons: {}, artifacts: {})",
+        "[job {}] 收到扫描请求（角色: {}, 武器: {}, 圣遗物: {}, 圣遗物模式: {:?}, 限制: {:?}）",
+        "[job {}] Received scan request (characters: {}, weapons: {}, artifacts: {}, artifact_mode: {:?}, artifact_limit: {:?})",
         job_id,
         scan_chars,
         scan_wpns,
-        scan_arts
+        scan_arts,
+        artifact_mode,
+        artifact_limit
     );
 
     {
@@ -1660,9 +1735,16 @@ fn handle_scan(
         return;
     }
 
+    let artifact_mode_json = match artifact_mode {
+        ArtifactScanMode::All => "all",
+        ArtifactScanMode::Recent => "recent",
+    };
+    let limit_json = artifact_limit
+        .map(|limit| limit.to_string())
+        .unwrap_or_else(|| "null".to_string());
     let json = format!(
-        r#"{{"jobId":"{}","targets":{{"characters":{},"weapons":{},"artifacts":{}}}}}"#,
-        job_id, scan_chars, scan_wpns, scan_arts
+        r#"{{"jobId":"{}","targets":{{"characters":{},"weapons":{},"artifacts":{}}},"artifactMode":"{}","artifactLimit":{}}}"#,
+        job_id, scan_chars, scan_wpns, scan_arts, artifact_mode_json, limit_json
     );
     respond_json(request, 202, &json, cors_origin);
 }
@@ -2680,6 +2762,31 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 400);
 
+        // recent artifact mode must target artifacts and must provide a limit
+        let resp = client
+            .post(format!("{}/scan", base))
+            .header("Content-Type", "application/json")
+            .body(r#"{"characters":true,"artifactMode":"recent","artifactLimit":25}"#)
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 400);
+
+        let resp = client
+            .post(format!("{}/scan", base))
+            .header("Content-Type", "application/json")
+            .body(r#"{"artifacts":true,"artifactMode":"recent"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 400);
+
+        let resp = client
+            .post(format!("{}/scan", base))
+            .header("Content-Type", "application/json")
+            .body(r#"{"artifacts":true,"artifactMode":"recent","artifactLimit":0}"#)
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 400);
+
         // bad JSON
         let resp = client
             .post(format!("{}/scan", base))
@@ -2710,6 +2817,8 @@ mod tests {
         assert_eq!(body["targets"]["characters"], true);
         assert_eq!(body["targets"]["weapons"], true);
         assert_eq!(body["targets"]["artifacts"], true);
+        assert_eq!(body["artifactMode"], "all");
+        assert!(body["artifactLimit"].is_null());
 
         poll_until_completed(port);
 
@@ -2945,6 +3054,64 @@ mod tests {
             .send()
             .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
+
+        stop_server(&shutdown, handle);
+    }
+
+    #[test]
+    fn test_scan_recent_artifact_options() {
+        let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let manage_responses = VecDeque::new();
+        let mut scan_responses: VecDeque<anyhow::Result<ScanResult>> = VecDeque::new();
+        scan_responses.push_back(Ok(ScanResult {
+            characters: PhaseResult::NotAttempted,
+            weapons: PhaseResult::NotAttempted,
+            artifacts: PhaseResult::Complete(vec![make_artifact(
+                "GladiatorsFinale",
+                "flower",
+                20,
+                true,
+            )]),
+        }));
+
+        let (port, shutdown, handle) =
+            start_test_server_with_scans(manage_responses, scan_responses, 0);
+        let client = reqwest::blocking::Client::new();
+        let base = format!("http://127.0.0.1:{}", port);
+
+        let resp = client
+            .post(format!("{}/scan", base))
+            .header("Content-Type", "application/json")
+            .body(r#"{"artifacts":true,"artifactMode":"recent","artifactLimit":25}"#)
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 202);
+        let body: serde_json::Value = resp.json().unwrap();
+        let job_id = body["jobId"].as_str().unwrap().to_string();
+        assert_eq!(body["targets"]["artifacts"], true);
+        assert_eq!(body["artifactMode"], "recent");
+        assert_eq!(body["artifactLimit"], 25);
+
+        poll_until_completed(port);
+
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, job_id))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(body["results"].as_array().unwrap().len(), 1);
+        assert_eq!(body["results"][0]["id"], "artifacts");
+        assert_eq!(body["results"][0]["status"], "success");
+
+        let resp = client
+            .get(format!("{}/artifacts?jobId={}", base, job_id))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(body.as_array().unwrap().len(), 1);
 
         stop_server(&shutdown, handle);
     }

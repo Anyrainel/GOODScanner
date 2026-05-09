@@ -23,6 +23,9 @@ pub struct GoodArtifactScannerConfig {
     pub panel_timeout: u64,
     /// Extra delay (ms) after panel load, before capture.
     pub extra_delay: u64,
+    /// If true, keep the 5-star sort filter enabled (for scanning recent artifacts).
+    /// If false, dismiss the 5-star sort filter to scan all artifacts.
+    pub keep_five_star_filter: bool,
 }
 
 impl Default for GoodArtifactScannerConfig {
@@ -42,6 +45,7 @@ impl Default for GoodArtifactScannerConfig {
             initial_wait: 20,
             panel_timeout: 200,
             extra_delay: 0,
+            keep_five_star_filter: false,
         }
     }
 }

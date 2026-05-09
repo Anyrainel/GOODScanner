@@ -109,6 +109,54 @@ pub fn dismiss_five_star_filter(
     }
 }
 
+/// Ensure the "5-star sort by acquired time" filter is active on the artifact tab.
+/// If it's not active, click it to enable so that only recent 5-star artifacts are visible.
+///
+/// Must be called after the artifact tab is selected.
+pub fn ensure_five_star_filter_active(
+    ctrl: &mut GenshinGameController,
+    tab_delay: u64,
+    dump_images: bool,
+) {
+    let image = match ctrl.capture_game() {
+        Ok(img) => img,
+        Err(e) => {
+            log_warn!(
+                "[backpack] 截图失败，跳过筛选检测: {}",
+                "[backpack] capture failed, skipping filter check: {}",
+                e
+            );
+            return;
+        },
+    };
+    if dump_images {
+        use crate::scanner::common::debug_dump::DumpCtx;
+        let ctx = DumpCtx::new("debug_images", "artifacts", 0, "filter_check");
+        ctx.dump_full(&image);
+        ctx.dump_pixel(
+            "five_star_filter_px",
+            &image,
+            (
+                ARTIFACT_FIVE_STAR_FILTER_POS.0,
+                ARTIFACT_FIVE_STAR_FILTER_POS.1,
+            ),
+            10,
+            &ctrl.scaler,
+        );
+    }
+    if !pixel_utils::is_five_star_filter_active(&image, &ctrl.scaler) {
+        log_debug!(
+            "[backpack] 五星排序筛选未开启，将点击开启",
+            "[backpack] 5-star sort filter not active, will click to enable"
+        );
+        ctrl.click_at(
+            ARTIFACT_FIVE_STAR_FILTER_POS.0,
+            ARTIFACT_FIVE_STAR_FILTER_POS.1,
+        );
+        utils::sleep(tab_delay as u32);
+    }
+}
+
 /// Open the backpack to a specific tab with the same proven sequence as the
 /// artifact/weapon scanners.
 ///
@@ -128,6 +176,7 @@ pub fn open_backpack_to_tab(
     open_delay: u64,
     tab_delay: u64,
     count_ocr: &dyn ImageToText<RgbImage>,
+    keep_five_star_filter: bool,
 ) -> Result<(i32, i32)> {
     ctrl.focus_game_window();
     if ctrl.check_rmb() {
@@ -144,10 +193,12 @@ pub fn open_backpack_to_tab(
         bp.select_tab(tab, tab_delay);
     }
 
-    // Dismiss the "5-star sort by acquired time" filter if active on the artifact tab.
-    // When active, only 5-star artifacts are visible — we need all rarities.
     if tab == "artifact" {
-        dismiss_five_star_filter(ctrl, tab_delay, false);
+        if keep_five_star_filter {
+            ensure_five_star_filter_active(ctrl, tab_delay, false);
+        } else {
+            dismiss_five_star_filter(ctrl, tab_delay, false);
+        }
     }
 
     if ctrl.check_rmb() {
@@ -180,7 +231,11 @@ pub fn open_backpack_to_tab(
         }
         // Check filter again after retry
         if tab == "artifact" {
-            dismiss_five_star_filter(ctrl, tab_delay, false);
+            if keep_five_star_filter {
+                ensure_five_star_filter_active(ctrl, tab_delay, false);
+            } else {
+                dismiss_five_star_filter(ctrl, tab_delay, false);
+            }
         }
         let bp = BackpackScanner::new(ctrl);
         return bp.read_item_count(count_ocr);

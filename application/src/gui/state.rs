@@ -336,6 +336,7 @@ impl AppState {
             char_max_count: self.char_max_count,
             weapon_max_count: self.weapon_max_count,
             artifact_max_count: self.artifact_max_count,
+            artifact_keep_five_star_filter: false,
         }
     }
 }

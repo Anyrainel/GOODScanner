@@ -241,11 +241,17 @@ After accepting a job, the server waits 1 second before focusing the game window
 {
   "characters": true,
   "weapons": true,
-  "artifacts": true
+  "artifacts": true,
+  "artifactMode": "all",
+  "artifactLimit": null
 }
 ```
 
-At least one target must be `true`. All fields default to `false` if omitted.
+At least one target must be `true`. Target fields default to `false` if omitted.
+`artifactMode` is optional and defaults to `"all"`. Use `"recent"` with
+`artifacts: true` to scan only recently acquired 5-star artifacts; this mode
+turns the in-game 5-star acquired-time filter on before scanning. `artifactLimit`
+caps the number of artifacts scanned and is required for `"recent"` mode.
 
 The user must navigate to the appropriate in-game screen before submitting:
 - **Characters**: open character screen (press C)
@@ -253,6 +259,16 @@ The user must navigate to the appropriate in-game screen before submitting:
 - **Artifacts**: open backpack → artifact tab (if also scanning weapons, the scanner navigates from weapon tab automatically)
 
 When scanning multiple targets, they execute in order: characters → weapons → artifacts.
+
+Recent artifact scan example:
+
+```json
+{
+  "artifacts": true,
+  "artifactMode": "recent",
+  "artifactLimit": 60
+}
+```
 
 #### Progress
 
@@ -289,8 +305,8 @@ Each cache stores only the latest completed jobId for its type. A characters-onl
 
 | Code | When | Body |
 |------|------|------|
-| 202 | Job accepted | `{"jobId": "<uuid>", "targets": {"characters": true, "weapons": true, "artifacts": true}}` |
-| 400 | Bad JSON, or no targets enabled | `{"error": "..."}` |
+| 202 | Job accepted | `{"jobId": "<uuid>", "targets": {"characters": true, "weapons": true, "artifacts": true}, "artifactMode": "all", "artifactLimit": null}` |
+| 400 | Bad JSON, no targets enabled, invalid recent artifact options, or `artifactLimit` outside `1..=1000` | `{"error": "..."}` |
 | 403 | Disallowed origin | `{"error": "Origin not allowed"}` |
 | 409 | Another job running | `{"error": "..."}` |
 | 503 | Manager paused | `{"error": "..."}` |
