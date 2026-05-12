@@ -8,11 +8,14 @@ Server: `http://127.0.0.1:{port}` (default 8765)
 
 | Origin | Allowed |
 |--------|---------|
-| `https://ggartifact.com` | Yes (production) |
+| `http(s)://*ggartifact*` hostnames | Yes (production/staging, for example `https://ggartifact.vanyrainel.workers.dev`) |
 | `http(s)://localhost[:port]` | Yes (development) |
 | `http(s)://127.x.x.x[:port]` | Yes (loopback development) |
 | `http(s)://[::1][:port]` | Yes (IPv6 loopback development) |
 | Any other origin | Rejected (403) |
+
+The `ggartifact` match is applied to the parsed Origin host only, not to paths
+or query strings.
 
 Only loopback hostnames/IPs are treated as local development origins. Private
 LAN hosts such as `192.168.x.x` are still rejected.

@@ -6,13 +6,13 @@
 //!
 //! Communication: mpsc channel for job submission, Arc<Mutex<JobState>> for status.
 //!
-//! Security: Origin header checked against allowlist. Only ggartifact.com and
-//! localhost origins are permitted. Requests with disallowed origins are rejected
-//! with 403. Non-browser clients (no Origin header) are allowed — CORS is a
-//! browser-enforced mechanism.
+//! Security: Origin header checked against allowlist. Origins whose host
+//! contains "ggartifact" and localhost origins are permitted. Requests with
+//! disallowed origins are rejected with 403. Non-browser clients (no Origin
+//! header) are allowed — CORS is a browser-enforced mechanism.
 //!
 //! 异步 HTTP 服务器。双线程架构：HTTP 线程处理请求，执行线程控制游戏。
-//! 安全：通过 Origin 头限制仅允许 ggartifact.com 和 localhost 来源。
+//! 安全：通过 Origin 头限制仅允许主机名包含 ggartifact 的来源和 localhost 来源。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -249,40 +249,50 @@ impl<T> ScanDataCache<T> {
     }
 }
 
-/// Allowed production origins.
-const ALLOWED_ORIGINS: &[&str] = &["https://ggartifact.com", "http://ggartifact.com"];
+/// Allowed production/staging origin host fragment.
+const ALLOWED_GGARTIFACT_HOST_FRAGMENT: &str = "ggartifact";
 
 /// Check if an origin is allowed.
 ///
 /// Allows:
-/// - `https://ggartifact.com` (production)
+/// - `http(s)://*ggartifact*` hosts (production/staging)
 /// - `http(s)://localhost[:port]` (development)
 /// - loopback IP origins such as `http(s)://127.0.0.1[:port]`
 ///   and `http(s)://[::1][:port]` (development)
 fn is_origin_allowed(origin: &str) -> bool {
     let origin = origin.trim_end_matches('/');
-    ALLOWED_ORIGINS.contains(&origin) || is_loopback_origin(origin)
-}
-
-fn is_loopback_origin(origin: &str) -> bool {
-    let Some((scheme, authority)) = origin.split_once("://") else {
+    let Some((_scheme, host)) = parse_http_origin(origin) else {
         return false;
     };
+
+    is_ggartifact_host(host) || is_loopback_host(host)
+}
+
+fn parse_http_origin(origin: &str) -> Option<(&str, &str)> {
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return None;
+    };
     if scheme != "http" && scheme != "https" {
-        return false;
+        return None;
     }
     if authority.is_empty()
         || authority.contains('/')
         || authority.contains('?')
         || authority.contains('#')
     {
-        return false;
+        return None;
     }
 
-    let Some(host) = parse_origin_host(authority) else {
-        return false;
-    };
+    let host = parse_origin_host(authority)?;
+    Some((scheme, host))
+}
 
+fn is_ggartifact_host(host: &str) -> bool {
+    host.to_ascii_lowercase()
+        .contains(ALLOWED_GGARTIFACT_HOST_FRAGMENT)
+}
+
+fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<std::net::IpAddr>()
@@ -1768,6 +1778,11 @@ mod tests {
     fn test_origin_allowlist_accepts_loopback_hosts() {
         assert!(is_origin_allowed("https://ggartifact.com"));
         assert!(is_origin_allowed("http://ggartifact.com"));
+        assert!(is_origin_allowed(
+            "https://ggartifact.vanyrainel.workers.dev"
+        ));
+        assert!(is_origin_allowed("https://preview-ggartifact.pages.dev"));
+        assert!(is_origin_allowed("https://GGARTIFACT.example.dev"));
         assert!(is_origin_allowed("http://localhost:3000"));
         assert!(is_origin_allowed("https://LOCALHOST:3000"));
         assert!(is_origin_allowed("http://127.0.0.1:5173"));
@@ -1775,9 +1790,12 @@ mod tests {
         assert!(is_origin_allowed("http://[::1]:5173"));
 
         assert!(!is_origin_allowed("https://evil.com"));
+        assert!(!is_origin_allowed("https://evil.com/ggartifact"));
+        assert!(!is_origin_allowed("https://evil.com?site=ggartifact"));
         assert!(!is_origin_allowed("http://127.0.0.1.evil.com:5173"));
         assert!(!is_origin_allowed("http://192.168.0.1:5173"));
         assert!(!is_origin_allowed("http://[::2]:5173"));
+        assert!(!is_origin_allowed("ftp://ggartifact.com"));
         assert!(!is_origin_allowed("ftp://127.0.0.1"));
     }
 
@@ -2099,6 +2117,20 @@ mod tests {
             .to_str()
             .unwrap();
         assert_eq!(acao, "https://ggartifact.com");
+
+        let resp = client
+            .get(format!("{}/health", base))
+            .header("Origin", "https://ggartifact.vanyrainel.workers.dev")
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let acao = resp
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(acao, "https://ggartifact.vanyrainel.workers.dev");
 
         let resp = client
             .get(format!("{}/health", base))
