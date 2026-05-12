@@ -222,6 +222,8 @@ pub struct AppState {
     /// If true, continue scanning the full inventory after all targets are matched,
     /// providing a complete artifact snapshot via GET /artifacts (slower).
     pub update_inventory: bool,
+    /// If true, start lock/unlock management from the acquired-time artifact order.
+    pub manage_recent_artifacts: bool,
     pub server_status: Arc<Mutex<TaskStatus>>,
     // --- Per-tab log buffers ---
     pub scanner_log_lines: Arc<Mutex<Vec<LogEntry>>>,
@@ -233,7 +235,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let user_config = genshin_scanner::cli::load_config_or_default();
+        let mut user_config = genshin_scanner::cli::load_config_or_default();
+        if user_config.manage_recent_artifacts {
+            user_config.update_inventory = false;
+        }
         let lang = Lang::from_str(&user_config.lang);
         let config_snapshot = serde_json::to_string(&user_config).unwrap_or_default();
         Self {
@@ -252,6 +257,7 @@ impl AppState {
             artifact_max_count: user_config.artifact_max_count,
             server_port: user_config.server_port,
             update_inventory: user_config.update_inventory,
+            manage_recent_artifacts: user_config.manage_recent_artifacts,
             user_config,
             update_state: Arc::new(Mutex::new(UpdateState::Checking)),
             output_dir: genshin_scanner::cli::exe_dir().display().to_string(),
@@ -291,7 +297,11 @@ impl AppState {
         self.user_config.weapon_max_count = self.weapon_max_count;
         self.user_config.artifact_max_count = self.artifact_max_count;
         self.user_config.server_port = self.server_port;
+        if self.manage_recent_artifacts {
+            self.update_inventory = false;
+        }
         self.user_config.update_inventory = self.update_inventory;
+        self.user_config.manage_recent_artifacts = self.manage_recent_artifacts;
     }
 
     /// Check if user_config changed, and if so, schedule a debounced save.

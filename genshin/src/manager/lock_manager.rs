@@ -82,6 +82,7 @@ impl LockManager {
         panel_timeout: u64,
         initial_wait: u64,
         stop_on_all_matched: bool,
+        manage_recent_artifacts: bool,
         max_target_level: i32,
         dump_images: bool,
         progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
@@ -127,7 +128,7 @@ impl LockManager {
             1200,
             400,
             &count_ocr_guard,
-            false,
+            manage_recent_artifacts,
         ) {
             Ok((count, _max)) => {
                 log_debug!(

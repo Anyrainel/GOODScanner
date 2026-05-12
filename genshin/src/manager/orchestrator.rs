@@ -33,6 +33,7 @@ pub struct ArtifactManager {
     panel_timeout: u64,
     initial_wait: u64,
     stop_on_all_matched: bool,
+    manage_recent_artifacts: bool,
     dump_images: bool,
 }
 
@@ -45,6 +46,7 @@ impl ArtifactManager {
         panel_timeout: u64,
         initial_wait: u64,
         stop_on_all_matched: bool,
+        manage_recent_artifacts: bool,
         dump_images: bool,
     ) -> Self {
         Self {
@@ -55,6 +57,7 @@ impl ArtifactManager {
             panel_timeout,
             initial_wait,
             stop_on_all_matched,
+            manage_recent_artifacts,
             dump_images,
         }
     }
@@ -116,7 +119,9 @@ impl ArtifactManager {
         );
 
         // In fast mode, compute the highest target level for page-skip optimization.
-        let max_target_level = if self.stop_on_all_matched {
+        // Recent-order management must scan sequentially from the acquired-time
+        // sort, so it keeps early exit but disables level-based page skipping.
+        let max_target_level = if self.stop_on_all_matched && !self.manage_recent_artifacts {
             targets.iter().map(|t| t.artifact.level).max().unwrap_or(0)
         } else {
             -1 // disabled
@@ -132,6 +137,7 @@ impl ArtifactManager {
                 self.panel_timeout,
                 self.initial_wait,
                 self.stop_on_all_matched,
+                self.manage_recent_artifacts,
                 max_target_level,
                 self.dump_images,
                 progress_fn,

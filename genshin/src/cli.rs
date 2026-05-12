@@ -670,6 +670,8 @@ pub struct GoodUserConfig {
     pub server_port: u16,
     #[serde(default = "default_true")]
     pub update_inventory: bool,
+    #[serde(default)]
+    pub manage_recent_artifacts: bool,
 
     /// Advanced: force OCR v5 pool size. 0 = auto-detect from RAM. Non-zero forces that size.
     #[serde(default)]
@@ -761,6 +763,7 @@ impl Default for GoodUserConfig {
             artifact_max_count: 0,
             server_port: default_server_port(),
             update_inventory: true,
+            manage_recent_artifacts: false,
             ocr_pool_v5_override: 0,
             ocr_pool_v4_override: 0,
         }
@@ -1472,6 +1475,7 @@ pub fn run_server_core(
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     stop_on_all_matched: bool,
+    manage_recent_artifacts: bool,
     dump_images: bool,
     dump_job_data: bool,
 ) -> Result<()> {
@@ -1550,6 +1554,7 @@ pub fn run_server_core(
             panel_timeout,
             initial_wait,
             stop_on_all_matched,
+            manage_recent_artifacts,
             dump_images,
         );
         Ok(Box::new(crate::server::GameExecutor {
@@ -1619,6 +1624,7 @@ pub fn run_manage_json(
         user_config.inv_scroll_delay,
         user_config.artifact_panel_timeout,
         user_config.artifact_initial_wait,
+        false,
         false,
         false, // dump_images: offline JSON mode doesn't support it
     );

@@ -47,12 +47,24 @@ pub fn show(
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!is_server_running, |ui| {
                         ui.checkbox(
-                            &mut state.update_inventory,
+                            &mut state.manage_recent_artifacts,
                             l.t(
-                                "扫描后更新圣遗物列表",
-                                "Update inventory after scan",
+                                "从最近获得的圣遗物开始加解锁（适合增量管理）",
+                                "Start lock/unlock from recently obtained artifacts (for incremental management)",
                             ),
                         );
+                        if state.manage_recent_artifacts {
+                            state.update_inventory = false;
+                        }
+                        ui.add_enabled_ui(!state.manage_recent_artifacts, |ui| {
+                            ui.checkbox(
+                                &mut state.update_inventory,
+                                l.t(
+                                    "扫描后更新圣遗物列表（关闭可加快扫描）",
+                                    "Update inventory after scan (disable to scan faster)",
+                                ),
+                            );
+                        });
                         ui.checkbox(&mut state.hdr_mode, l.t("我的原神在使用HDR", "HDR mode"));
                     });
                 });
