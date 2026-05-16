@@ -35,19 +35,6 @@ impl FakeOcr {
             call_count: Mutex::new(0),
         }
     }
-
-    /// Create a FakeOcr where some calls return errors.
-    pub fn with_results(responses: Vec<Result<String>>) -> Self {
-        Self {
-            responses: Mutex::new(responses.into()),
-            call_count: Mutex::new(0),
-        }
-    }
-
-    /// How many times image_to_text has been called.
-    pub fn call_count(&self) -> usize {
-        *self.call_count.lock().unwrap()
-    }
 }
 
 impl ImageToText<RgbImage> for FakeOcr {

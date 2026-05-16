@@ -12,7 +12,6 @@ import json
 import sys
 import os
 import glob
-from pathlib import Path
 from collections import defaultdict
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -58,25 +57,7 @@ def find_latest_export():
 
 def compare_substats(expected_subs, actual_subs):
     """Compare two substat lists by index, return list of (field, expected, actual) diffs."""
-    diffs = []
-    exp = expected_subs or []
-    act = actual_subs or []
-
-    if len(exp) != len(act):
-        diffs.append(("substats.count", str(len(exp)), str(len(act))))
-
-    for i in range(max(len(exp), len(act))):
-        e = exp[i] if i < len(exp) else None
-        a = act[i] if i < len(act) else None
-        if e is None:
-            diffs.append((f"substats[{i}]", "missing", f"{a['key']}={a['value']}"))
-        elif a is None:
-            diffs.append((f"substats[{i}]", f"{e['key']}={e['value']}", "missing"))
-        elif e["key"] != a["key"]:
-            diffs.append((f"substats[{i}].key", e["key"], a["key"]))
-        elif abs(e["value"] - a["value"]) > 0.1 + 1e-6:
-            diffs.append((f"substats[{i}].value({e['key']})", str(e["value"]), str(a["value"])))
-    return diffs
+    return compare_substats_named("substats", expected_subs, actual_subs)
 
 
 def _diff_score(diffs):
@@ -283,10 +264,13 @@ def compare_substats_named(prefix, expected_subs, actual_subs):
         e = exp[i] if i < len(exp) else None
         a = act[i] if i < len(act) else None
         if e is None:
-            diffs.append((f"{prefix}[{i}]", "missing", f"{a['key']}={a['value']}"))
-        elif a is None:
+            if a is not None:
+                diffs.append((f"{prefix}[{i}]", "missing", f"{a['key']}={a['value']}"))
+            continue
+        if a is None:
             diffs.append((f"{prefix}[{i}]", f"{e['key']}={e['value']}", "missing"))
-        elif e["key"] != a["key"]:
+            continue
+        if e["key"] != a["key"]:
             diffs.append((f"{prefix}[{i}].key", e["key"], a["key"]))
         elif abs(e["value"] - a["value"]) > 0.1 + 1e-6:
             diffs.append((f"{prefix}[{i}].value({e['key']})", str(e["value"]), str(a["value"])))
@@ -574,7 +558,6 @@ def generate_report(actual_path, expected_path, images_dir="debug_images", no_im
 
     def find_duplicates(artifacts, label):
         """Find duplicate artifacts, return list of (fingerprint, indices) with count > 1."""
-        from collections import Counter
         fp_to_indices = defaultdict(list)
         for i, a in enumerate(artifacts):
             fp_to_indices[artifact_fingerprint(a)].append(i)
@@ -597,7 +580,7 @@ def generate_report(actual_path, expected_path, images_dir="debug_images", no_im
                 set_key, slot_key, rarity, level, main_stat, subs = fp
                 subs_str = ", ".join(f"{k}={v}" for k, v in subs)
                 locations = [artifacts_list[i].get("location", "") for i in indices]
-                loc_str = ", ".join(f'"{l}"' if l else '""' for l in locations)
+                loc_str = ", ".join(f'"{location}"' if location else '""' for location in locations)
                 lines.append(
                     f"- {len(indices)}× [{', '.join(f'{i:04d}' for i in indices)}] "
                     f"{set_key}/{slot_key} {rarity}★ lv{level} {main_stat} "

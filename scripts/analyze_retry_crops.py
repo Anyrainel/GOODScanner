@@ -6,7 +6,6 @@ to understand why OCR fails on bright animated backgrounds.
 Usage:
     python scripts/analyze_retry_crops.py
 """
-import os
 import sys
 from pathlib import Path
 from collections import defaultdict
@@ -128,46 +127,49 @@ def main():
     # Sort by brightness (highest = most problematic)
     bright_cells.sort(key=lambda x: -x[1]["brightness"])
 
-    print(f"\n=== Top 10 brightest sub0 crops (most problematic) ===")
+    print("\n=== Top 10 brightest sub0 crops (most problematic) ===")
     for cell_key, stats in bright_cells[:10]:
         print(f"  {cell_key}: brightness={stats['brightness']:.0f} contrast={stats['contrast']:.0f} "
               f"RGB=({stats['r']:.0f},{stats['g']:.0f},{stats['b']:.0f})")
 
-    print(f"\n=== Bottom 5 (easiest) ===")
+    print("\n=== Bottom 5 (easiest) ===")
     for cell_key, stats in bright_cells[-5:]:
         print(f"  {cell_key}: brightness={stats['brightness']:.0f} contrast={stats['contrast']:.0f} "
               f"RGB=({stats['r']:.0f},{stats['g']:.0f},{stats['b']:.0f})")
 
+    if not bright_cells:
+        print("\nNo sub0 crops found to preprocess.")
+        return
+
     # Save preprocessed versions of worst case
-    if bright_cells:
-        worst = bright_cells[0][0]
-        print(f"\n=== Preprocessing worst case: {worst} ===")
-        out_dir = GRID_DIR / "preprocess_test"
-        out_dir.mkdir(exist_ok=True)
+    worst = bright_cells[0][0]
+    print(f"\n=== Preprocessing worst case: {worst} ===")
+    out_dir = GRID_DIR / "preprocess_test"
+    out_dir.mkdir(exist_ok=True)
 
-        for field_name in ["sub0", "sub1", "sub2", "sub3", "main", "set"]:
-            if field_name not in cells[worst]:
-                continue
-            img_path = cells[worst][field_name]
-            preprocessed = preprocess_methods(img_path)
-            for method_name, result_img in preprocessed.items():
-                out_path = out_dir / f"{worst}_{field_name}_{method_name}.png"
-                result_img.save(out_path)
-            print(f"  Saved {len(preprocessed)} preprocessed versions of {field_name}")
+    for field_name in ["sub0", "sub1", "sub2", "sub3", "main", "set"]:
+        if field_name not in cells[worst]:
+            continue
+        img_path = cells[worst][field_name]
+        preprocessed = preprocess_methods(img_path)
+        for method_name, result_img in preprocessed.items():
+            out_path = out_dir / f"{worst}_{field_name}_{method_name}.png"
+            result_img.save(out_path)
+        print(f"  Saved {len(preprocessed)} preprocessed versions of {field_name}")
 
-        # Also do a moderate brightness cell for comparison
-        mid_idx = len(bright_cells) // 2
-        mid = bright_cells[mid_idx][0]
-        print(f"\n=== Preprocessing mid case: {mid} ===")
-        for field_name in ["sub0", "sub1", "main"]:
-            if field_name not in cells[mid]:
-                continue
-            img_path = cells[mid][field_name]
-            preprocessed = preprocess_methods(img_path)
-            for method_name, result_img in preprocessed.items():
-                out_path = out_dir / f"{mid}_{field_name}_{method_name}.png"
-                result_img.save(out_path)
-            print(f"  Saved {len(preprocessed)} preprocessed versions of {field_name}")
+    # Also do a moderate brightness cell for comparison
+    mid_idx = len(bright_cells) // 2
+    mid = bright_cells[mid_idx][0]
+    print(f"\n=== Preprocessing mid case: {mid} ===")
+    for field_name in ["sub0", "sub1", "main"]:
+        if field_name not in cells[mid]:
+            continue
+        img_path = cells[mid][field_name]
+        preprocessed = preprocess_methods(img_path)
+        for method_name, result_img in preprocessed.items():
+            out_path = out_dir / f"{mid}_{field_name}_{method_name}.png"
+            result_img.save(out_path)
+        print(f"  Saved {len(preprocessed)} preprocessed versions of {field_name}")
 
     print(f"\nPreprocessed images saved to {out_dir}")
     print("Examine them to pick the best method for OCR.")
