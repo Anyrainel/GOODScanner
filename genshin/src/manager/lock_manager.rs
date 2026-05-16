@@ -82,7 +82,7 @@ impl LockManager {
         panel_timeout: u64,
         initial_wait: u64,
         stop_on_all_matched: bool,
-        manage_recent_artifacts: bool,
+        filter_involved_sets: bool,
         max_target_level: i32,
         dump_images: bool,
         progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
@@ -122,13 +122,13 @@ impl LockManager {
         let mut matched: HashMap<usize, usize> = HashMap::new();
 
         // --- Open backpack to artifact tab (same as artifact scanner) ---
-        let total = match backpack_scanner::open_backpack_to_tab(
+        let mut total = match backpack_scanner::open_backpack_to_tab(
             ctrl,
             "artifact",
             1200,
             400,
             &count_ocr_guard,
-            manage_recent_artifacts,
+            false,
         ) {
             Ok((count, _max)) => {
                 log_debug!(
@@ -153,6 +153,71 @@ impl LockManager {
                 );
             },
         };
+
+        if total > 0 && filter_involved_sets {
+            let mut involved_sets: Vec<&str> = Vec::new();
+            for target in targets {
+                let set_key = target.artifact.set_key.as_str();
+                if !involved_sets.contains(&set_key) {
+                    involved_sets.push(set_key);
+                }
+            }
+
+            if !involved_sets.is_empty() {
+                let filter_ocr_guard = substat_pool.get();
+                match ui_actions::apply_backpack_multi_set_filter(
+                    ctrl,
+                    &involved_sets,
+                    &self.mappings,
+                    &filter_ocr_guard as &dyn yas::ocr::ImageToText<image::RgbImage>,
+                ) {
+                    Ok(selected_count) if selected_count > 0 => {
+                        let filtered_count = {
+                            let bp = BackpackScanner::new(ctrl);
+                            bp.read_item_count(&count_ocr_guard)
+                        };
+                        match filtered_count {
+                            Ok((count, _max)) => {
+                                total = count.max(0) as usize;
+                                log_info!(
+                                    "[lock_manager] 已筛选{}个相关套装，筛选后圣遗物数量={}",
+                                    "[lock_manager] Filtered {} involved sets, artifact count={}",
+                                    selected_count,
+                                    total
+                                );
+                            },
+                            Err(e) => {
+                                log_warn!(
+                                    "[lock_manager] 筛选后无法读取圣遗物数量: {}",
+                                    "[lock_manager] Cannot read artifact count after filtering: {}",
+                                    e
+                                );
+                                return (
+                                    make_error_results(targets, InstructionStatus::OcrError),
+                                    scanned_artifacts,
+                                    HashMap::new(),
+                                    false,
+                                    0,
+                                );
+                            },
+                        }
+                    },
+                    Ok(_) => {
+                        log_warn!(
+                            "[lock_manager] 未能应用相关套装筛选，将继续扫描完整圣遗物列表",
+                            "[lock_manager] Could not apply involved set filter, scanning full artifact list"
+                        );
+                    },
+                    Err(e) => {
+                        log_warn!(
+                            "[lock_manager] 套装筛选失败，将继续扫描完整圣遗物列表: {}",
+                            "[lock_manager] Set filter failed, scanning full artifact list: {}",
+                            e
+                        );
+                    },
+                }
+            }
+        }
 
         if total == 0 {
             log_info!(

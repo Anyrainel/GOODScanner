@@ -239,7 +239,7 @@ Each data type (characters, weapons, artifacts) has an independent `ScanDataCach
 
 ### Key config flow
 
-GUI `state.update_inventory` (bool, default true) → inverted to `stop_on_all_matched` → passed through `cli.rs::run_server_core()` → `ArtifactManager::new()` → `LockManager::execute()`.
+GUI `state.update_inventory` (bool, default true) + `state.filter_involved_sets` (bool, default false) → `stop_on_all_matched` / set-filter mode → passed through `cli.rs::run_server_core()` → `ArtifactManager::new()` → `LockManager::execute()`.
 
 ### Matching (matching.rs)
 

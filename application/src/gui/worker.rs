@@ -396,8 +396,8 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
     let user_config = state.user_config.clone();
     let port = state.server_port;
     let enabled = state.server_enabled.clone();
-    let manage_recent_artifacts = state.manage_recent_artifacts;
-    let stop_on_all_matched = !state.update_inventory || manage_recent_artifacts;
+    let filter_involved_sets = state.filter_involved_sets;
+    let stop_on_all_matched = !state.update_inventory || filter_involved_sets;
     let dump_images = state.dump_images;
     let dump_job_data = state.dump_job_data;
     let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -444,7 +444,7 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
                 enabled,
                 shutdown_clone,
                 stop_on_all_matched,
-                manage_recent_artifacts,
+                filter_involved_sets,
                 dump_images,
                 dump_job_data,
             ) {

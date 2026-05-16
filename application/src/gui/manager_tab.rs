@@ -47,16 +47,16 @@ pub fn show(
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!is_server_running, |ui| {
                         ui.checkbox(
-                            &mut state.manage_recent_artifacts,
+                            &mut state.filter_involved_sets,
                             l.t(
-                                "从最近获得的圣遗物开始加解锁（适合增量管理）",
-                                "Start lock/unlock from recently obtained artifacts (for incremental management)",
+                                "只筛选涉及的套装后加解锁（更快）",
+                                "Filter involved artifact sets before lock/unlock (faster)",
                             ),
                         );
-                        if state.manage_recent_artifacts {
+                        if state.filter_involved_sets {
                             state.update_inventory = false;
                         }
-                        ui.add_enabled_ui(!state.manage_recent_artifacts, |ui| {
+                        ui.add_enabled_ui(!state.filter_involved_sets, |ui| {
                             ui.checkbox(
                                 &mut state.update_inventory,
                                 l.t(

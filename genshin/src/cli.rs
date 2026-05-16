@@ -670,8 +670,8 @@ pub struct GoodUserConfig {
     pub server_port: u16,
     #[serde(default = "default_true")]
     pub update_inventory: bool,
-    #[serde(default)]
-    pub manage_recent_artifacts: bool,
+    #[serde(default, alias = "manage_recent_artifacts")]
+    pub filter_involved_sets: bool,
 
     /// Advanced: force OCR v5 pool size. 0 = auto-detect from RAM. Non-zero forces that size.
     #[serde(default)]
@@ -763,7 +763,7 @@ impl Default for GoodUserConfig {
             artifact_max_count: 0,
             server_port: default_server_port(),
             update_inventory: true,
-            manage_recent_artifacts: false,
+            filter_involved_sets: false,
             ocr_pool_v5_override: 0,
             ocr_pool_v4_override: 0,
         }
@@ -1475,7 +1475,7 @@ pub fn run_server_core(
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     stop_on_all_matched: bool,
-    manage_recent_artifacts: bool,
+    filter_involved_sets: bool,
     dump_images: bool,
     dump_job_data: bool,
 ) -> Result<()> {
@@ -1554,7 +1554,7 @@ pub fn run_server_core(
             panel_timeout,
             initial_wait,
             stop_on_all_matched,
-            manage_recent_artifacts,
+            filter_involved_sets,
             dump_images,
         );
         Ok(Box::new(crate::server::GameExecutor {
@@ -1631,4 +1631,17 @@ pub fn run_manage_json(
 
     let (result, _artifact_snapshot) = manager.execute(&mut ctrl, request, None, token);
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_config_accepts_legacy_recent_manager_key() {
+        let cfg: GoodUserConfig =
+            serde_json::from_str(r#"{"manage_recent_artifacts":true}"#).unwrap();
+
+        assert!(cfg.filter_involved_sets);
+    }
 }

@@ -242,6 +242,16 @@ pub const FILTER_SCROLL_Y: f64 = 500.0;
 /// 35 (~8% more than 32) for a full page at 4K.
 pub const FILTER_SCROLL_TICKS: i32 = 41;
 
+/// Backpack artifact filter entry point.
+/// User-calibrated from 4K coordinates: (338, 2040) / 2.
+const BACKPACK_FILTER_ENTRY_X: f64 = 169.0;
+const BACKPACK_FILTER_ENTRY_Y: f64 = 1020.0;
+
+/// Set-filter row inside the backpack filter popover.
+/// User-calibrated from 4K coordinates: (624, 404) / 2.
+const BACKPACK_SET_FILTER_X: f64 = 312.0;
+const BACKPACK_SET_FILTER_Y: f64 = 202.0;
+
 /// Delay between batches of scroll ticks (ms).
 pub const SCROLL_TICK_DELAY_MS: u32 = 20;
 /// Delay after scroll completes to let animation settle (ms).
@@ -860,6 +870,23 @@ fn click_filter_set_and_confirm(
     Ok(())
 }
 
+fn open_selection_set_filter_panel(ctrl: &mut GenshinGameController) {
+    ctrl.click_at(FILTER_FUNNEL_X, FILTER_FUNNEL_Y);
+    yas::utils::sleep(d_transition() * 2 / 3);
+}
+
+fn open_backpack_set_filter_panel(ctrl: &mut GenshinGameController) {
+    ctrl.click_at(BACKPACK_FILTER_ENTRY_X, BACKPACK_FILTER_ENTRY_Y);
+    yas::utils::sleep(500);
+    ctrl.click_at(BACKPACK_SET_FILTER_X, BACKPACK_SET_FILTER_Y);
+    yas::utils::sleep(1000);
+}
+
+fn clear_open_filter_panel(ctrl: &mut GenshinGameController) {
+    ctrl.click_at(FILTER_CLEAR_X, FILTER_CLEAR_Y);
+    yas::utils::sleep(d_action() * 3 / 8);
+}
+
 /// Apply a set filter in the artifact selection view to narrow the grid.
 ///
 /// Opens the set filter panel (via the funnel icon), clears any existing filter,
@@ -902,13 +929,9 @@ pub fn apply_set_filter(
         cn_name
     );
 
-    // Open filter panel
-    ctrl.click_at(FILTER_FUNNEL_X, FILTER_FUNNEL_Y);
-    yas::utils::sleep(d_transition() * 2 / 3);
+    open_selection_set_filter_panel(ctrl);
 
-    // Clear existing filters
-    ctrl.click_at(FILTER_CLEAR_X, FILTER_CLEAR_Y);
-    yas::utils::sleep(d_action() * 3 / 8);
+    clear_open_filter_panel(ctrl);
 
     // Find the set in the filter panel (quick scan → scroll to top → scroll down)
     match find_set_in_filter_panel(ctrl, ocr, set_key, mappings)? {
@@ -958,6 +981,32 @@ pub fn apply_multi_set_filter(
     mappings: &MappingManager,
     ocr: &dyn ImageToText<RgbImage>,
 ) -> Result<usize> {
+    open_selection_set_filter_panel(ctrl);
+    clear_open_filter_panel(ctrl);
+    apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr)
+}
+
+/// Apply a multi-set filter from the artifact backpack.
+///
+/// The backpack has a different entry path from the artifact selection view,
+/// but the opened set-filter panel is the same two-column selector.
+pub fn apply_backpack_multi_set_filter(
+    ctrl: &mut GenshinGameController,
+    set_keys: &[&str],
+    mappings: &MappingManager,
+    ocr: &dyn ImageToText<RgbImage>,
+) -> Result<usize> {
+    open_backpack_set_filter_panel(ctrl);
+    clear_open_filter_panel(ctrl);
+    apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr)
+}
+
+fn apply_multi_set_filter_in_open_panel(
+    ctrl: &mut GenshinGameController,
+    set_keys: &[&str],
+    mappings: &MappingManager,
+    ocr: &dyn ImageToText<RgbImage>,
+) -> Result<usize> {
     // Reverse lookup all set keys → Chinese names
     let cn_targets: Vec<(String, String)> = set_keys
         .iter()
@@ -981,14 +1030,6 @@ pub fn apply_multi_set_filter(
         cn_targets.len(),
         set_keys
     );
-
-    // Open filter panel
-    ctrl.click_at(FILTER_FUNNEL_X, FILTER_FUNNEL_Y);
-    yas::utils::sleep(d_transition() * 2 / 3);
-
-    // Clear existing filters
-    ctrl.click_at(FILTER_CLEAR_X, FILTER_CLEAR_Y);
-    yas::utils::sleep(d_action() * 3 / 8);
 
     // Scroll filter list back to top (4× one page to cover worst case)
     ctrl.move_to(FILTER_SCROLL_X, FILTER_SCROLL_Y);
