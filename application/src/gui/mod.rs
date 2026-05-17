@@ -50,7 +50,7 @@ pub fn run_gui() {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([720.0, 800.0])
+            .with_inner_size([720.0, 660.0])
             .with_min_inner_size([600.0, 400.0])
             .with_icon(std::sync::Arc::new(icon)),
         ..Default::default()
@@ -187,7 +187,7 @@ impl eframe::App for GuiApp {
         };
         egui::TopBottomPanel::bottom("logs")
             .min_height(120.0)
-            .default_height(300.0)
+            .default_height(230.0)
             .resizable(true)
             .show(ctx, |ui| {
                 log_panel::show_with(ui, self.state.lang, log_buf);

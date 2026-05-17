@@ -998,7 +998,13 @@ pub fn apply_backpack_multi_set_filter(
 ) -> Result<usize> {
     open_backpack_set_filter_panel(ctrl);
     clear_open_filter_panel(ctrl);
-    apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr)
+    let found_count = apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr)?;
+    if found_count > 0 {
+        yas::utils::sleep(500);
+        ctrl.key_press(enigo::Key::Escape);
+        yas::utils::sleep(500);
+    }
+    Ok(found_count)
 }
 
 fn apply_multi_set_filter_in_open_panel(
