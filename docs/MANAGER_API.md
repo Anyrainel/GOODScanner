@@ -90,7 +90,7 @@ The artifact's own `lock` field is ignored for determining intention — only li
 }
 ```
 
-Each list item is a full (or partial) `GoodArtifact` object — the same format returned by `GET /artifacts` and the scanner export.
+Each list item is a full (or partial) `GoodArtifact` object — the same format returned by `GET /artifacts` and the scanner export. Include **`elixirCrafted`** when sending targets: it is a hard-match field (defaults to `false` if omitted). Use the same value the scanner exported for that piece.
 
 #### Matching
 
@@ -105,8 +105,34 @@ Artifacts are matched against the in-game backpack using these identity fields:
 | `mainStatKey` | Hard match | GOOD v3 stat key (e.g. `"hp"`, `"atk_"`) |
 | `substats` | Hard match | `[{key, value}]`, order-independent. All keys must match exactly; each value must be within ±0.1 (OCR rounding tolerance). |
 | `unactivatedSubstats` | Hard match | Same format and rules. Level-0 artifacts may have one unactivated substat. |
+| `elixirCrafted` | Hard match | `true` for 祝圣之霜-defined artifacts (purple banner in backpack detail). Detected via the same panel OCR as the scanner export. |
 
-Other fields (`location`, `lock`, `astralMark`, `elixirCrafted`, `totalRolls`) are accepted but ignored during matching.
+Other fields (`location`, `lock`, `astralMark`, `totalRolls`, and substat `initialValue` / `rolls`) are accepted but **ignored during matching**.
+
+**Matching algorithm.** The server performs a single backpack scan (same grid navigation and OCR pipeline as `POST /scan` artifacts). For each scanned item, in ascending backpack index order, it finds the first **still-unmatched** target whose identity fields all match. There is no tie-break beyond request order: if two backpack pieces (or two request entries) share the same identity fields, the first piece encountered in the backpack binds to the first matching entry in the combined `lock` + `unlock` list (lock entries first, then unlock). **`location` is not used** to disambiguate duplicates — two pieces with identical stats but different equip owners can be confused.
+
+**Already correct.** Once matched, if the in-game lock state already equals the desired state (from list membership), the server reports `already_correct` and does not click the lock button.
+
+#### Execution
+
+1. Open backpack → artifact tab; dismiss the in-game 5★ acquired-time filter (same as a full artifact scan).
+2. Optionally apply an in-game **set filter** when the server's "filter involved sets" option is enabled (GUI only — not an HTTP parameter). This limits the visible inventory to the sets present in the request.
+3. Walk the artifact grid, OCR each item, match targets, then **re-click matched cells and toggle lock** at page boundaries (before scrolling).
+4. Stop when all targets are matched (fast mode), when rarity drops below 4★, on user abort, or after visiting every item (full mode).
+
+Lock toggles use the scanned piece's `elixirCrafted` to apply a 40px Y-shift when clicking the lock icon (elixir banner shifts the panel).
+
+#### Server-side performance options (GUI)
+
+These are configured in the GOODScanner **Manager** tab, not in the HTTP request. They affect lock/unlock behavior:
+
+| GUI option | Effect |
+|------------|--------|
+| **Update inventory after scan** ON (default) | Full backpack scan; produces an artifact snapshot when the scan completes cleanly. |
+| **Update inventory after scan** OFF | Fast mode: stop once all targets are matched; may skip whole pages via level probe (assumes inventory sorted by level descending). Does **not** produce a snapshot. |
+| **Filter involved artifact sets** ON | Applies in-game set filter before scanning; implies fast mode (same as update inventory OFF). |
+
+Clients should send manage requests built from data that reflects the same inventory view the server will scan (full bag vs filtered sets). Stale JSON or duplicate stat lines are a common source of wrong-piece toggles.
 
 #### Result IDs
 
@@ -118,7 +144,7 @@ Since artifacts don't carry client-assigned IDs, results use positional IDs:
 
 | Code | When | Body |
 |------|------|------|
-| 202 | Job accepted | `{"jobId": "<uuid>", "total": N}` |
+| 202 | Job accepted | `{"jobId": "<uuid>", "total": N}` — `N` is the lock+unlock **target count**. Once execution starts, `GET /status` progress switches to backpack item counts (see below). |
 | 400 | Bad JSON, both lists empty, or any entry invalid (empty keys, rarity outside 4–5, level outside 0–20) | `{"error": "..."}` |
 | 403 | Disallowed origin | `{"error": "Origin not allowed"}` |
 | 409 | Another job running | `{"error": "..."}` |
@@ -340,7 +366,7 @@ Linear progress: one `(completed, total)` pair, plus the id of the instruction c
   "progress": {
     "completed": 47,
     "total": 120,
-    "currentId": "lock:3",
+    "currentId": "",
     "phase": "锁定变更 / Lock changes"
   }
 }
@@ -348,9 +374,9 @@ Linear progress: one `(completed, total)` pair, plus the id of the instruction c
 
 Notes:
 
-- For `POST /manage`, `total` is the **backpack item count** (not the lock/unlock target count), and `completed` ticks per backpack item as the scan walks through it. The bar reflects actual scan progress through the inventory.
-- For `POST /equip`, `total` is the equip instruction count. `completed` ticks as instructions resolve (per unequip target, per character visit during the roster scan).
-- `currentId` is the result id of the instruction currently in flight (e.g. `"lock:3"`, `"equip:2"`) or `""` when no specific item is being worked on.
+- For `POST /manage`, once the backpack scan starts, `total` becomes the **artifact backpack item count** and `completed` ticks once per grid item visited (`1..total`). This differs from the `total` in the `202` response (target count). The bar reflects scan progress, not "N of M targets done."
+- For `POST /manage`, `currentId` is always `""` during the scan phase (matching/toggling happen per page; there is no per-target progress id on the wire).
+- For `POST /equip`, `total` is the equip instruction count. `completed` ticks as instructions resolve (per unequip target, per character visit during the roster scan). Equip may populate `currentId` with `"equip:N"`.
 - `phase` is a bilingual label (e.g. `"锁定变更 / Lock changes"`, `"装备变更 / Equip changes"`), purely for human display.
 
 #### When running — scan
@@ -441,16 +467,19 @@ Each result contains only `id` and `status`. No human-readable detail — i18n i
 
 ## Status Values
 
+Per-instruction statuses returned in `GET /result` for `POST /manage`:
+
 | Status | Meaning |
 |--------|---------|
-| `success` | Applied |
-| `already_correct` | Already in desired state |
-| `not_found` | No matching artifact found |
-| `invalid_input` | Bad data (empty keys, out-of-range values) |
-| `ocr_error` | OCR identification failed |
-| `ui_error` | Game UI interaction failed |
-| `aborted` | User cancelled (right-click in game or GUI) |
-| `skipped` | Skipped (earlier failure or abort) |
+| `success` | Lock state toggled and verified |
+| `already_correct` | Matched in backpack and already in desired state |
+| `not_found` | No matching artifact found during the scan (or fast mode stopped before reaching it) |
+| `ocr_error` | Job-level failure before/during backpack open (e.g. cannot read artifact count) — all targets get this status |
+| `ui_error` | Matched but lock toggle or pixel verification failed |
+| `aborted` | User cancelled (right-click in game) while processing that target |
+| `skipped` | Reserved; normally unused for manage (all targets get an explicit status) |
+
+Request validation failures (empty keys, invalid rarity/level) return **HTTP 400** for the whole request — they do not appear as per-instruction `invalid_input` in manage results.
 
 ### `GET /characters?jobId=<id>`
 
@@ -546,10 +575,16 @@ The `jobId` parameter is **optional** for backwards compatibility:
 
 **Notes on artifact cache sources:**
 - **Scan jobs** (`POST /scan` with `artifacts: true`): populates the artifact cache with the full scan results.
-- **Manage jobs** (`POST /manage`): populates the artifact cache with a post-toggle snapshot when the backpack scan completes fully (no abort, no early stop, no OCR/solver failures).
+- **Manage jobs** (`POST /manage`): populates the artifact cache with a post-toggle snapshot **only when all of the following hold**:
+  - Full inventory mode (GUI "update inventory" ON and "filter involved sets" OFF — no fast-mode early stop),
+  - Scan reached every artifact in the bag (or stopped only at the 4★ rarity floor),
+  - User did not abort,
+  - No OCR failures on scanned items and no roll-solver failures on leveled artifacts.
+  If a manage job runs but no snapshot is produced (fast mode, abort, data quality issues), the cache is **invalidated** — `GET /artifacts?jobId=<that manage jobId>` returns **404**, not 503. HTTP **503** for `GET /artifacts` applies only when a **`POST /scan`** job attempted artifacts but did not finish (`incomplete_jobId`).
 - **Equip jobs** (`POST /equip`): invalidate the artifact cache (in-game equipment state changed) but do not produce new data.
 - Each source writes its own `jobId` — use the `jobId` from the job that produced the data.
-- Lock states in manage snapshots reflect post-toggle state for successfully changed artifacts.
+- Lock states in manage snapshots reflect post-toggle state for successfully changed artifacts; unlocking clears `astralMark` on those entries in the snapshot.
+- Manage/equip jobs **invalidate** the cache when they start (before execution) if they will modify in-game state, so clients must not read stale `GET /artifacts` during a running job.
 - All cached data persists in memory for the server's lifetime. It is not written to disk.
 
 ## Client Flow
@@ -564,7 +599,7 @@ The `jobId` parameter is **optional** for backwards compatibility:
    → "completed": proceed to step 4
    → no response: server crashed or game interrupted
 4. GET /result?jobId=<id> → full per-instruction results (idempotent)
-5. GET /artifacts?jobId=<id> → updated artifact inventory (optional, manage only)
+5. GET /artifacts?jobId=<id> → post-manage snapshot (optional). Returns 200 only when the job produced a full snapshot; otherwise 404. Do not assume every manage job updates artifact data.
 6. Done. Next job will replace the stored result.
 ```
 
@@ -660,12 +695,18 @@ Level-0 artifact with unactivated substat:
 
 All targets execute in a single backpack scan pass. Invalid entries (empty keys, rarity outside 4–5, level outside 0–20) reject the entire request with 400 — fix all entries before resubmitting.
 
+**Duplicate-aware request:** If the client locks two pieces with identical stat lines, list order must match the intended backpack order (or include disambiguating fields the server does not yet support, such as `location`). Otherwise the wrong physical piece may be toggled even when OCR is perfect.
+
 ## Changelog
+
+### 2026-06-14
+
+- **`POST /manage` matching docs corrected.** `elixirCrafted` is a hard-match field (same as implementation and scanner export). Documented greedy first-match algorithm, duplicate ambiguity (`location` ignored), fast-mode GUI options, per-page lock toggling, manage progress (`currentId` always empty during scan; `202.total` vs status `progress.total`), snapshot preconditions, and manage-specific status meanings. Fixed stale claim that manage jobs return 503 on missing snapshots (they invalidate → 404).
 
 ### 2026-04-23
 
 - **BREAKING: scan progress is per-category, not per-job.** `POST /scan` jobs now report progress via a new `scanProgress` object on `GET /status` instead of the linear `progress` field. Each requested category has its own `{completed, total, state}` slot (state is `pending` / `running` / `complete` / `aborted`). Unrequested categories are omitted. Clients that were reading `/status.progress.completed` during a scan must switch to `/status.scanProgress.{characters|weapons|artifacts}.completed`.
-- **Manage/equip progress gains `currentId` and `phase`.** The existing `progress` field on `/status` now serializes all four fields (`completed`, `total`, `currentId`, `phase`) — previously `currentId` and `phase` were stored server-side but stripped from the wire. Clients that already ignored the absent fields are unaffected.
+- **Manage/equip progress gains `currentId` and `phase`.** The existing `progress` field on `/status` now serializes all four fields (`completed`, `total`, `currentId`, `phase`) — previously `currentId` and `phase` were stored server-side but stripped from the wire. For manage jobs, `currentId` remains empty during the backpack scan; equip may use `"equip:N"`.
 - **Manage progress is now real-time.** `LockManager::execute` emits a progress tick per backpack item as it walks the inventory. Previously all ticks fired in a burst at the end of the scan (the bar sat at 0 for the whole scan then jumped to 100%). `total` on manage is the backpack item count.
 - **Equip gets intermediate progress.** `EquipManager::execute` now ticks per unequip target and per character visit during the roster scan. Previously only start/end ticks were emitted.
 - **All-or-nothing per scan category.** `GET /characters` / `GET /weapons` / `GET /artifacts` now return **503** when the supplied `jobId` attempted to populate that category but didn't finish (user aborted, error, or the scan stopped before reaching it). Previously such cases fell through to 404. 404 is now reserved for "unknown jobId". A partially-aborted scan no longer leaves stale data from a prior run accessible under the new jobId.

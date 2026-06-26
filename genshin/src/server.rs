@@ -417,6 +417,7 @@ pub fn run_server<F>(
     enabled: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     dump_job_data: bool,
+    status_fn: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 ) -> Result<()>
 where
     F: FnMut() -> anyhow::Result<Box<dyn ManageExecutor>>,
@@ -694,6 +695,10 @@ where
             job_id
         );
 
+        if let Some(ref f) = status_fn {
+            f("正在初始化... / Initializing...");
+        }
+
         // 1-second delay: let the client see the "running" state update
         // before the game window is focused and takes over the screen.
         yas::utils::sleep(1000);
@@ -734,6 +739,12 @@ where
                         summary,
                     };
                     *state = JobState::completed(job_id.clone(), result);
+                    if let Some(ref f) = status_fn {
+                        f(&format!(
+                            "服务器运行中，端口 {} / Server running on port {}",
+                            port, port
+                        ));
+                    }
                     continue;
                 },
             }
@@ -759,6 +770,7 @@ where
 
         // Linear progress_fn for manage/equip: writes into JobState.progress.
         let linear_state = job_state.clone();
+        let status_fn_linear = status_fn.clone();
         let linear_progress_fn =
             move |completed: usize, total: usize, current_id: &str, phase: &str| {
                 if let Ok(mut state) = linear_state.lock() {
@@ -769,6 +781,17 @@ where
                         phase: phase.to_string(),
                     });
                 }
+                if let Some(ref f) = status_fn_linear {
+                    let parts: Vec<&str> = phase.split(" / ").collect();
+                    let (zh, en) = if parts.len() == 2 {
+                        (parts[0], parts[1])
+                    } else {
+                        (phase, phase)
+                    };
+                    let msg_zh = format!("{}: {}/{} (鼠标右键终止)", zh, completed, total);
+                    let msg_en = format!("{}: {}/{} (Right-click to abort)", en, completed, total);
+                    f(&format!("{} / {}", msg_zh, msg_en));
+                }
             };
 
         // Scan progress_fn: `phase` is the category key ("characters" /
@@ -776,6 +799,7 @@ where
         // JobState.scan_progress. Transitions phase state to Running on the
         // first tick; Complete/Aborted are set when execute_scan returns.
         let scan_state = job_state.clone();
+        let status_fn_scan = status_fn.clone();
         let scan_progress_fn = move |completed: usize, total: usize, _id: &str, phase: &str| {
             if let Ok(mut state) = scan_state.lock() {
                 if let Some(ref mut sp) = state.scan_progress {
@@ -791,6 +815,25 @@ where
                         pp.state = PhaseState::Running;
                     }
                 }
+            }
+            if let Some(ref f) = status_fn_scan {
+                let (zh, en) = match phase {
+                    "characters" => ("扫描角色", "Scanning characters"),
+                    "weapons" => ("扫描武器", "Scanning weapons"),
+                    "artifacts" => ("扫描圣遗物", "Scanning artifacts"),
+                    _ => (phase, phase),
+                };
+                let msg_zh = if total > 0 {
+                    format!("{}: {}/{} (鼠标右键终止)", zh, completed, total)
+                } else {
+                    format!("{}: {} (鼠标右键终止)", zh, completed)
+                };
+                let msg_en = if total > 0 {
+                    format!("{}: {}/{} (Right-click to abort)", en, completed, total)
+                } else {
+                    format!("{}: {} (Right-click to abort)", en, completed)
+                };
+                f(&format!("{} / {}", msg_zh, msg_en));
             }
         };
 
@@ -1051,6 +1094,12 @@ where
         }
 
         log_info!("[job {}] 执行完成", "[job {}] Execution completed", job_id);
+        if let Some(ref f) = status_fn {
+            f(&format!(
+                "服务器运行中，端口 {} / Server running on port {}",
+                port, port
+            ));
+        }
     }
 
     // Channel disconnected — wait for internal threads to fully stop before

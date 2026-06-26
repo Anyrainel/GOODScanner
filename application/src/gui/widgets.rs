@@ -79,15 +79,15 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
             ui.colored_label(
                 egui::Color32::from_rgb(255, 200, 50),
                 l.t(
-                    "请填写必填角色名称（旅行者、奇偶·男性、奇偶·女性），然后再次点击开始扫描。",
-                    "Fill in the required names (Traveler, Manekin, Manekina), then click Start Scan again.",
+                    "请填写必填角色名称（旅行者），然后再次点击开始扫描。",
+                    "Fill in the required name (Traveler), then click Start Scan again.",
                 ),
             );
             ui.add_space(4.0);
         } else {
             ui.label(l.t(
-                "这些角色可在游戏内改名，请填写您实际使用的名字（* 为必填）",
-                "These characters can be renamed in-game. Enter the names you actually use (* = required).",
+                "这些角色可在游戏内改名；奇偶·男性和奇偶·女性可留空（* 为必填）",
+                "These characters can be renamed in-game. Manekin and Manekina may be left blank (* = required).",
             ));
         }
         ui.add_space(2.0);
@@ -102,7 +102,7 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
         let total_w = ui.available_width();
         let field_w = ((total_w - 80.0 * 2.0 - 24.0) / 2.0).max(80.0);
         ui.horizontal(|ui| {
-            let traveler_empty = state.names_need_attention && state.user_config.traveler_name.trim().is_empty();
+            let traveler_empty = state.names_need_attention && state.missing_required_character_names();
             let label_color = if traveler_empty { egui::Color32::from_rgb(255, 100, 100) } else { required_color };
             ui.colored_label(label_color, l.t("旅行者*", "Traveler*"));
             ui.add(egui::TextEdit::singleline(&mut state.user_config.traveler_name).desired_width(field_w));
@@ -111,22 +111,15 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
             ui.add(egui::TextEdit::singleline(&mut state.user_config.wanderer_name).desired_width(field_w));
         });
         ui.horizontal(|ui| {
-            let manekin_empty = state.names_need_attention && state.user_config.manekin_name.trim().is_empty();
-            let label_color = if manekin_empty { egui::Color32::from_rgb(255, 100, 100) } else { required_color };
-            ui.colored_label(label_color, l.t("奇偶·男性*", "Manekin*"));
+            ui.label(l.t("奇偶·男性", "Manekin"));
             ui.add(egui::TextEdit::singleline(&mut state.user_config.manekin_name).desired_width(field_w));
             ui.add_space(16.0);
-            let manekina_empty = state.names_need_attention && state.user_config.manekina_name.trim().is_empty();
-            let label_color = if manekina_empty { egui::Color32::from_rgb(255, 100, 100) } else { required_color };
-            ui.colored_label(label_color, l.t("奇偶·女性*", "Manekina*"));
+            ui.label(l.t("奇偶·女性", "Manekina"));
             ui.add(egui::TextEdit::singleline(&mut state.user_config.manekina_name).desired_width(field_w));
         });
 
         if state.names_need_attention {
-            let required_filled = !state.user_config.traveler_name.trim().is_empty()
-                && !state.user_config.manekin_name.trim().is_empty()
-                && !state.user_config.manekina_name.trim().is_empty();
-            if required_filled {
+            if !state.missing_required_character_names() {
                 state.names_need_attention = false;
             }
         }

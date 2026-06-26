@@ -1527,6 +1527,20 @@ impl GoodArtifactScanner {
         mappings: &MappingManager,
         grid_icons: Option<GridIconResult>,
     ) -> Result<Option<GoodArtifact>> {
+        Self::identify_artifact_at(ocr, substat_ocr, image, scaler, mappings, 0, grid_icons)
+    }
+
+    /// Identify a single artifact and preserve the caller's scan index for
+    /// logs and debug annotations.
+    pub fn identify_artifact_at(
+        ocr: &dyn ImageToText<RgbImage>,
+        substat_ocr: &dyn ImageToText<RgbImage>,
+        image: &RgbImage,
+        scaler: &CoordScaler,
+        mappings: &MappingManager,
+        item_index: usize,
+        grid_icons: Option<GridIconResult>,
+    ) -> Result<Option<GoodArtifact>> {
         let regions = ArtifactOcrRegions::new();
         let config = GoodArtifactScannerConfig {
             continue_on_failure: true,
@@ -1544,7 +1558,7 @@ impl GoodArtifactScanner {
             &regions,
             mappings,
             &config,
-            0,
+            item_index,
             grid_icons,
         ) {
             Ok(ArtifactScanResult::Artifact(a)) => Ok(Some(a)),
@@ -1594,6 +1608,7 @@ impl GoodArtifactScanner {
                 self.config.delay_tab,
                 &count_ocr_guard,
                 self.config.keep_five_star_filter,
+                self.config.dump_images,
             )?;
             count
         } else {

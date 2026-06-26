@@ -18,15 +18,20 @@ pub fn show(
     // === Action bar (always visible at top) ===
     ui.add_space(4.0);
     action_bar(ui, state, server_handle, is_server_running, scan_running);
-    if !is_server_running {
-        ui.colored_label(
-            egui::Color32::from_rgb(120, 120, 120),
+    ui.colored_label(
+        egui::Color32::from_rgb(120, 120, 120),
+        if is_server_running {
+            l.t(
+                "服务器运行中，可在网页前端发送指令。指令执行时可按鼠标右键终止。",
+                "Server is running. Send instructions from the web frontend. Right-click to abort during execution.",
+            )
+        } else {
             l.t(
                 "接收来自网页前端的圣遗物管理指令（装备/锁定/解锁）。",
                 "Accept artifact manage instructions (equip/lock/unlock) from a web frontend.",
-            ),
-        );
-    }
+            )
+        },
+    );
     ui.add_space(4.0);
     ui.separator();
 

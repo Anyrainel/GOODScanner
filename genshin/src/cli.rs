@@ -673,6 +673,18 @@ pub struct GoodUserConfig {
     #[serde(default, alias = "manage_recent_artifacts")]
     pub filter_involved_sets: bool,
 
+    // --- GOODCapture GUI settings ---
+    #[serde(default = "default_true")]
+    pub capture_include_characters: bool,
+    #[serde(default = "default_true")]
+    pub capture_include_weapons: bool,
+    #[serde(default = "default_true")]
+    pub capture_include_artifacts: bool,
+    #[serde(default)]
+    pub capture_dump_packets: bool,
+    #[serde(default)]
+    pub capture_only_keep_latest_export: bool,
+
     /// Advanced: force OCR v5 pool size. 0 = auto-detect from RAM. Non-zero forces that size.
     #[serde(default)]
     pub ocr_pool_v5_override: usize,
@@ -764,6 +776,11 @@ impl Default for GoodUserConfig {
             server_port: default_server_port(),
             update_inventory: true,
             filter_involved_sets: false,
+            capture_include_characters: true,
+            capture_include_weapons: true,
+            capture_include_artifacts: true,
+            capture_dump_packets: false,
+            capture_only_keep_latest_export: false,
             ocr_pool_v5_override: 0,
             ocr_pool_v4_override: 0,
         }
@@ -1478,6 +1495,7 @@ pub fn run_server_core(
     filter_involved_sets: bool,
     dump_images: bool,
     dump_job_data: bool,
+    status_fn: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
 ) -> Result<()> {
     init_rayon_pool();
     crate::scanner::common::annotator::init(dump_images);
@@ -1565,7 +1583,14 @@ pub fn run_server_core(
         }))
     };
 
-    crate::server::run_server(server_port, init_executor, enabled, shutdown, dump_job_data)
+    crate::server::run_server(
+        server_port,
+        init_executor,
+        enabled,
+        shutdown,
+        dump_job_data,
+        status_fn,
+    )
 }
 
 /// Execute manage instructions from a JSON string.
@@ -1643,5 +1668,39 @@ mod tests {
             serde_json::from_str(r#"{"manage_recent_artifacts":true}"#).unwrap();
 
         assert!(cfg.filter_involved_sets);
+    }
+
+    #[test]
+    fn user_config_persists_goodcapture_options() {
+        let defaults: GoodUserConfig = serde_json::from_str("{}").unwrap();
+        assert!(defaults.capture_include_characters);
+        assert!(defaults.capture_include_weapons);
+        assert!(defaults.capture_include_artifacts);
+        assert!(!defaults.capture_dump_packets);
+        assert!(!defaults.capture_only_keep_latest_export);
+
+        let cfg: GoodUserConfig = serde_json::from_str(
+            r#"{
+                "capture_include_characters": false,
+                "capture_include_weapons": true,
+                "capture_include_artifacts": false,
+                "capture_dump_packets": true,
+                "capture_only_keep_latest_export": true
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!cfg.capture_include_characters);
+        assert!(cfg.capture_include_weapons);
+        assert!(!cfg.capture_include_artifacts);
+        assert!(cfg.capture_dump_packets);
+        assert!(cfg.capture_only_keep_latest_export);
+
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(json["capture_include_characters"], false);
+        assert_eq!(json["capture_include_weapons"], true);
+        assert_eq!(json["capture_include_artifacts"], false);
+        assert_eq!(json["capture_dump_packets"], true);
+        assert_eq!(json["capture_only_keep_latest_export"], true);
     }
 }

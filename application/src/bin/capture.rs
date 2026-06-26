@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use eframe::egui;
 
@@ -23,10 +24,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     good_tools_app::gui::worker::install_seh_handler();
 
-    let lang = {
-        let cfg = genshin_scanner::cli::load_config_or_default();
-        state::Lang::from_str(&cfg.lang)
-    };
+    let user_config = genshin_scanner::cli::load_config_or_default();
+    let lang = state::Lang::from_str(&user_config.lang);
     yas::lang::set_lang(lang.to_str());
 
     let log_lines: Arc<Mutex<Vec<LogEntry>>> = Arc::new(Mutex::new(Vec::with_capacity(1000)));
@@ -71,11 +70,16 @@ fn main() {
         options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
+            let capture_tab = CaptureTabState::from_config(output_dir, &user_config);
+            let config_snapshot = serde_json::to_string(&user_config).unwrap_or_default();
             Ok(Box::new(CaptureApp {
                 lang,
                 active_tab: ActiveTab::Capture,
                 log_lines,
-                capture_tab: CaptureTabState::new(output_dir),
+                capture_tab,
+                user_config,
+                config_snapshot,
+                config_dirty_since: None,
                 update_state,
             }))
         }),
@@ -94,11 +98,22 @@ struct CaptureApp {
     active_tab: ActiveTab,
     log_lines: Arc<Mutex<Vec<LogEntry>>>,
     capture_tab: CaptureTabState,
+    user_config: genshin_scanner::cli::GoodUserConfig,
+    config_snapshot: String,
+    config_dirty_since: Option<Instant>,
     update_state: Arc<Mutex<UpdateState>>,
 }
 
 impl eframe::App for CaptureApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.user_config.lang = self.lang.to_str().to_string();
+        self.capture_tab.sync_to_config(&mut self.user_config);
+        state::save_config_debounced(
+            &self.user_config,
+            &mut self.config_snapshot,
+            &mut self.config_dirty_since,
+        );
+
         let l = self.lang;
 
         // Top bar: tabs + language toggle
@@ -159,7 +174,8 @@ impl eframe::App for CaptureApp {
             *self.update_state.lock().unwrap(),
             UpdateState::Checking | UpdateState::Downloading | UpdateState::ShowingDialog,
         );
-        if self.capture_tab.is_busy() || update_busy {
+        let config_save_pending = self.config_dirty_since.is_some();
+        if self.capture_tab.is_busy() || update_busy || config_save_pending {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }

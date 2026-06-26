@@ -113,14 +113,15 @@ struct GuiApp {
 impl GuiApp {
     fn new(state: AppState) -> Self {
         #[cfg(feature = "capture")]
-        let output_dir = state.output_dir.clone();
+        let capture_tab_state =
+            capture_tab::CaptureTabState::from_config(state.output_dir.clone(), &state.user_config);
         Self {
             state,
             active_tab: ActiveTab::Scanner,
             scan_handle: None,
             server_handle: None,
             #[cfg(feature = "capture")]
-            capture_tab: capture_tab::CaptureTabState::new(output_dir),
+            capture_tab: capture_tab_state,
         }
     }
 }
@@ -128,6 +129,8 @@ impl GuiApp {
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Debounced auto-save: check if config changed and save after 300ms
+        #[cfg(feature = "capture")]
+        self.capture_tab.sync_to_config(&mut self.state.user_config);
         self.state.auto_save_tick();
 
         let l = self.state.lang;
@@ -244,7 +247,12 @@ impl eframe::App for GuiApp {
             *self.state.update_state.lock().unwrap(),
             UpdateState::Checking | UpdateState::Downloading | UpdateState::ShowingDialog,
         );
-        let any_running = is_scan_running || is_server_running || is_capture_busy || update_busy;
+        let config_save_pending = self.state.config_dirty_since.is_some();
+        let any_running = is_scan_running
+            || is_server_running
+            || is_capture_busy
+            || update_busy
+            || config_save_pending;
         if any_running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

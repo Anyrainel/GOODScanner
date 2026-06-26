@@ -85,6 +85,24 @@ impl CaptureTabState {
         }
     }
 
+    pub fn from_config(output_dir: String, config: &genshin_scanner::cli::GoodUserConfig) -> Self {
+        let mut state = Self::new(output_dir);
+        state.include_characters = config.capture_include_characters;
+        state.include_weapons = config.capture_include_weapons;
+        state.include_artifacts = config.capture_include_artifacts;
+        state.dump_packets = config.capture_dump_packets;
+        state.only_keep_latest_dump = config.capture_only_keep_latest_export;
+        state
+    }
+
+    pub fn sync_to_config(&self, config: &mut genshin_scanner::cli::GoodUserConfig) {
+        config.capture_include_characters = self.include_characters;
+        config.capture_include_weapons = self.include_weapons;
+        config.capture_include_artifacts = self.include_artifacts;
+        config.capture_dump_packets = self.dump_packets;
+        config.capture_only_keep_latest_export = self.only_keep_latest_dump;
+    }
+
     pub fn is_busy(&self) -> bool {
         matches!(
             self.phase,
@@ -222,7 +240,7 @@ pub fn show(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: bo
                     );
                     ui.checkbox(
                         &mut tab.only_keep_latest_dump,
-                        l.t("仅保留最新导出", "Only keep latest dump"),
+                        l.t("仅保留最新导出", "Only keep latest export"),
                     );
 
                     tab.data_cache_refresh.poll();

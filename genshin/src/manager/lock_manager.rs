@@ -7,17 +7,19 @@ use yas::{log_debug, log_info, log_warn};
 
 use super::ui_actions::{d_action, d_cell};
 use crate::scanner::artifact::GoodArtifactScanner;
+use crate::scanner::common::annotator;
 use crate::scanner::common::backpack_scanner::{
     self, BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction,
 };
 use crate::scanner::common::constants::*;
+use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::debug_dump::DumpCtx;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::grid_icon_detector::{GridIconResult, GridMode};
-use crate::scanner::common::grid_voter::{PagedGridVoter, ReadyItem};
+use crate::scanner::common::grid_voter::{GridAnnotation, PagedGridVoter, ReadyItem};
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::GoodArtifact;
-use crate::scanner::common::ocr_pool::SharedOcrPools;
+use crate::scanner::common::ocr_pool::{OcrPool, SharedOcrPools};
 use crate::scanner::common::pixel_utils;
 
 use super::matching;
@@ -54,6 +56,55 @@ struct PageToggle {
 
 /// Panel pool rect for wait_until_panel_loaded (same as backpack_scanner).
 const PANEL_POOL_RECT: (f64, f64, f64, f64) = (1330.0, 478.0, 370.0, 187.0);
+
+type OcrResult = (usize, usize, usize, Option<GoodArtifact>);
+
+fn spawn_identify_artifact_task(
+    idx: usize,
+    row: usize,
+    col: usize,
+    image: image::RgbImage,
+    grid_icons: Option<GridIconResult>,
+    grid_annotation: Option<GridAnnotation>,
+    tx: crossbeam_channel::Sender<OcrResult>,
+    ocr_pool: Arc<OcrPool>,
+    substat_pool: Arc<OcrPool>,
+    scaler: Arc<CoordScaler>,
+    mappings: Arc<MappingManager>,
+) {
+    rayon::spawn(move || {
+        annotator::begin_item("artifacts", idx, &scaler);
+        annotator::add_image("panel", &image);
+        if let Some(ref ann) = grid_annotation {
+            annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
+        }
+
+        let ocr = ocr_pool.get();
+        let sub_ocr = substat_pool.get();
+        let artifact = match GoodArtifactScanner::identify_artifact_at(
+            &ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
+            &sub_ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
+            &image,
+            &scaler,
+            &mappings,
+            idx,
+            grid_icons,
+        ) {
+            Ok(a) => a,
+            Err(e) => {
+                log_warn!(
+                    "[lock_manager] OCR失败 #{}: {}",
+                    "[lock_manager] OCR failed #{}: {}",
+                    idx,
+                    e
+                );
+                annotator::finalize_error(None, &e.to_string());
+                None
+            },
+        };
+        let _ = tx.send((idx, row, col, artifact));
+    });
+}
 
 impl LockManager {
     pub fn new(mappings: Arc<MappingManager>, pools: Arc<SharedOcrPools>) -> Self {
@@ -129,6 +180,7 @@ impl LockManager {
             400,
             &count_ocr_guard,
             false,
+            dump_images,
         ) {
             Ok((count, _max)) => {
                 log_debug!(
@@ -170,6 +222,7 @@ impl LockManager {
                     &involved_sets,
                     &self.mappings,
                     &filter_ocr_guard as &dyn yas::ocr::ImageToText<image::RgbImage>,
+                    dump_images,
                 ) {
                     Ok(selected_count) if selected_count > 0 => {
                         let filtered_count = {
@@ -252,7 +305,6 @@ impl LockManager {
         // --- Per-page callback state ---
         // A fresh OCR result channel is created before each page; PageCompleted
         // drains it and re-creates one for the next page.
-        type OcrResult = (usize, usize, usize, Option<GoodArtifact>);
         let (init_tx, init_rx) = crossbeam_channel::unbounded::<OcrResult>();
         let mut result_tx: crossbeam_channel::Sender<OcrResult> = init_tx;
         let mut result_rx: crossbeam_channel::Receiver<OcrResult> = init_rx;
@@ -340,11 +392,6 @@ impl LockManager {
 
                 // ---------------- Per-item voting + OCR dispatch ----------------
                 GridEvent::Item { idx, row, col, image } => {
-                    if dump_images {
-                        let ctx = DumpCtx::new("debug_images", "manager_lock", idx, "");
-                        ctx.dump_full(&image);
-                    }
-
                     // Tick progress per item as we walk through the backpack.
                     // Reports (idx+1, backpack_total) so clients see a real
                     // moving number rather than 0/N until the very end.
@@ -360,24 +407,15 @@ impl LockManager {
                             let (d_row, d_col) = item.payload;
                             let d_img = item.image;
                             let gi: Option<GridIconResult> = item.metadata;
+                            let ann = item.grid_annotation;
                             let tx = result_tx.clone();
                             let pool = ocr_pool_cb.clone();
                             let sub_pool = substat_pool_cb.clone();
                             let sc = scaler_arc.clone();
                             let mp = mappings_cb.clone();
-                            rayon::spawn(move || {
-                                let ocr = pool.get();
-                                let sub_ocr = sub_pool.get();
-                                let artifact = match GoodArtifactScanner::identify_artifact(
-                                    &ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
-                                    &sub_ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
-                                    &d_img, &sc, &mp, gi,
-                                ) {
-                                    Ok(a) => a,
-                                    Err(e) => { log_warn!("[lock_manager] OCR失败 #{}: {}", "[lock_manager] OCR failed #{}: {}", d_idx, e); None }
-                                };
-                                let _ = tx.send((d_idx, d_row, d_col, artifact));
-                            });
+                            spawn_identify_artifact_task(
+                                d_idx, d_row, d_col, d_img, gi, ann, tx, pool, sub_pool, sc, mp,
+                            );
                             *dispatched += 1;
                         }
                     };
@@ -418,24 +456,15 @@ impl LockManager {
                         let (d_row, d_col) = item.payload;
                         let d_img = item.image;
                         let gi: Option<GridIconResult> = item.metadata;
+                        let ann = item.grid_annotation;
                         let tx = result_tx.clone();
                         let pool = ocr_pool_cb.clone();
                         let sub_pool = substat_pool_cb.clone();
                         let sc = scaler_arc.clone();
                         let mp = mappings_cb.clone();
-                        rayon::spawn(move || {
-                            let ocr = pool.get();
-                            let sub_ocr = sub_pool.get();
-                            let artifact = match GoodArtifactScanner::identify_artifact(
-                                &ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
-                                &sub_ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
-                                &d_img, &sc, &mp, gi,
-                            ) {
-                                Ok(a) => a,
-                                Err(e) => { log_warn!("[lock_manager] OCR失败 #{}: {}", "[lock_manager] OCR failed #{}: {}", d_idx, e); None }
-                            };
-                            let _ = tx.send((d_idx, d_row, d_col, artifact));
-                        });
+                        spawn_identify_artifact_task(
+                            d_idx, d_row, d_col, d_img, gi, ann, tx, pool, sub_pool, sc, mp,
+                        );
                         dispatched += 1;
                     }
 
@@ -583,6 +612,10 @@ impl LockManager {
                 }
             }
         });
+
+        if dump_images {
+            annotator::flush();
+        }
 
         // Compute scan completeness. Rarity early-stop counts as a complete
         // scan (we've visited every ≥4★ artifact). When stop_on_all_matched is

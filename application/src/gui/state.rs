@@ -178,6 +178,28 @@ impl RefreshState {
     }
 }
 
+/// Debounced user-config persistence shared by GOODScanner and GOODCapture.
+pub fn save_config_debounced(
+    user_config: &GoodUserConfig,
+    config_snapshot: &mut String,
+    config_dirty_since: &mut Option<Instant>,
+) {
+    let current = serde_json::to_string(user_config).unwrap_or_default();
+    if current != *config_snapshot {
+        // Config changed — start/reset the debounce timer
+        *config_dirty_since = Some(Instant::now());
+        *config_snapshot = current;
+    }
+    if let Some(since) = *config_dirty_since {
+        if since.elapsed() >= std::time::Duration::from_millis(300) {
+            if let Err(e) = genshin_scanner::cli::save_config(user_config) {
+                yas::log_warn!("配置自动保存失败: {}", "Config auto-save failed: {}", e);
+            }
+            *config_dirty_since = None;
+        }
+    }
+}
+
 /// Shared state between GUI thread and background workers.
 pub struct AppState {
     // --- Language ---
@@ -202,7 +224,7 @@ pub struct AppState {
     pub weapon_max_count: usize,
     pub artifact_max_count: usize,
 
-    /// Set to true when Start Scan is pressed but character names are all empty.
+    /// Set to true when Start Scan is pressed but a required character name is empty.
     /// Forces the Character Names section open with a warning.
     pub names_need_attention: bool,
 
@@ -278,6 +300,11 @@ impl AppState {
         self.lang.t(zh, en)
     }
 
+    /// Character-name fields that must be filled before starting a scan.
+    pub fn missing_required_character_names(&self) -> bool {
+        self.user_config.traveler_name.trim().is_empty()
+    }
+
     /// Sync GUI fields back into user_config so they get serialized on save.
     fn sync_to_config(&mut self) {
         self.user_config.scan_characters = self.scan_characters;
@@ -308,20 +335,11 @@ impl AppState {
     /// Call this once per frame from the main update loop.
     pub fn auto_save_tick(&mut self) {
         self.sync_to_config();
-        let current = serde_json::to_string(&self.user_config).unwrap_or_default();
-        if current != self.config_snapshot {
-            // Config changed — start/reset the debounce timer
-            self.config_dirty_since = Some(Instant::now());
-            self.config_snapshot = current;
-        }
-        if let Some(since) = self.config_dirty_since {
-            if since.elapsed() >= std::time::Duration::from_millis(300) {
-                if let Err(e) = genshin_scanner::cli::save_config(&self.user_config) {
-                    yas::log_warn!("配置自动保存失败: {}", "Config auto-save failed: {}", e);
-                }
-                self.config_dirty_since = None;
-            }
-        }
+        save_config_debounced(
+            &self.user_config,
+            &mut self.config_snapshot,
+            &mut self.config_dirty_since,
+        );
     }
 
     /// Build a ScanCoreConfig from current UI state.

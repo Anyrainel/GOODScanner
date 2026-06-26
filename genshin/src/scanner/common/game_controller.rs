@@ -48,6 +48,40 @@ pub fn color_distance(c1: &image::Rgb<u8>, c2: &image::Rgb<u8>) -> usize {
     (r * r + g * g + b * b) as usize
 }
 
+/// Per-byte capture noise ignored when comparing panel frames.
+const PANEL_FRAME_NOISE_FLOOR: u8 = 6;
+/// Mean per-byte excess above the noise floor allowed for "same frame".
+const PANEL_FRAME_MAX_MEAN_EXCESS_DIFF: f64 = 0.20;
+/// Hard guard against small averages hiding too many changed bytes.
+const PANEL_FRAME_MAX_CHANGED_BYTE_RATIO: f64 = 0.01;
+/// Byte deltas above this are counted by the ratio guard.
+const PANEL_FRAME_CHANGED_BYTE_DIFF: u8 = 16;
+
+fn panel_frames_similar(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    if a.is_empty() {
+        return true;
+    }
+
+    let mut excess_diff_sum: u64 = 0;
+    let mut changed_bytes: usize = 0;
+    for (&left, &right) in a.iter().zip(b.iter()) {
+        let diff = left.abs_diff(right);
+        excess_diff_sum += diff.saturating_sub(PANEL_FRAME_NOISE_FLOOR) as u64;
+        if diff > PANEL_FRAME_CHANGED_BYTE_DIFF {
+            changed_bytes += 1;
+        }
+    }
+
+    let len = a.len() as f64;
+    let mean_excess_diff = excess_diff_sum as f64 / len;
+    let changed_byte_ratio = changed_bytes as f64 / len;
+    mean_excess_diff <= PANEL_FRAME_MAX_MEAN_EXCESS_DIFF
+        && changed_byte_ratio <= PANEL_FRAME_MAX_CHANGED_BYTE_RATIO
+}
+
 impl GenshinGameController {
     pub fn new(game_info: GameInfo, capture_method: CaptureMethod) -> Result<Self> {
         let window_size = game_info.window.to_rect_usize().size();
@@ -533,7 +567,7 @@ impl GenshinGameController {
             capture_count += 1;
             let raw = im.into_raw();
 
-            if raw == last_capture && capture_count > 1 {
+            if panel_frames_similar(&raw, &last_capture) && capture_count > 1 {
                 self.panel_snapshot = raw;
                 let wait_ms = now.elapsed().unwrap().as_millis();
                 log_debug!(
@@ -569,7 +603,7 @@ impl GenshinGameController {
     /// Compares raw pixel bytes of a panel region against the stored snapshot
     /// from the previous item. The panel is considered loaded when pixels
     /// **differ from the previous item** AND are **stable** (two consecutive
-    /// captures are byte-identical).
+    /// captures are close enough after small capture noise is ignored).
     ///
     /// `self.panel_snapshot` starts empty, so the first item is always
     /// accepted (any capture differs from empty).
@@ -612,9 +646,9 @@ impl GenshinGameController {
             capture_count += 1;
             let raw = im.into_raw();
 
-            if raw != self.panel_snapshot {
+            if !panel_frames_similar(&raw, &self.panel_snapshot) {
                 // Content differs from previous item — check stability
-                if raw == last_capture && capture_count > 1 {
+                if panel_frames_similar(&raw, &last_capture) && capture_count > 1 {
                     // Two consecutive captures match → panel is stable and ready
                     self.panel_snapshot = raw;
                     let wait_ms = now.elapsed().unwrap().as_millis();
@@ -657,5 +691,37 @@ impl GenshinGameController {
             y: self.game_info.window.top + self.scaler.scale_y(flag_y) as i32,
         };
         self.capturer.capture_color(pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_frames_similar_accepts_small_capture_noise() {
+        let first = vec![100u8; 3_000];
+        let mut second = first.clone();
+        for value in second.iter_mut().take(200) {
+            *value += PANEL_FRAME_NOISE_FLOOR;
+        }
+
+        assert!(panel_frames_similar(&first, &second));
+    }
+
+    #[test]
+    fn panel_frames_similar_rejects_real_panel_text_changes() {
+        let first = vec![100u8; 3_000];
+        let mut second = first.clone();
+        for value in second.iter_mut().take(40) {
+            *value = 180;
+        }
+
+        assert!(!panel_frames_similar(&first, &second));
+    }
+
+    #[test]
+    fn panel_frames_similar_rejects_dimension_changes() {
+        assert!(!panel_frames_similar(&[1, 2, 3], &[1, 2]));
     }
 }

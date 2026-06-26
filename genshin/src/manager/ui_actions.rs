@@ -15,6 +15,7 @@ use yas::ocr::ImageToText;
 
 use crate::scanner::common::constants::*;
 use crate::scanner::common::coord_scaler::CoordScaler;
+use crate::scanner::common::debug_dump::{next_filter_dump_index, DumpCollector};
 use crate::scanner::common::equip_parser;
 use crate::scanner::common::fuzzy_match::fuzzy_match_map;
 use crate::scanner::common::game_controller::GenshinGameController;
@@ -536,16 +537,26 @@ pub fn click_unequip_button(ctrl: &mut GenshinGameController) -> Result<()> {
     Ok(())
 }
 
-/// Detect a target set in the currently visible filter rows.
-/// Returns `Some((click_x, y))` with the click coordinates if found, `None` otherwise.
-pub fn detect_set_in_visible_rows(
+/// Debug info for one OCR region in the filter panel.
+pub struct FilterOcrHit {
+    /// Base coordinates (1080p) of the OCR region.
+    pub base_rect: (f64, f64, f64, f64),
+    /// Row index (0-based).
+    pub row: usize,
+    /// "left" or "right" column.
+    pub column: &'static str,
+    /// Raw OCR text.
+    pub ocr_text: String,
+    /// Matched GOOD key (if any).
+    pub matched_key: Option<String>,
+}
+
+fn scan_visible_filter_rows(
     ctrl: &mut GenshinGameController,
     ocr: &dyn ImageToText<RgbImage>,
-    set_key: &str,
     mappings: &MappingManager,
-) -> Result<Option<(f64, f64)>> {
-    let mut detected_keys: Vec<String> = Vec::new();
-    let mut result = None;
+) -> Result<Vec<FilterOcrHit>> {
+    let mut hits: Vec<FilterOcrHit> = Vec::new();
 
     for row in 0..FILTER_VISIBLE_ROWS {
         if ctrl.check_rmb() {
@@ -554,59 +565,70 @@ pub fn detect_set_in_visible_rows(
         let y = FILTER_FIRST_ROW_Y + row as f64 * FILTER_ROW_SPACING;
         let text_y = y - FILTER_TEXT_TOP_OFFSET;
 
-        // Check left column
-        let left_text = ctrl
-            .ocr_region(
-                ocr,
-                (
-                    FILTER_LEFT_TEXT_X,
-                    text_y,
-                    FILTER_LEFT_TEXT_W,
-                    FILTER_TEXT_H,
-                ),
-            )
-            .unwrap_or_default();
-
-        if let Some(key) = fuzzy_match_map(&left_text, &mappings.artifact_set_map) {
-            detected_keys.push(key.clone());
-            if key == set_key && result.is_none() {
-                log_debug!(
-                    "[set_filter] found '{}' in left col row {} (OCR: '{}')",
-                    "[set_filter] found '{}' in left col row {} (OCR: '{}')",
-                    set_key,
-                    row,
-                    left_text
-                );
-                result = Some((FILTER_LEFT_CLICK_X, y));
-            }
+        for (column, text_x, text_w) in [
+            ("left", FILTER_LEFT_TEXT_X, FILTER_LEFT_TEXT_W),
+            ("right", FILTER_RIGHT_TEXT_X, FILTER_RIGHT_TEXT_W),
+        ] {
+            let text = ctrl
+                .ocr_region(ocr, (text_x, text_y, text_w, FILTER_TEXT_H))
+                .unwrap_or_default();
+            let matched_key = fuzzy_match_map(&text, &mappings.artifact_set_map);
+            hits.push(FilterOcrHit {
+                base_rect: (text_x, text_y, text_w, FILTER_TEXT_H),
+                row,
+                column,
+                ocr_text: text.trim().to_string(),
+                matched_key,
+            });
         }
+    }
 
-        // Check right column
-        let right_text = ctrl
-            .ocr_region(
-                ocr,
-                (
-                    FILTER_RIGHT_TEXT_X,
-                    text_y,
-                    FILTER_RIGHT_TEXT_W,
-                    FILTER_TEXT_H,
-                ),
-            )
-            .unwrap_or_default();
+    Ok(hits)
+}
 
-        if let Some(key) = fuzzy_match_map(&right_text, &mappings.artifact_set_map) {
-            detected_keys.push(key.clone());
-            if key == set_key && result.is_none() {
-                log_debug!(
-                    "[set_filter] found '{}' in right col row {} (OCR: '{}')",
-                    "[set_filter] found '{}' in right col row {} (OCR: '{}')",
-                    set_key,
-                    row,
-                    right_text
-                );
-                result = Some((FILTER_RIGHT_CLICK_X, y));
-            }
-        }
+fn filter_hit_click_pos(hit: &FilterOcrHit) -> (f64, f64) {
+    let click_x = if hit.column == "left" {
+        FILTER_LEFT_CLICK_X
+    } else {
+        FILTER_RIGHT_CLICK_X
+    };
+    let y = FILTER_FIRST_ROW_Y + hit.row as f64 * FILTER_ROW_SPACING;
+    (click_x, y)
+}
+
+fn find_filter_hit_pos(hits: &[FilterOcrHit], set_key: &str) -> Option<(f64, f64)> {
+    hits.iter()
+        .find(|hit| hit.matched_key.as_deref() == Some(set_key))
+        .map(filter_hit_click_pos)
+}
+
+/// Detect a target set in the currently visible filter rows.
+/// Returns `Some((click_x, y))` with the click coordinates if found, `None` otherwise.
+pub fn detect_set_in_visible_rows(
+    ctrl: &mut GenshinGameController,
+    ocr: &dyn ImageToText<RgbImage>,
+    set_key: &str,
+    mappings: &MappingManager,
+) -> Result<Option<(f64, f64)>> {
+    let hits = scan_visible_filter_rows(ctrl, ocr, mappings)?;
+    let detected_keys: Vec<String> = hits
+        .iter()
+        .filter_map(|hit| hit.matched_key.clone())
+        .collect();
+    let result = find_filter_hit_pos(&hits, set_key);
+
+    if let Some(hit) = hits
+        .iter()
+        .find(|hit| hit.matched_key.as_deref() == Some(set_key))
+    {
+        log_debug!(
+            "[set_filter] found '{}' in {} col row {} (OCR: '{}')",
+            "[set_filter] found '{}' in {} col row {} (OCR: '{}')",
+            set_key,
+            hit.column,
+            hit.row,
+            hit.ocr_text
+        );
     }
 
     log_debug!(
@@ -653,20 +675,6 @@ pub fn find_set_in_filter_panel(
     Ok(None)
 }
 
-/// Debug info for one OCR region in the filter panel.
-pub struct FilterOcrHit {
-    /// Base coordinates (1080p) of the OCR region.
-    pub base_rect: (f64, f64, f64, f64),
-    /// Row index (0-based).
-    pub row: usize,
-    /// "left" or "right" column.
-    pub column: &'static str,
-    /// Raw OCR text.
-    pub ocr_text: String,
-    /// Matched GOOD key (if any).
-    pub matched_key: Option<String>,
-}
-
 /// Scan visible filter rows and return debug info for every OCR region.
 /// Also returns the match position if the target set_key was found.
 pub fn detect_set_in_visible_rows_debug(
@@ -675,75 +683,8 @@ pub fn detect_set_in_visible_rows_debug(
     set_key: &str,
     mappings: &MappingManager,
 ) -> Result<(Option<(f64, f64)>, Vec<FilterOcrHit>)> {
-    let mut hits: Vec<FilterOcrHit> = Vec::new();
-    let mut result = None;
-
-    for row in 0..FILTER_VISIBLE_ROWS {
-        if ctrl.check_rmb() {
-            bail!("Cancelled by user (right-click)");
-        }
-        let y = FILTER_FIRST_ROW_Y + row as f64 * FILTER_ROW_SPACING;
-        let text_y = y - FILTER_TEXT_TOP_OFFSET;
-
-        // Left column
-        let left_text = ctrl
-            .ocr_region(
-                ocr,
-                (
-                    FILTER_LEFT_TEXT_X,
-                    text_y,
-                    FILTER_LEFT_TEXT_W,
-                    FILTER_TEXT_H,
-                ),
-            )
-            .unwrap_or_default();
-        let left_key = fuzzy_match_map(&left_text, &mappings.artifact_set_map);
-        if left_key.as_deref() == Some(set_key) && result.is_none() {
-            result = Some((FILTER_LEFT_CLICK_X, y));
-        }
-        hits.push(FilterOcrHit {
-            base_rect: (
-                FILTER_LEFT_TEXT_X,
-                text_y,
-                FILTER_LEFT_TEXT_W,
-                FILTER_TEXT_H,
-            ),
-            row,
-            column: "left",
-            ocr_text: left_text.trim().to_string(),
-            matched_key: left_key,
-        });
-
-        // Right column
-        let right_text = ctrl
-            .ocr_region(
-                ocr,
-                (
-                    FILTER_RIGHT_TEXT_X,
-                    text_y,
-                    FILTER_RIGHT_TEXT_W,
-                    FILTER_TEXT_H,
-                ),
-            )
-            .unwrap_or_default();
-        let right_key = fuzzy_match_map(&right_text, &mappings.artifact_set_map);
-        if right_key.as_deref() == Some(set_key) && result.is_none() {
-            result = Some((FILTER_RIGHT_CLICK_X, y));
-        }
-        hits.push(FilterOcrHit {
-            base_rect: (
-                FILTER_RIGHT_TEXT_X,
-                text_y,
-                FILTER_RIGHT_TEXT_W,
-                FILTER_TEXT_H,
-            ),
-            row,
-            column: "right",
-            ocr_text: right_text.trim().to_string(),
-            matched_key: right_key,
-        });
-    }
-
+    let hits = scan_visible_filter_rows(ctrl, ocr, mappings)?;
+    let result = find_filter_hit_pos(&hits, set_key);
     Ok((result, hits))
 }
 
@@ -796,6 +737,56 @@ pub fn annotate_filter_screenshot(
             }
         }
     }
+}
+
+fn dump_filter_panel_scan(
+    ctrl: &mut GenshinGameController,
+    hits: &[FilterOcrHit],
+    target_keys: &[String],
+    phase: &str,
+    matched_on_page: &[String],
+    remaining_after_page: &[String],
+) {
+    let image = match ctrl.capture_game() {
+        Ok(img) => img,
+        Err(e) => {
+            log_warn!(
+                "[set_filter] 筛选调试截图失败: {}",
+                "[set_filter] filter debug capture failed: {}",
+                e
+            );
+            return;
+        },
+    };
+    let mut collector = DumpCollector::new(
+        "debug_images",
+        "filter",
+        next_filter_dump_index(),
+        &ctrl.scaler,
+    );
+    let img_idx = collector.add_image("set_filter", &image);
+    for hit in hits {
+        let field = format!("{}_{}", hit.column, hit.row);
+        collector.record_ocr(img_idx, &field, hit.base_rect, &hit.ocr_text);
+        if let Some(key) = &hit.matched_key {
+            collector.set_final_result(&field, key);
+            if target_keys.iter().any(|target| target == key) {
+                collector.set_display_result(&field, "target");
+            }
+        } else {
+            collector.set_final_result(&field, "(no match)");
+        }
+    }
+    collector.add_warning(&format!("phase: {}", phase));
+    let result = serde_json::json!({
+        "kind": "set_filter",
+        "phase": phase,
+        "targets": target_keys,
+        "matchedOnPage": matched_on_page,
+        "remainingAfterPage": remaining_after_page,
+    })
+    .to_string();
+    collector.finalize_success(&result);
 }
 
 /// Like `find_set_in_filter_panel` but saves annotated debug screenshots at each step.
@@ -983,7 +974,7 @@ pub fn apply_multi_set_filter(
 ) -> Result<usize> {
     open_selection_set_filter_panel(ctrl);
     clear_open_filter_panel(ctrl);
-    apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr)
+    apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr, false)
 }
 
 /// Apply a multi-set filter from the artifact backpack.
@@ -995,10 +986,12 @@ pub fn apply_backpack_multi_set_filter(
     set_keys: &[&str],
     mappings: &MappingManager,
     ocr: &dyn ImageToText<RgbImage>,
+    dump_images: bool,
 ) -> Result<usize> {
     open_backpack_set_filter_panel(ctrl);
     clear_open_filter_panel(ctrl);
-    let found_count = apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr)?;
+    let found_count =
+        apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr, dump_images)?;
     if found_count > 0 {
         yas::utils::sleep(500);
         ctrl.key_press(enigo::Key::Escape);
@@ -1012,6 +1005,7 @@ fn apply_multi_set_filter_in_open_panel(
     set_keys: &[&str],
     mappings: &MappingManager,
     ocr: &dyn ImageToText<RgbImage>,
+    dump_images: bool,
 ) -> Result<usize> {
     // Reverse lookup all set keys → Chinese names
     let cn_targets: Vec<(String, String)> = set_keys
@@ -1047,76 +1041,69 @@ fn apply_multi_set_filter_in_open_panel(
 
     let mut found_count = 0;
     let mut remaining_keys: Vec<String> = cn_targets.iter().map(|(key, _)| key.clone()).collect();
+    let target_keys: Vec<String> = remaining_keys.clone();
 
     let max_scrolls = 5;
     for scroll in 0..=max_scrolls {
         if remaining_keys.is_empty() {
             break;
         }
-        for row in 0..FILTER_VISIBLE_ROWS {
-            if remaining_keys.is_empty() {
-                break;
-            }
-            let y = FILTER_FIRST_ROW_Y + row as f64 * FILTER_ROW_SPACING;
-            let text_y = y - FILTER_TEXT_TOP_OFFSET;
-
-            // Check left column
-            let left_text = ctrl
-                .ocr_region(
-                    ocr,
-                    (
-                        FILTER_LEFT_TEXT_X,
-                        text_y,
-                        FILTER_LEFT_TEXT_W,
-                        FILTER_TEXT_H,
-                    ),
-                )
-                .unwrap_or_default();
-
-            if let Some(matched_key) = fuzzy_match_map(&left_text, &mappings.artifact_set_map) {
-                if let Some(pos) = remaining_keys.iter().position(|k| *k == matched_key) {
-                    log_debug!(
-                        "[set_filter] 左列找到'{}' 第{}行 (OCR: '{}')",
-                        "found '{}' in left col row {} (OCR: '{}')",
-                        matched_key,
-                        row,
-                        left_text
-                    );
-                    ctrl.click_at(FILTER_LEFT_CLICK_X, y);
-                    yas::utils::sleep(d_action() * 3 / 8);
-                    remaining_keys.remove(pos);
-                    found_count += 1;
-                    continue;
+        let hits = scan_visible_filter_rows(ctrl, ocr, mappings)?;
+        let mut matches_on_page: Vec<(String, &'static str, usize, String, f64, f64)> = Vec::new();
+        for hit in &hits {
+            if let Some(matched_key) = &hit.matched_key {
+                if remaining_keys.iter().any(|key| key == matched_key)
+                    && !matches_on_page
+                        .iter()
+                        .any(|(key, _, _, _, _, _)| key == matched_key)
+                {
+                    let (click_x, y) = filter_hit_click_pos(hit);
+                    matches_on_page.push((
+                        matched_key.clone(),
+                        hit.column,
+                        hit.row,
+                        hit.ocr_text.clone(),
+                        click_x,
+                        y,
+                    ));
                 }
             }
+        }
 
-            // Check right column
-            let right_text = ctrl
-                .ocr_region(
-                    ocr,
-                    (
-                        FILTER_RIGHT_TEXT_X,
-                        text_y,
-                        FILTER_RIGHT_TEXT_W,
-                        FILTER_TEXT_H,
-                    ),
-                )
-                .unwrap_or_default();
+        let matched_keys: Vec<String> = matches_on_page
+            .iter()
+            .map(|(key, _, _, _, _, _)| key.clone())
+            .collect();
+        let remaining_after_page: Vec<String> = remaining_keys
+            .iter()
+            .filter(|key| !matched_keys.iter().any(|matched| matched == *key))
+            .cloned()
+            .collect();
+        if dump_images {
+            dump_filter_panel_scan(
+                ctrl,
+                &hits,
+                &target_keys,
+                &format!("set_filter_scroll_{}", scroll),
+                &matched_keys,
+                &remaining_after_page,
+            );
+        }
 
-            if let Some(matched_key) = fuzzy_match_map(&right_text, &mappings.artifact_set_map) {
-                if let Some(pos) = remaining_keys.iter().position(|k| *k == matched_key) {
-                    log_debug!(
-                        "[set_filter] 右列找到'{}' 第{}行 (OCR: '{}')",
-                        "found '{}' in right col row {} (OCR: '{}')",
-                        matched_key,
-                        row,
-                        right_text
-                    );
-                    ctrl.click_at(FILTER_RIGHT_CLICK_X, y);
-                    yas::utils::sleep(d_action() * 3 / 8);
-                    remaining_keys.remove(pos);
-                    found_count += 1;
-                }
+        for (matched_key, column, row, text, click_x, y) in matches_on_page {
+            if let Some(pos) = remaining_keys.iter().position(|key| *key == matched_key) {
+                log_debug!(
+                    "[set_filter] {}列找到'{}' 第{}行 (OCR: '{}')",
+                    "found in {} col '{}' row {} (OCR: '{}')",
+                    if column == "left" { "左" } else { "右" },
+                    matched_key,
+                    row,
+                    text
+                );
+                ctrl.click_at(click_x, y);
+                yas::utils::sleep(d_action() * 3 / 8);
+                remaining_keys.remove(pos);
+                found_count += 1;
             }
         }
 

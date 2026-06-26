@@ -8,8 +8,41 @@ use yas::utils;
 
 use super::constants::*;
 use super::coord_scaler::CoordScaler;
+use super::debug_dump::{next_filter_dump_index, DumpCollector};
 use super::game_controller::GenshinGameController;
 use super::pixel_utils;
+
+fn pixel_rgb(image: &RgbImage, scaler: &CoordScaler, pos: (f64, f64)) -> [u8; 3] {
+    let x = scaler.x(pos.0) as u32;
+    let y = scaler.y(pos.1) as u32;
+    if x < image.width() && y < image.height() {
+        let p = image.get_pixel(x, y);
+        [p[0], p[1], p[2]]
+    } else {
+        [0, 0, 0]
+    }
+}
+
+fn dump_order_by_recent_filter(image: &RgbImage, scaler: &CoordScaler, active: bool, action: &str) {
+    let mut collector =
+        DumpCollector::new("debug_images", "filter", next_filter_dump_index(), scaler);
+    let img_idx = collector.add_image("order_by_recent", image);
+    collector.record_pixel(
+        img_idx,
+        "order_by_recent",
+        ARTIFACT_FIVE_STAR_FILTER_POS,
+        pixel_rgb(image, scaler, ARTIFACT_FIVE_STAR_FILTER_POS),
+        if active { "active" } else { "inactive" },
+    );
+    collector.add_warning(&format!("action: {}", action));
+    let result = serde_json::json!({
+        "kind": "order_by_recent_filter",
+        "active": active,
+        "action": action,
+    })
+    .to_string();
+    collector.finalize_success(&result);
+}
 
 /// Fingerprint a grid cell's region (excludes 3px border to avoid selection highlight).
 /// Sampled every 4th row for speed.
@@ -85,22 +118,20 @@ pub fn dismiss_five_star_filter(
             return;
         },
     };
+    let active = pixel_utils::is_five_star_filter_active(&image, &ctrl.scaler);
     if dump_images {
-        use crate::scanner::common::debug_dump::DumpCtx;
-        let ctx = DumpCtx::new("debug_images", "artifacts", 0, "filter_check");
-        ctx.dump_full(&image);
-        ctx.dump_pixel(
-            "five_star_filter_px",
+        dump_order_by_recent_filter(
             &image,
-            (
-                ARTIFACT_FIVE_STAR_FILTER_POS.0,
-                ARTIFACT_FIVE_STAR_FILTER_POS.1,
-            ),
-            10,
             &ctrl.scaler,
+            active,
+            if active {
+                "dismiss"
+            } else {
+                "already_inactive"
+            },
         );
     }
-    if pixel_utils::is_five_star_filter_active(&image, &ctrl.scaler) {
+    if active {
         ctrl.click_at(
             ARTIFACT_FIVE_STAR_FILTER_POS.0,
             ARTIFACT_FIVE_STAR_FILTER_POS.1,
@@ -129,22 +160,16 @@ pub fn ensure_five_star_filter_active(
             return;
         },
     };
+    let active = pixel_utils::is_five_star_filter_active(&image, &ctrl.scaler);
     if dump_images {
-        use crate::scanner::common::debug_dump::DumpCtx;
-        let ctx = DumpCtx::new("debug_images", "artifacts", 0, "filter_check");
-        ctx.dump_full(&image);
-        ctx.dump_pixel(
-            "five_star_filter_px",
+        dump_order_by_recent_filter(
             &image,
-            (
-                ARTIFACT_FIVE_STAR_FILTER_POS.0,
-                ARTIFACT_FIVE_STAR_FILTER_POS.1,
-            ),
-            10,
             &ctrl.scaler,
+            active,
+            if active { "already_active" } else { "enable" },
         );
     }
-    if !pixel_utils::is_five_star_filter_active(&image, &ctrl.scaler) {
+    if !active {
         log_debug!(
             "[backpack] 五星排序筛选未开启，将点击开启",
             "[backpack] 5-star sort filter not active, will click to enable"
@@ -177,6 +202,7 @@ pub fn open_backpack_to_tab(
     tab_delay: u64,
     count_ocr: &dyn ImageToText<RgbImage>,
     keep_five_star_filter: bool,
+    dump_images: bool,
 ) -> Result<(i32, i32)> {
     ctrl.focus_game_window();
     if ctrl.check_rmb() {
@@ -195,9 +221,9 @@ pub fn open_backpack_to_tab(
 
     if tab == "artifact" {
         if keep_five_star_filter {
-            ensure_five_star_filter_active(ctrl, tab_delay, false);
+            ensure_five_star_filter_active(ctrl, tab_delay, dump_images);
         } else {
-            dismiss_five_star_filter(ctrl, tab_delay, false);
+            dismiss_five_star_filter(ctrl, tab_delay, dump_images);
         }
     }
 
@@ -232,9 +258,9 @@ pub fn open_backpack_to_tab(
         // Check filter again after retry
         if tab == "artifact" {
             if keep_five_star_filter {
-                ensure_five_star_filter_active(ctrl, tab_delay, false);
+                ensure_five_star_filter_active(ctrl, tab_delay, dump_images);
             } else {
-                dismiss_five_star_filter(ctrl, tab_delay, false);
+                dismiss_five_star_filter(ctrl, tab_delay, dump_images);
             }
         }
         let bp = BackpackScanner::new(ctrl);

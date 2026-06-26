@@ -16,15 +16,20 @@ pub fn show(
     // === Action bar (always visible at top) ===
     ui.add_space(4.0);
     action_bar(ui, state, scan_handle, is_scanning, game_busy);
-    if !is_scanning {
-        ui.colored_label(
-            egui::Color32::from_rgb(120, 120, 120),
+    ui.colored_label(
+        egui::Color32::from_rgb(120, 120, 120),
+        if is_scanning {
+            l.t(
+                "扫描过程中可按鼠标右键终止。",
+                "Right-click to abort during scanning.",
+            )
+        } else {
             l.t(
                 "请确认游戏已运行，扫描过程中可按鼠标右键终止。",
                 "Make sure the game is running. Right-click to abort during scanning.",
-            ),
-        );
-    }
+            )
+        },
+    );
     ui.add_space(4.0);
     ui.separator();
 
@@ -208,16 +213,9 @@ fn action_bar(
                 )
                 .clicked()
             {
-                let required_missing = state.user_config.traveler_name.trim().is_empty()
-                    || state.user_config.manekin_name.trim().is_empty()
-                    || state.user_config.manekina_name.trim().is_empty();
-
-                if required_missing {
+                if state.missing_required_character_names() {
                     state.names_need_attention = true;
-                    yas::log_warn!(
-                        "旅行者、奇偶·男性、奇偶·女性为必填项",
-                        "Traveler, Manekin, and Manekina names are required"
-                    );
+                    yas::log_warn!("旅行者为必填项", "Traveler name is required");
                 } else if let Err(e) = super::privilege::ensure_admin_for_action() {
                     *state.scan_status.lock().unwrap() =
                         TaskStatus::Failed(UiText::from_bilingual(format!("{}", e)));

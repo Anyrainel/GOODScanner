@@ -436,6 +436,11 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
                 }
             }
 
+            let status_clone = status.clone();
+            let status_fn = Arc::new(move |msg: &str| {
+                *status_clone.lock().unwrap() = TaskStatus::Running(UiText::from_bilingual(msg));
+            });
+
             match genshin_scanner::cli::run_server_core(
                 &user_config,
                 port,
@@ -447,6 +452,7 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
                 filter_involved_sets,
                 dump_images,
                 dump_job_data,
+                Some(status_fn),
             ) {
                 Ok(()) => {
                     *status.lock().unwrap() =

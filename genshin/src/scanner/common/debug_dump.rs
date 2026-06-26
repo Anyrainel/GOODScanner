@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
@@ -16,6 +17,12 @@ const CJK_FONT_SIZE_BASE: f32 = 24.0;
 
 /// Cached system font (loaded once, shared across all dump collectors).
 static SYSTEM_FONT: OnceLock<Option<FontVec>> = OnceLock::new();
+static FILTER_DUMP_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+/// Return the next debug dump index for filter-manipulation captures.
+pub fn next_filter_dump_index() -> usize {
+    FILTER_DUMP_INDEX.fetch_add(1, Ordering::Relaxed)
+}
 
 fn get_system_font() -> Option<&'static FontVec> {
     SYSTEM_FONT
