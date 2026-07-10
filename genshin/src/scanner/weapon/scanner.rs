@@ -606,7 +606,7 @@ impl GoodWeaponScanner {
                     }
 
                     annotator::begin_item("weapons", work_item.index, &worker_scaler);
-                    annotator::add_image("panel", &work_item.image);
+                    annotator::add_image("panel", &work_item.frame.image);
                     if let Some(ref ann) = work_item.grid_annotation {
                         annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
                     }
@@ -617,7 +617,7 @@ impl GoodWeaponScanner {
                     match Self::scan_single_weapon(
                         &ocr_guard,
                         Some(&equip_guard as &dyn ImageToText<RgbImage>),
-                        &work_item.image,
+                        &work_item.frame.image,
                         &worker_scaler,
                         &worker_ocr_regions,
                         &worker_mappings,
@@ -652,6 +652,8 @@ impl GoodWeaponScanner {
                 delay_ms: self.config.panel_delay,
             },
             extra_delay: 0,
+            detail_panel_rect: None,
+            grid_vote_page_indices: &[],
             probe_last_cell_per_page: false,
             detect_grid_duplicates: true,
         };
@@ -671,7 +673,7 @@ impl GoodWeaponScanner {
                 if item_tx
                     .send(WorkItem {
                         index: worker_idx,
-                        image: item.image,
+                        frame: item.frame,
                         metadata: item.metadata,
                         grid_annotation: item.grid_annotation,
                     })
@@ -691,19 +693,19 @@ impl GoodWeaponScanner {
                 voter.reset_page();
                 ScanAction::Continue
             },
-            GridEvent::Item { idx, image, .. } => {
+            GridEvent::Item { idx, frame, .. } => {
                 if worker_handle.stop_requested() {
                     return ScanAction::Stop;
                 }
                 if let Some(pf) = progress_fn {
                     pf(idx + 1, total, "", "");
                 }
-                if pixel_utils::weapon_below_min_rarity(&image, &scaler, self.config.min_rarity) {
-                    let ready = voter.early_stop_flush(&image, idx, &scaler);
+                if pixel_utils::weapon_below_min_rarity(&frame.image, &scaler, self.config.min_rarity) {
+                    let ready = voter.early_stop_flush(&frame.image, idx, &scaler);
                     let _ = emit_ready(ready, &item_tx);
                     return ScanAction::Stop;
                 }
-                let ready = voter.record(idx, image, (), &scaler);
+                let ready = voter.record(idx, frame, (), &scaler);
                 if emit_ready(ready, &item_tx).is_err() {
                     return ScanAction::Stop;
                 }

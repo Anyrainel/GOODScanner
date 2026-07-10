@@ -43,6 +43,7 @@ use std::sync::Arc;
 
 use image::RgbImage;
 
+use super::capture_frame::CaptureFrame;
 use super::coord_scaler::CoordScaler;
 use super::grid_icon_detector::{
     GridCellAnnotation, GridIconResult, GridMode, GridPageDetection, ITEMS_PER_PAGE,
@@ -54,7 +55,7 @@ pub type GridAnnotation = Arc<(Vec<GridCellAnnotation>, Vec<(usize, bool, bool)>
 /// An item that is ready to be emitted by the caller (voting has settled).
 pub struct ReadyItem<T> {
     pub idx: usize,
-    pub image: RgbImage,
+    pub frame: CaptureFrame,
     pub metadata: Option<GridIconResult>,
     /// Grid overlay annotation data for the page (shared across items on the same page).
     pub grid_annotation: Option<GridAnnotation>,
@@ -65,7 +66,7 @@ pub struct ReadyItem<T> {
 struct PageState<T> {
     detection: GridPageDetection,
     passes_done: u32,
-    deferred: Vec<(usize, RgbImage, T)>,
+    deferred: Vec<(usize, CaptureFrame, T)>,
 }
 
 /// State machine that ingests items page-by-page and returns them in voting
@@ -93,14 +94,45 @@ impl<T> PagedGridVoter<T> {
         self.state = None;
     }
 
-    /// Record an item captured on the current page. Returns zero, one, or
+    pub fn needs_pass3_tiebreak(&self) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|s| s.passes_done == 2 && !s.deferred.is_empty())
+    }
+
+    pub fn last_deferred_idx(&self) -> Option<usize> {
+        self.state
+            .as_ref()
+            .and_then(|s| s.deferred.last().map(|d| d.0))
+    }
+
+    /// Run the 3rd grid detection pass using a full-window capture.
+    /// Call before [`Self::early_stop_flush`] or [`Self::final_flush`] when
+    /// [`Self::needs_pass3_tiebreak`] is true and the current item is panel-only.
+    pub fn run_pass3_tiebreak(
+        &mut self,
+        tiebreak_image: &RgbImage,
+        trigger_idx: usize,
+        scaler: &CoordScaler,
+    ) {
+        if let Some(state) = self.state.as_mut() {
+            if state.passes_done == 2 {
+                state
+                    .detection
+                    .detect_pass(tiebreak_image, scaler, trigger_idx);
+                state.passes_done = 3;
+            }
+        }
+    }
+
+    /// Record an item captured on the current page.
     /// many items that are now ready for emission. The returned items may
     /// include the one just recorded and/or previously-deferred items that
     /// became ready on this call.
     pub fn record(
         &mut self,
         idx: usize,
-        image: RgbImage,
+        frame: CaptureFrame,
         payload: T,
         scaler: &CoordScaler,
     ) -> Vec<ReadyItem<T>> {
@@ -122,21 +154,21 @@ impl<T> PagedGridVoter<T> {
 
         // Run detection pass at scheduled page-relative indices.
         if page_rel == 0 && state.passes_done == 0 {
-            state.detection.detect_pass(&image, scaler, idx);
+            state.detection.detect_pass(&frame.image, scaler, idx);
             state.passes_done = 1;
         } else if page_rel == 13 && state.passes_done == 1 {
-            state.detection.detect_pass(&image, scaler, idx);
+            state.detection.detect_pass(&frame.image, scaler, idx);
             state.passes_done = 2;
         } else if page_rel == 26 && state.passes_done == 2 {
-            state.detection.detect_pass(&image, scaler, idx);
+            state.detection.detect_pass(&frame.image, scaler, idx);
             state.passes_done = 3;
             // Flush deferred items now that we have 3 passes.
             let ann = state.detection.annotation_snapshot().map(Arc::new);
-            for (d_idx, d_img, d_payload) in state.deferred.drain(..) {
+            for (d_idx, d_frame, d_payload) in state.deferred.drain(..) {
                 let gi = state.detection.get(d_idx);
                 ready.push(ReadyItem {
                     idx: d_idx,
-                    image: d_img,
+                    frame: d_frame,
                     metadata: gi,
                     grid_annotation: ann.clone(),
                     payload: d_payload,
@@ -147,14 +179,14 @@ impl<T> PagedGridVoter<T> {
         // Decide whether to defer or emit the current item immediately.
         if state.passes_done == 2 && page_rel >= 13 {
             // Exactly 2 passes → defer until pass 3.
-            state.deferred.push((idx, image, payload));
+            state.deferred.push((idx, frame, payload));
         } else {
             // Either 1 pass (items 0–12) or 3 passes (items 26+).
             let gi = state.detection.get(idx);
             let ann = state.detection.annotation_snapshot().map(Arc::new);
             ready.push(ReadyItem {
                 idx,
-                image,
+                frame,
                 metadata: gi,
                 grid_annotation: ann,
                 payload,
@@ -188,11 +220,11 @@ impl<T> PagedGridVoter<T> {
         }
         let ann = state.detection.annotation_snapshot().map(Arc::new);
         let mut ready = Vec::with_capacity(state.deferred.len());
-        for (d_idx, d_img, d_payload) in state.deferred.drain(..) {
+        for (d_idx, d_frame, d_payload) in state.deferred.drain(..) {
             let gi = state.detection.get(d_idx);
             ready.push(ReadyItem {
                 idx: d_idx,
-                image: d_img,
+                frame: d_frame,
                 metadata: gi,
                 grid_annotation: ann.clone(),
                 payload: d_payload,
@@ -204,28 +236,32 @@ impl<T> PagedGridVoter<T> {
     /// Final flush at end-of-scan. If the current page never reached the
     /// 3rd pass, tie-break by running pass 3 on the last deferred item's
     /// own image, then drain everything.
+    ///
+    /// The tie-break image must be a full-window capture when deferred items
+    /// exist — call [`Self::needs_pass3_tiebreak`] and capture full window
+    /// before invoking this when the trigger frame is panel-only.
     pub fn final_flush(&mut self, scaler: &CoordScaler) -> Vec<ReadyItem<T>> {
         let state = match self.state.as_mut() {
             Some(s) => s,
             None => return Vec::new(),
         };
         if state.passes_done == 2 && !state.deferred.is_empty() {
-            // Clone the last deferred image so we can pass it to detect_pass
-            // without holding a borrow on state.deferred.
-            let (last_idx, last_img) = {
+            let (last_idx, last_frame) = {
                 let last = state.deferred.last().unwrap();
                 (last.0, last.1.clone())
             };
-            state.detection.detect_pass(&last_img, scaler, last_idx);
+            state
+                .detection
+                .detect_pass(&last_frame.image, scaler, last_idx);
             state.passes_done = 3;
         }
         let ann = state.detection.annotation_snapshot().map(Arc::new);
         let mut ready = Vec::with_capacity(state.deferred.len());
-        for (d_idx, d_img, d_payload) in state.deferred.drain(..) {
+        for (d_idx, d_frame, d_payload) in state.deferred.drain(..) {
             let gi = state.detection.get(d_idx);
             ready.push(ReadyItem {
                 idx: d_idx,
-                image: d_img,
+                frame: d_frame,
                 metadata: gi,
                 grid_annotation: ann.clone(),
                 payload: d_payload,

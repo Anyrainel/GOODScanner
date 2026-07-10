@@ -1,6 +1,7 @@
 use image::RgbImage;
 use yas::log_debug;
 
+use super::capture_frame::CaptureFrame;
 use super::coord_scaler::CoordScaler;
 
 /// Read RGB values at a base-coord position. Returns [0,0,0] if out of bounds.
@@ -260,79 +261,61 @@ pub fn detect_weapon_rarity(image: &RgbImage, scaler: &CoordScaler) -> i32 {
     rarity
 }
 
-/// Detect artifact rarity from star pixels.
-///
-/// Scans the star row at y=STAR_Y to count star-yellow pixels in the expected region.
-/// Uses boundary x-positions to determine rarity: 5, 4, or 3.
-///
-/// Port from GOODScanner/lib/artifact_scanner.js rarity detection
-pub fn detect_artifact_rarity(image: &RgbImage, scaler: &CoordScaler) -> i32 {
+/// Detect artifact rarity from star pixels (window coords via [`CaptureFrame`]).
+pub fn detect_artifact_rarity(frame: &CaptureFrame, scaler: &CoordScaler) -> i32 {
     use super::constants::STAR_Y;
 
-    // Scan a horizontal band around STAR_Y to find yellow star pixels.
-    // Stars are in the range x ≈ [1350..1500] at base 1920x1080.
-    // We probe multiple y-offsets to be robust against slight vertical shifts.
     let y_offsets: [f64; 3] = [-2.0, 0.0, 2.0];
-
-    // Find the rightmost x (in base coords) that has a star-yellow pixel
     let mut rightmost_star_x: f64 = 0.0;
     let mut star_pixel_count = 0;
 
     for &dy in &y_offsets {
         let by = STAR_Y + dy;
-        // Scan from x=1340 to x=1500 (covers 3-star through 5-star range)
         for bx_int in (1340..=1500).step_by(2) {
             let bx = bx_int as f64;
-            let x = scaler.x(bx) as u32;
-            let y = scaler.y(by) as u32;
-            if x < image.width() && y < image.height() {
-                let px = image.get_pixel(x, y);
-                if px[0] > 150 && px[1] > 100 && px[2] < 100 {
-                    star_pixel_count += 1;
-                    if bx > rightmost_star_x {
-                        rightmost_star_x = bx;
-                    }
+            let rgb = frame.pixel(scaler, bx, by);
+            if rgb[0] > 150 && rgb[1] > 100 && rgb[2] < 100 {
+                star_pixel_count += 1;
+                if bx > rightmost_star_x {
+                    rightmost_star_x = bx;
                 }
             }
         }
     }
 
-    // Determine rarity from rightmost star position
-    // 5-star: rightmost star extends past x≈1470
-    // 4-star: rightmost star around x≈1440-1470
-    // 3-star: any star pixels found
     let rarity = if rightmost_star_x > 1470.0 {
         5
     } else if rightmost_star_x > 1430.0 {
         4
     } else if star_pixel_count > 0 {
         3
+    } else if is_star_yellow_frame(frame, scaler, 1485.0, STAR_Y) {
+        5
+    } else if is_star_yellow_frame(frame, scaler, 1450.0, STAR_Y) {
+        4
     } else {
-        // No star pixels found at all — fall back to original single-pixel check
-        if is_star_yellow(image, scaler, 1485.0, STAR_Y) {
-            5
-        } else if is_star_yellow(image, scaler, 1450.0, STAR_Y) {
-            4
-        } else {
-            3
-        }
+        3
     };
 
-    // Annotate: pick the representative star position for the detected rarity
     let star_pos = match rarity {
         5 => (1485.0, STAR_Y),
         4 => (1450.0, STAR_Y),
         _ => (1416.0, STAR_Y),
     };
-    let rgb = read_pixel_rgb(image, scaler, star_pos.0, star_pos.1);
+    let rgb = frame.pixel(scaler, star_pos.0, star_pos.1);
     super::annotator::record_pixel("rarity", star_pos, rgb, &format!("{}*", rarity));
 
     rarity
 }
 
+fn is_star_yellow_frame(frame: &CaptureFrame, scaler: &CoordScaler, base_x: f64, base_y: f64) -> bool {
+    let rgb = frame.pixel(scaler, base_x, base_y);
+    rgb[0] > 150 && rgb[1] > 100 && rgb[2] < 100
+}
+
 /// Check if an artifact's detected rarity is below the minimum threshold.
-pub fn artifact_below_min_rarity(image: &RgbImage, scaler: &CoordScaler, min_rarity: i32) -> bool {
-    let rarity = detect_artifact_rarity(image, scaler);
+pub fn artifact_below_min_rarity(frame: &CaptureFrame, scaler: &CoordScaler, min_rarity: i32) -> bool {
+    let rarity = detect_artifact_rarity(frame, scaler);
     if rarity < min_rarity {
         log_debug!(
             "[rarity] {}星 < 最低{}星，应停止",
@@ -344,6 +327,20 @@ pub fn artifact_below_min_rarity(image: &RgbImage, scaler: &CoordScaler, min_rar
     } else {
         false
     }
+}
+
+/// Legacy full-window rarity detection (tests and callers with raw images).
+pub fn detect_artifact_rarity_image(image: &RgbImage, scaler: &CoordScaler) -> i32 {
+    detect_artifact_rarity(&CaptureFrame::full(image.clone()), scaler)
+}
+
+/// Check if an artifact's detected rarity is below the minimum threshold.
+pub fn artifact_below_min_rarity_image(
+    image: &RgbImage,
+    scaler: &CoordScaler,
+    min_rarity: i32,
+) -> bool {
+    artifact_below_min_rarity(&CaptureFrame::full(image.clone()), scaler, min_rarity)
 }
 
 /// Check if a weapon's detected rarity is below the minimum threshold.
@@ -698,7 +695,7 @@ mod tests {
         let mut image = make_1080p_image();
         paint_rarity_stars(&mut image, 5);
         let scaler = make_1080p_scaler();
-        assert_eq!(detect_artifact_rarity(&image, &scaler), 5);
+        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 5);
     }
 
     #[test]
@@ -706,7 +703,7 @@ mod tests {
         let mut image = make_1080p_image();
         paint_rarity_stars(&mut image, 4);
         let scaler = make_1080p_scaler();
-        assert_eq!(detect_artifact_rarity(&image, &scaler), 4);
+        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 4);
     }
 
     #[test]
@@ -714,7 +711,7 @@ mod tests {
         let mut image = make_1080p_image();
         paint_rarity_stars(&mut image, 3);
         let scaler = make_1080p_scaler();
-        assert_eq!(detect_artifact_rarity(&image, &scaler), 3);
+        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 3);
     }
 
     #[test]
@@ -722,7 +719,7 @@ mod tests {
         let image = make_1080p_image();
         let scaler = make_1080p_scaler();
         // Blank image has no star pixels; fallback single-pixel checks also fail → returns 3
-        assert_eq!(detect_artifact_rarity(&image, &scaler), 3);
+        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 3);
     }
 
     #[test]

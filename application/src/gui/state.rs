@@ -192,12 +192,41 @@ pub fn save_config_debounced(
     }
     if let Some(since) = *config_dirty_since {
         if since.elapsed() >= std::time::Duration::from_millis(300) {
-            if let Err(e) = genshin_scanner::cli::save_config(user_config) {
-                yas::log_warn!("配置自动保存失败: {}", "Config auto-save failed: {}", e);
-            }
-            *config_dirty_since = None;
+            write_config_snapshot(user_config, config_snapshot, config_dirty_since);
         }
     }
+}
+
+/// Flush a pending debounced save, if any.
+pub fn flush_pending_config_save(
+    user_config: &GoodUserConfig,
+    config_snapshot: &mut String,
+    config_dirty_since: &mut Option<Instant>,
+) {
+    if config_dirty_since.is_some() {
+        write_config_snapshot(user_config, config_snapshot, config_dirty_since);
+    }
+}
+
+/// Sync capture-tab fields and write config immediately (before exit).
+pub fn persist_user_config_now(
+    user_config: &GoodUserConfig,
+    config_snapshot: &mut String,
+    config_dirty_since: &mut Option<Instant>,
+) {
+    write_config_snapshot(user_config, config_snapshot, config_dirty_since);
+}
+
+fn write_config_snapshot(
+    user_config: &GoodUserConfig,
+    config_snapshot: &mut String,
+    config_dirty_since: &mut Option<Instant>,
+) {
+    if let Err(e) = genshin_scanner::cli::save_config(user_config) {
+        yas::log_warn!("配置自动保存失败: {}", "Config auto-save failed: {}", e);
+    }
+    *config_snapshot = serde_json::to_string(user_config).unwrap_or_default();
+    *config_dirty_since = None;
 }
 
 /// Shared state between GUI thread and background workers.
@@ -307,6 +336,7 @@ impl AppState {
 
     /// Sync GUI fields back into user_config so they get serialized on save.
     fn sync_to_config(&mut self) {
+        self.user_config.lang = self.lang.to_str().to_string();
         self.user_config.scan_characters = self.scan_characters;
         self.user_config.scan_weapons = self.scan_weapons;
         self.user_config.scan_artifacts = self.scan_artifacts;
@@ -336,6 +366,16 @@ impl AppState {
     pub fn auto_save_tick(&mut self) {
         self.sync_to_config();
         save_config_debounced(
+            &self.user_config,
+            &mut self.config_snapshot,
+            &mut self.config_dirty_since,
+        );
+    }
+
+    /// Sync all GUI fields and write config immediately (before scan/server start or exit).
+    pub fn persist_config_now(&mut self) {
+        self.sync_to_config();
+        write_config_snapshot(
             &self.user_config,
             &mut self.config_snapshot,
             &mut self.config_dirty_since,

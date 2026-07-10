@@ -9,7 +9,9 @@
 //!   Uses `R16G16B16A16Float` (scRGB linear light, 1.0 = SDR reference white).
 //!   A per-pixel tone curve converts FP16 values to 8-bit:
 //!
-//!     `out = clamp(v / white_point, 0, 1) ^ (1/2.2) × 255`
+//! ```text
+//! out = clamp(v / white_point, 0, 1) ^ (1/2.2) × 255
+//! ```
 //!
 //!   `white_point` is the scRGB luminance that maps to pure white (255).
 //!   Values above `white_point` clip to 255; values below are scaled

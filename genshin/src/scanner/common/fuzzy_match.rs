@@ -178,15 +178,48 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
     // Levenshtein distance fallback — character-level comparison for CJK
     let cleaned_chars: Vec<char> = cleaned.chars().collect();
     let mut min_dist = usize::MAX;
+    let mut candidates: Vec<(String, String)> = Vec::new();
     for (cn, val) in map.iter() {
         let cn_chars: Vec<char> = cn.chars().collect();
         let dist = edit_distance_chars(&cleaned_chars, &cn_chars);
         // 30% threshold, min 1 for short strings
         let threshold = std::cmp::max(1, cn_chars.len() * 3 / 10);
-        if dist < min_dist && dist <= threshold {
-            min_dist = dist;
-            best_match = Some((cn.clone(), val.clone()));
+        if dist <= threshold {
+            if dist < min_dist {
+                min_dist = dist;
+                candidates.clear();
+                candidates.push((cn.clone(), val.clone()));
+            } else if dist == min_dist {
+                candidates.push((cn.clone(), val.clone()));
+            }
         }
+    }
+
+    if candidates.len() > 1 {
+        // Tie-breaker: pick the candidate with the highest visual similarity
+        let mut best_candidate = None;
+        let mut max_score = -1;
+        for (cn, val) in candidates {
+            let cn_chars: Vec<char> = cn.chars().collect();
+            let mut score = 0;
+            // Compare character by character for substitutions
+            if cn_chars.len() == cleaned_chars.len() {
+                for i in 0..cn_chars.len() {
+                    if cn_chars[i] != cleaned_chars[i] {
+                        if are_visually_similar(cn_chars[i], cleaned_chars[i]) {
+                            score += 1;
+                        }
+                    }
+                }
+            }
+            if score > max_score {
+                max_score = score;
+                best_candidate = Some((cn, val));
+            }
+        }
+        best_match = best_candidate;
+    } else if candidates.len() == 1 {
+        best_match = Some(candidates[0].clone());
     }
 
     if let Some(ref m) = best_match {
@@ -301,10 +334,51 @@ fn edit_distance_chars(a: &[char], b: &[char]) -> usize {
     }
     dp[m][n]
 }
+fn are_visually_similar(c1: char, c2: char) -> bool {
+    const VISUAL_GROUPS: &[&[char]] = &[
+        &['闲', '闭', '问', '闪', '间', '门', '阅'],
+        &['重', '里', '董', '量', '熏', '画', '童'],
+        &['菈', '拉'],
+        &['乌', '鸟'],
+        &['薙', '稚', '雉'],
+        &['磲', '碟'],
+        &['兹', '茲'],
+        &['云', '昙'],
+    ];
+    for group in VISUAL_GROUPS {
+        if group.contains(&c1) && group.contains(&c2) {
+            return true;
+        }
+    }
+    false
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_levenshtein_tie_breaking() {
+        let mut map = HashMap::new();
+        map.insert("重云".to_string(), "Chongyun".to_string());
+        map.insert("闲云".to_string(), "Xianyun".to_string());
+
+        // "里云" is 1 edit distance from both "重云" and "闲云".
+        // But "里" is in the same visual group as "重".
+        // So it should match "重云".
+        assert_eq!(
+            fuzzy_match_map("里云", &map),
+            Some("Chongyun".to_string())
+        );
+
+        // "问云" is 1 edit distance from both "重云" and "闲云".
+        // But "问" is in the same visual group as "闲".
+        // So it should match "闲云".
+        assert_eq!(
+            fuzzy_match_map("问云", &map),
+            Some("Xianyun".to_string())
+        );
+    }
 
     #[test]
     fn test_exact_match() {

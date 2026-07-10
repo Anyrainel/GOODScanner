@@ -100,7 +100,11 @@ fn raw_rmb_pressed() -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_RBUTTON};
     unsafe {
         let state = GetAsyncKeyState(VK_RBUTTON as i32);
-        state != 0 && (state & 1) > 0
+        let down = (state as u16 & 0x8000) != 0;
+        let edge = (state & 1) != 0;
+        // Accept either a fresh click (edge) or a held button so a press is
+        // not missed when it falls between infrequent poll points.
+        down || edge
     }
 }
 

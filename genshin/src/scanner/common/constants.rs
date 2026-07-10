@@ -44,6 +44,13 @@ pub const DEFAULT_ARTIFACT_PANEL_TIMEOUT: u64 = 200;
 /// Artifact: extra delay (ms) after panel load detection, before capture.
 pub const DEFAULT_ARTIFACT_EXTRA_DELAY: u64 = 0;
 
+/// Right-side artifact detail panel for partial capture (base 1920×1080).
+/// Covers all OCR regions and pixel checks (stars, lock, elixir) on the panel.
+pub const ARTIFACT_DETAIL_PANEL_RECT: (f64, f64, f64, f64) = (1310.0, 110.0, 480.0, 860.0);
+
+/// Page-relative indices that need a full-window capture for 3-pass grid voting.
+pub const GRID_VOTING_PAGE_INDICES: [usize; 3] = [0, 13, 26];
+
 // ================================================================
 // Character scanner coordinates (at 1920x1080 base resolution)
 // From GOODScanner/lib/character_scanner.js

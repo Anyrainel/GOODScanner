@@ -8,6 +8,7 @@ use yas::{log_debug, log_info, log_warn};
 use super::ui_actions::{d_action, d_cell};
 use crate::scanner::artifact::GoodArtifactScanner;
 use crate::scanner::common::annotator;
+use crate::scanner::common::capture_frame::CaptureFrame;
 use crate::scanner::common::backpack_scanner::{
     self, BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction,
 };
@@ -63,7 +64,7 @@ fn spawn_identify_artifact_task(
     idx: usize,
     row: usize,
     col: usize,
-    image: image::RgbImage,
+    frame: CaptureFrame,
     grid_icons: Option<GridIconResult>,
     grid_annotation: Option<GridAnnotation>,
     tx: crossbeam_channel::Sender<OcrResult>,
@@ -74,7 +75,7 @@ fn spawn_identify_artifact_task(
 ) {
     rayon::spawn(move || {
         annotator::begin_item("artifacts", idx, &scaler);
-        annotator::add_image("panel", &image);
+        annotator::add_image("panel", &frame.image);
         if let Some(ref ann) = grid_annotation {
             annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
         }
@@ -84,7 +85,7 @@ fn spawn_identify_artifact_task(
         let artifact = match GoodArtifactScanner::identify_artifact_at(
             &ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
             &sub_ocr as &dyn yas::ocr::ImageToText<image::RgbImage>,
-            &image,
+            &frame,
             &scaler,
             &mappings,
             idx,
@@ -333,6 +334,8 @@ impl LockManager {
                 initial_wait_ms: initial_wait,
             },
             extra_delay: capture_delay,
+            detail_panel_rect: None,
+            grid_vote_page_indices: &[],
             probe_last_cell_per_page: max_target_level >= 0,
             detect_grid_duplicates: false,
         };
@@ -358,9 +361,10 @@ impl LockManager {
                         return ScanAction::Continue;
                     }
                     let ocr_guard = ocr_pool_cb.get();
+                    let probe_frame = CaptureFrame::full(last_cell_image);
                     let level = GoodArtifactScanner::scan_level_only(
                         &ocr_guard as &dyn yas::ocr::ImageToText<image::RgbImage>,
-                        &last_cell_image,
+                        &probe_frame,
                         &scaler_cb,
                     );
                     if level > max_target_level {
@@ -391,7 +395,7 @@ impl LockManager {
                 }
 
                 // ---------------- Per-item voting + OCR dispatch ----------------
-                GridEvent::Item { idx, row, col, image } => {
+                GridEvent::Item { idx, row, col, frame } => {
                     // Tick progress per item as we walk through the backpack.
                     // Reports (idx+1, backpack_total) so clients see a real
                     // moving number rather than 0/N until the very end.
@@ -405,7 +409,7 @@ impl LockManager {
                         for item in ready {
                             let d_idx = item.idx;
                             let (d_row, d_col) = item.payload;
-                            let d_img = item.image;
+                            let d_frame = item.frame;
                             let gi: Option<GridIconResult> = item.metadata;
                             let ann = item.grid_annotation;
                             let tx = result_tx.clone();
@@ -414,7 +418,7 @@ impl LockManager {
                             let sc = scaler_arc.clone();
                             let mp = mappings_cb.clone();
                             spawn_identify_artifact_task(
-                                d_idx, d_row, d_col, d_img, gi, ann, tx, pool, sub_pool, sc, mp,
+                                d_idx, d_row, d_col, d_frame, gi, ann, tx, pool, sub_pool, sc, mp,
                             );
                             *dispatched += 1;
                         }
@@ -423,10 +427,10 @@ impl LockManager {
                     // Rarity early-stop: low-rarity lv0 artifact → stop after
                     // current page finishes (PageCompleted will drain and
                     // process toggles for whatever was dispatched so far).
-                    if pixel_utils::artifact_below_min_rarity(&image, &scaler_cb, 4)
+                    if pixel_utils::artifact_below_min_rarity(&frame, &scaler_cb, 4)
                         && {
                             let guard = ocr_pool_cb.get();
-                            GoodArtifactScanner::scan_level_only(&guard, &image, &scaler_cb) <= 0
+                            GoodArtifactScanner::scan_level_only(&guard, &frame, &scaler_cb) <= 0
                         }
                     {
                         log_debug!(
@@ -435,12 +439,12 @@ impl LockManager {
                         );
                         rarity_stopped = true;
                         stop_requested = true;
-                        let ready = voter.early_stop_flush(&image, idx, &scaler_cb);
+                        let ready = voter.early_stop_flush(&frame.image, idx, &scaler_cb);
                         dispatch(ready, &mut dispatched);
                         return ScanAction::Stop;
                     }
 
-                    let ready = voter.record(idx, image, (row, col), &scaler_cb);
+                    let ready = voter.record(idx, frame, (row, col), &scaler_cb);
                     dispatch(ready, &mut dispatched);
 
                     ScanAction::Continue
@@ -454,7 +458,7 @@ impl LockManager {
                     for item in leftover {
                         let d_idx = item.idx;
                         let (d_row, d_col) = item.payload;
-                        let d_img = item.image;
+                        let d_frame = item.frame;
                         let gi: Option<GridIconResult> = item.metadata;
                         let ann = item.grid_annotation;
                         let tx = result_tx.clone();
@@ -463,7 +467,7 @@ impl LockManager {
                         let sc = scaler_arc.clone();
                         let mp = mappings_cb.clone();
                         spawn_identify_artifact_task(
-                            d_idx, d_row, d_col, d_img, gi, ann, tx, pool, sub_pool, sc, mp,
+                            d_idx, d_row, d_col, d_frame, gi, ann, tx, pool, sub_pool, sc, mp,
                         );
                         dispatched += 1;
                     }

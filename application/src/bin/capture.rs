@@ -55,8 +55,11 @@ fn main() {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon_64.png"))
         .expect("Failed to load window icon");
 
+    let window_title = genshin_scanner::updater::window_title("GOOD Capture");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_title(window_title)
             .with_inner_size([620.0, 560.0])
             .with_min_inner_size([500.0, 400.0])
             .with_icon(Arc::new(icon)),
@@ -178,6 +181,16 @@ impl eframe::App for CaptureApp {
         if self.capture_tab.is_busy() || update_busy || config_save_pending {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.user_config.lang = self.lang.to_str().to_string();
+        self.capture_tab.sync_to_config(&mut self.user_config);
+        state::persist_user_config_now(
+            &self.user_config,
+            &mut self.config_snapshot,
+            &mut self.config_dirty_since,
+        );
     }
 }
 

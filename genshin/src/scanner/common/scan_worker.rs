@@ -2,16 +2,16 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use image::RgbImage;
 use indicatif::{ProgressBar, ProgressStyle};
 use yas::log_error;
 
+use super::capture_frame::CaptureFrame;
 use super::grid_voter::GridAnnotation;
 
 /// A work item sent from the capture thread to the worker pool.
 pub struct WorkItem<M: Send> {
     pub index: usize,
-    pub image: RgbImage,
+    pub frame: CaptureFrame,
     pub metadata: M,
     /// Grid overlay annotation data for the page (for debug image dumps).
     pub grid_annotation: Option<GridAnnotation>,

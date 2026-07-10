@@ -194,6 +194,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_name_handles_alternate_separators() {
+        let scanner = scanner_with_names(&[
+            ("\u{95F2}\u{4E91}", "Xianyun", "anemo"), // 闲云
+            ("\u{91CD}\u{4E91}", "Chongyun", "cryo"), // 重云
+        ]);
+
+        // Alternative separator '1'
+        let (key, element, entity) = scanner.parse_name_and_element("风1重云");
+        assert_eq!(key.as_deref(), Some("Xianyun"));
+        assert_eq!(element.as_deref(), Some("风"));
+        assert_eq!(entity.as_deref(), Some("闲云"));
+
+        // Alternative separator '|'
+        let (key, element, entity) = scanner.parse_name_and_element("风|重云");
+        assert_eq!(key.as_deref(), Some("Xianyun"));
+        assert_eq!(element.as_deref(), Some("风"));
+        assert_eq!(entity.as_deref(), Some("闲云"));
+    }
+
+    #[test]
+    fn parse_name_handles_no_separator() {
+        let scanner = scanner_with_names(&[
+            ("\u{95F2}\u{4E91}", "Xianyun", "anemo"), // 闲云
+            ("\u{91CD}\u{4E91}", "Chongyun", "cryo"), // 重云
+        ]);
+
+        // No separator at all: "风重云"
+        let (key, element, entity) = scanner.parse_name_and_element("风重云");
+        assert_eq!(key.as_deref(), Some("Xianyun"));
+        assert_eq!(element.as_deref(), Some("风"));
+        assert_eq!(entity.as_deref(), Some("闲云"));
+
+        // No separator at all: "冰重云"
+        let (key, element, entity) = scanner.parse_name_and_element("冰重云");
+        assert_eq!(key.as_deref(), Some("Chongyun"));
+        assert_eq!(element.as_deref(), Some("冰"));
+        assert_eq!(entity.as_deref(), Some("重云"));
+    }
+
+    #[test]
     fn parse_name_uses_full_scope_when_element_is_unrecognized() {
         let scanner = scanner_with_names(&[
             ("\u{8D5B}\u{8BFA}", "Cyno", "electro"), // 赛诺
@@ -318,34 +358,91 @@ impl GoodCharacterScanner {
             return (None, None, None);
         }
 
-        let slash_char = if text.contains('/') {
-            Some('/')
-        } else if text.contains('\u{FF0F}') {
-            Some('\u{FF0F}')
-        } else {
-            None
-        };
-        if let Some(slash) = slash_char {
-            let idx = text.find(slash).unwrap();
-            let element = text[..idx].trim().to_string();
-            let raw_name: String = text[idx + slash.len_utf8()..]
-                .chars()
-                .filter(|c| {
-                    matches!(*c, '\u{4E00}'..='\u{9FFF}' | '\u{300C}' | '\u{300D}' | 'a'..='z' | 'A'..='Z' | '0'..='9')
-                })
-                .collect();
-            let scoped_map = self.scoped_character_name_map_for_element(&element);
+        // Element characters: 火, 水, 雷, 冰, 风, 岩, 草
+        let elements = ['火', '水', '雷', '冰', '风', '岩', '草'];
+
+        let mut element = None;
+        let mut raw_name = String::new();
+        let mut split_found = false;
+
+        // 1. Try to split by common separators if preceded by a known element character
+        let separators = ['/', '\u{FF0F}', '\\', '|', '1', 'l', 'I', ':', '·', ' '];
+        for sep in separators {
+            if let Some(idx) = text.find(sep) {
+                let prefix = text[..idx].trim();
+                for &el in &elements {
+                    if prefix.contains(el) {
+                        element = Some(el.to_string());
+                        raw_name = text[idx + sep.len_utf8()..].to_string();
+                        split_found = true;
+                        break;
+                    }
+                }
+                if split_found {
+                    break;
+                }
+            }
+        }
+
+        // 2. If no separator split was found, check if it starts with an element character
+        if !split_found {
+            let chars: Vec<char> = text.chars().collect();
+            for i in 0..std::cmp::min(2, chars.len()) {
+                if elements.contains(&chars[i]) {
+                    element = Some(chars[i].to_string());
+                    raw_name = chars[i + 1..].iter().collect();
+                    split_found = true;
+                    break;
+                }
+            }
+        }
+
+        // 3. Fallback to standard slash-only check if none of the above worked
+        if !split_found {
+            let slash_char = if text.contains('/') {
+                Some('/')
+            } else if text.contains('\u{FF0F}') {
+                Some('\u{FF0F}')
+            } else {
+                None
+            };
+            if let Some(slash) = slash_char {
+                let idx = text.find(slash).unwrap();
+                element = Some(text[..idx].trim().to_string());
+                raw_name = text[idx + slash.len_utf8()..].to_string();
+            } else {
+                raw_name = text.to_string();
+            }
+        }
+
+        // Clean name (keep CJK, alphanumeric, and brackets)
+        let cleaned_name: String = raw_name
+            .chars()
+            .filter(|c| {
+                matches!(*c, '\u{4E00}'..='\u{9FFF}' | '\u{300C}' | '\u{300D}' | 'a'..='z' | 'A'..='Z' | '0'..='9')
+            })
+            .collect();
+
+        if let Some(ref el) = element {
+            let scoped_map = self.scoped_character_name_map_for_element(el);
             let search_map = scoped_map
                 .as_ref()
                 .unwrap_or(&self.mappings.character_name_map);
-            let pair = fuzzy_match_map_pair(&raw_name, search_map);
+            let pair = fuzzy_match_map_pair(&cleaned_name, search_map);
             let (entity_name, good_key) = match pair {
                 Some((n, k)) => (Some(n), Some(k)),
-                None => (None, None),
+                None => {
+                    // Fallback to full map if scoped map yielded no match (in case element was misread)
+                    let full_pair = fuzzy_match_map_pair(&cleaned_name, &self.mappings.character_name_map);
+                    match full_pair {
+                        Some((n, k)) => (Some(n), Some(k)),
+                        None => (None, None),
+                    }
+                }
             };
-            (good_key, Some(element), entity_name)
+            (good_key, Some(el.clone()), entity_name)
         } else {
-            let pair = fuzzy_match_map_pair(text, &self.mappings.character_name_map);
+            let pair = fuzzy_match_map_pair(&cleaned_name, &self.mappings.character_name_map);
             let (entity_name, good_key) = match pair {
                 Some((n, k)) => (Some(n), Some(k)),
                 None => (None, None),
@@ -1637,7 +1734,10 @@ impl GoodCharacterScanner {
         // Signal Phase 1 done and collect remaining results
         let _ = work_tx.send(CharacterWork::Done);
         loop {
-            match result_rx.recv() {
+            if ctrl.is_cancelled() {
+                break;
+            }
+            match result_rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 Ok(CharacterResult::Scanned {
                     viewed_index,
                     character,
@@ -1673,7 +1773,8 @@ impl GoodCharacterScanner {
                 },
                 Ok(CharacterResult::PhaseDone) => break,
                 Ok(_) => {},
-                Err(_) => break,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
         }
 

@@ -93,6 +93,11 @@ fn current_version_int() -> Option<u32> {
     Some(major)
 }
 
+/// Window title including version, e.g. `"GOOD Scanner v2026.05.17"`.
+pub fn window_title(product: &str) -> String {
+    format!("{} {}", product, current_version_display())
+}
+
 /// Human-readable current version string.
 pub fn current_version_display() -> String {
     let version = env!("CARGO_PKG_VERSION");

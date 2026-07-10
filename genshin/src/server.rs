@@ -2065,7 +2065,7 @@ mod tests {
                     delay_ms,
                 }))
             };
-            let _ = run_server(port, init, enabled, shutdown_clone, false);
+            let _ = run_server(port, init, enabled, shutdown_clone, false, None);
         });
 
         let client = reqwest::blocking::Client::new();
@@ -2713,7 +2713,7 @@ mod tests {
             let init = move || -> anyhow::Result<Box<dyn ManageExecutor>> {
                 Err(anyhow::anyhow!("Game window not found"))
             };
-            let _ = run_server(port, init, enabled, shutdown_clone, false);
+            let _ = run_server(port, init, enabled, shutdown_clone, false, None);
         });
 
         let client = reqwest::blocking::Client::new();
@@ -3460,6 +3460,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 shutdown_clone,
                 false,
+                None,
             );
         });
 

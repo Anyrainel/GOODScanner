@@ -48,8 +48,11 @@ pub fn run_gui() {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon_64.png"))
         .expect("Failed to load window icon");
 
+    let window_title = genshin_scanner::updater::window_title("GOOD Scanner");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_title(window_title)
             .with_inner_size([720.0, 660.0])
             .with_min_inner_size([600.0, 400.0])
             .with_icon(std::sync::Arc::new(icon)),
@@ -256,6 +259,12 @@ impl eframe::App for GuiApp {
         if any_running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        #[cfg(feature = "capture")]
+        self.capture_tab.sync_to_config(&mut self.state.user_config);
+        self.state.persist_config_now();
     }
 }
 

@@ -42,6 +42,23 @@ impl<T> ScanPhaseResult<T> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skipped_due_to_cancel_marks_requested_phases_incomplete() {
+        assert!(matches!(
+            skipped_due_to_cancel::<GoodCharacter>(true),
+            ScanPhaseResult::Incomplete
+        ));
+        assert!(matches!(
+            skipped_due_to_cancel::<GoodCharacter>(false),
+            ScanPhaseResult::NotAttempted
+        ));
+    }
+}
+
 /// Result of a scan execution. Each category reports Complete/Incomplete/NotAttempted.
 pub struct ScanRunResult {
     pub characters: ScanPhaseResult<GoodCharacter>,
@@ -67,6 +84,18 @@ pub struct ScanRunOptions {
     /// cancelled jobs incomplete so clients do not consume stale cache entries.
     pub accept_cancelled_success: bool,
     pub failure_policy: ScanFailurePolicy,
+}
+
+fn scan_cancelled(cancel_token: &yas::cancel::CancelToken, ctrl: &GenshinGameController) -> bool {
+    cancel_token.is_cancelled() || ctrl.is_cancelled()
+}
+
+fn skipped_due_to_cancel<T>(requested: bool) -> ScanPhaseResult<T> {
+    if requested {
+        ScanPhaseResult::Incomplete
+    } else {
+        ScanPhaseResult::NotAttempted
+    }
 }
 
 /// Execute the requested scan phases with shared scanner setup and phase semantics.
@@ -113,7 +142,7 @@ pub fn run_scan_phases(
     let mut artifacts = ScanPhaseResult::NotAttempted;
 
     if config.scan_characters {
-        characters = if cancel_token.is_cancelled() {
+        characters = if scan_cancelled(&cancel_token, ctrl) {
             ScanPhaseResult::Incomplete
         } else {
             report("扫描角色 / Scanning characters...");
@@ -124,14 +153,22 @@ pub fn run_scan_phases(
                 Err(e) => Err(e),
             };
             let phase = phase_result(scan_result, &cancel_token, options, "character")?;
-            if matches!(phase, ScanPhaseResult::Complete(_)) && !cancel_token.is_cancelled() {
+            if matches!(phase, ScanPhaseResult::Complete(_)) && !scan_cancelled(&cancel_token, ctrl) {
                 ctrl.return_to_main_ui(4);
             }
             phase
         };
     }
 
-    if config.scan_weapons && !cancel_token.is_cancelled() {
+    if scan_cancelled(&cancel_token, ctrl) {
+        return Ok(ScanRunResult {
+            characters,
+            weapons: skipped_due_to_cancel(config.scan_weapons),
+            artifacts: skipped_due_to_cancel(config.scan_artifacts),
+        });
+    }
+
+    if config.scan_weapons {
         report("扫描武器 / Scanning weapons...");
         log_info!("扫描武器...", "Scanning weapons...");
         let cfg = GoodScannerApplication::make_weapon_config(&scanner_config, user_config);
@@ -142,7 +179,15 @@ pub fn run_scan_phases(
         weapons = phase_result(scan_result, &cancel_token, options, "weapon")?;
     }
 
-    if config.scan_artifacts && !cancel_token.is_cancelled() {
+    if scan_cancelled(&cancel_token, ctrl) {
+        return Ok(ScanRunResult {
+            characters,
+            weapons,
+            artifacts: skipped_due_to_cancel(config.scan_artifacts),
+        });
+    }
+
+    if config.scan_artifacts {
         report("扫描圣遗物 / Scanning artifacts...");
         log_info!("扫描圣遗物...", "Scanning artifacts...");
         let cfg = GoodScannerApplication::make_artifact_config(&scanner_config, user_config);

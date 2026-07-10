@@ -1,5 +1,6 @@
 pub mod annotator;
 pub mod backpack_scanner;
+pub mod capture_frame;
 pub mod constants;
 pub mod coord_scaler;
 pub mod debug_dump;

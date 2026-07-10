@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{bail, Result};
-use image::{GenericImageView, RgbImage};
+use image::RgbImage;
 use regex::Regex;
 use yas::{log_debug, log_error, log_info, log_warn};
 
@@ -15,6 +15,7 @@ use crate::scanner::common::backpack_scanner::{
     ScanAction,
 };
 use crate::scanner::common::constants::*;
+use crate::scanner::common::capture_frame::CaptureFrame;
 use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::equip_parser;
 use crate::scanner::common::fuzzy_match::fuzzy_match_map;
@@ -52,23 +53,14 @@ fn cn_char_count(s: &str) -> usize {
         .count()
 }
 
-/// Crop a sub-region from an image using base-resolution coordinates.
-/// Returns `None` if the resulting region has zero width or height.
+/// Crop a sub-region from a captured frame using window base coordinates.
 fn crop_region(
-    image: &RgbImage,
+    frame: &CaptureFrame,
     rect: (f64, f64, f64, f64),
     y_shift: f64,
     scaler: &CoordScaler,
 ) -> Option<RgbImage> {
-    let (bx, by, bw, bh) = rect;
-    let x = (scaler.x(bx) as u32).min(image.width().saturating_sub(1));
-    let y = (scaler.y(by + y_shift) as u32).min(image.height().saturating_sub(1));
-    let w = (scaler.x(bw) as u32).min(image.width().saturating_sub(x));
-    let h = (scaler.y(bh) as u32).min(image.height().saturating_sub(y));
-    if w == 0 || h == 0 {
-        return None;
-    }
-    Some(image.view(x, y, w, h).to_image())
+    frame.crop(rect, y_shift, scaler)
 }
 
 /// Pick the best OCR candidate from a set (used when solver fails).
@@ -184,11 +176,11 @@ impl GoodArtifactScanner {
     /// OCR a sub-region of a captured game image.
     fn ocr_image_region(
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        frame: &CaptureFrame,
         rect: (f64, f64, f64, f64),
         scaler: &CoordScaler,
     ) -> Result<String> {
-        let sub = match crop_region(image, rect, 0.0, scaler) {
+        let sub = match crop_region(frame, rect, 0.0, scaler) {
             Some(img) => img,
             None => return Ok(String::new()),
         };
@@ -200,12 +192,12 @@ impl GoodArtifactScanner {
     /// Tries grayscale then green-channel extraction for colored text (green set names).
     fn ocr_image_region_grayscale(
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        frame: &CaptureFrame,
         rect: (f64, f64, f64, f64),
         scaler: &CoordScaler,
         mappings: &MappingManager,
     ) -> Result<String> {
-        let sub = match crop_region(image, rect, 0.0, scaler) {
+        let sub = match crop_region(frame, rect, 0.0, scaler) {
             Some(img) => img,
             None => return Ok(String::new()),
         };
@@ -254,12 +246,12 @@ impl GoodArtifactScanner {
     /// average background color to remove stat icons that confuse OCR.
     fn ocr_image_region_shifted_masked(
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        frame: &CaptureFrame,
         rect: (f64, f64, f64, f64),
         y_shift: f64,
         scaler: &CoordScaler,
     ) -> Result<String> {
-        let mut sub = match crop_region(image, rect, y_shift, scaler) {
+        let mut sub = match crop_region(frame, rect, y_shift, scaler) {
             Some(img) => img,
             None => return Ok(String::new()),
         };
@@ -305,7 +297,7 @@ impl GoodArtifactScanner {
     /// Upscales 2x before OCR for better digit recognition on small text.
     fn ocr_substat_number_crop(
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        frame: &CaptureFrame,
         rect: (f64, f64, f64, f64),
         y_shift: f64,
         scaler: &CoordScaler,
@@ -313,7 +305,7 @@ impl GoodArtifactScanner {
     ) -> Result<String> {
         let (bx, by, bw, bh) = rect;
         let num_rect = (bx + bw * left_frac, by, bw * (1.0 - left_frac), bh);
-        let sub = match crop_region(image, num_rect, y_shift, scaler) {
+        let sub = match crop_region(frame, num_rect, y_shift, scaler) {
             Some(img) => img,
             None => return Ok(String::new()),
         };
@@ -330,13 +322,13 @@ impl GoodArtifactScanner {
     /// OCR a sub-region with Y-offset for elixir artifacts.
     fn ocr_image_region_shifted(
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        frame: &CaptureFrame,
         rect: (f64, f64, f64, f64),
         y_shift: f64,
         scaler: &CoordScaler,
     ) -> Result<String> {
         let (x, y, w, h) = rect;
-        Self::ocr_image_region(ocr, image, (x, y + y_shift, w, h), scaler)
+        Self::ocr_image_region(ocr, frame, (x, y + y_shift, w, h), scaler)
     }
 
     /// Find artifact set key in OCR text (with multi-line fallback).
@@ -397,37 +389,19 @@ impl GoodArtifactScanner {
     /// Normal artifacts have beige background ~(236, 229, 216) at that position.
     /// Checks 3 positions in the solid right-side region of the banner to avoid
     /// false positives from decorative text patterns or transient overlays.
-    fn detect_elixir_crafted(image: &RgbImage, scaler: &CoordScaler) -> bool {
+    fn detect_elixir_crafted(frame: &CaptureFrame, scaler: &CoordScaler) -> bool {
         let positions: [(f64, f64); 3] = [(1510.0, 423.0), (1520.0, 423.0), (1530.0, 423.0)];
         let mut purple_count = 0;
         for &(bx, by) in &positions {
-            let x = scaler.scale_x(bx) as u32;
-            let y = scaler.scale_y(by) as u32;
-            if x >= image.width() || y >= image.height() {
-                continue;
-            }
-            let px = image.get_pixel(x, y);
-            // Purple banner: blue > 230, blue > green + 40
-            // Beige background: all channels similar, blue ≈ green
-            // Cast to u16 to avoid u8 wrapping overflow (255+40 wraps to 39, false positive on white)
-            let is_purple = (px[2] as u16) > 230 && (px[2] as u16) > (px[1] as u16) + 40;
+            let rgb = frame.pixel(scaler, bx, by);
+            let is_purple = (rgb[2] as u16) > 230 && (rgb[2] as u16) > (rgb[1] as u16) + 40;
             if is_purple {
                 purple_count += 1;
             }
         }
         let crafted = purple_count >= 2;
-        // Annotate at middle probe position
         let elixir_pos = (1520.0, 423.0);
-        let rgb = {
-            let x = scaler.scale_x(elixir_pos.0) as u32;
-            let y = scaler.scale_y(elixir_pos.1) as u32;
-            if x < image.width() && y < image.height() {
-                let p = image.get_pixel(x, y);
-                [p[0], p[1], p[2]]
-            } else {
-                [0, 0, 0]
-            }
-        };
+        let rgb = frame.pixel(scaler, elixir_pos.0, elixir_pos.1);
         annotator::record_pixel_colored(
             "elixir",
             elixir_pos,
@@ -456,7 +430,7 @@ impl GoodArtifactScanner {
     fn ocr_substat_line_candidates(
         _ocr: &dyn ImageToText<RgbImage>,
         substat_ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        image: &CaptureFrame,
         sub_rect: (f64, f64, f64, f64),
         y_shift: f64,
         scaler: &CoordScaler,
@@ -517,7 +491,7 @@ impl GoodArtifactScanner {
     pub fn scan_single_artifact(
         ocr: &dyn ImageToText<RgbImage>,
         substat_ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        image: &CaptureFrame,
         scaler: &CoordScaler,
         ocr_regions: &ArtifactOcrRegions,
         mappings: &MappingManager,
@@ -720,8 +694,8 @@ impl GoodArtifactScanner {
             // Legacy: panel pixel-based detection (requires animation delay)
             // detect_artifact_lock/astral_mark annotate internally
             (
-                pixel_utils::detect_artifact_lock(image, scaler, y_shift),
-                pixel_utils::detect_artifact_astral_mark(image, scaler, y_shift),
+                pixel_utils::detect_artifact_lock(&image.image, scaler, y_shift),
+                pixel_utils::detect_artifact_astral_mark(&image.image, scaler, y_shift),
             )
         };
         // All astraled artifacts are locked in-game. If we still see
@@ -1496,7 +1470,7 @@ impl GoodArtifactScanner {
     /// 快速等级OCR，用于页面跳过优化。
     pub fn scan_level_only(
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        image: &CaptureFrame,
         scaler: &CoordScaler,
     ) -> i32 {
         let regions = ArtifactOcrRegions::new();
@@ -1522,7 +1496,7 @@ impl GoodArtifactScanner {
     pub fn identify_artifact(
         ocr: &dyn ImageToText<RgbImage>,
         substat_ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        image: &CaptureFrame,
         scaler: &CoordScaler,
         mappings: &MappingManager,
         grid_icons: Option<GridIconResult>,
@@ -1535,7 +1509,7 @@ impl GoodArtifactScanner {
     pub fn identify_artifact_at(
         ocr: &dyn ImageToText<RgbImage>,
         substat_ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        image: &CaptureFrame,
         scaler: &CoordScaler,
         mappings: &MappingManager,
         item_index: usize,
@@ -1696,7 +1670,7 @@ impl GoodArtifactScanner {
                     }
                     // Quick rarity check — stop below min_rarity.
                     if pixel_utils::artifact_below_min_rarity(
-                        &work_item.image,
+                        &work_item.frame,
                         &worker_scaler,
                         worker_config.min_rarity,
                     ) {
@@ -1705,7 +1679,7 @@ impl GoodArtifactScanner {
 
                     // Begin annotation for this item (no-op when disabled)
                     annotator::begin_item("artifacts", work_item.index, &worker_scaler);
-                    annotator::add_image("panel", &work_item.image);
+                    annotator::add_image("panel", &work_item.frame.image);
                     if let Some(ref ann) = work_item.grid_annotation {
                         annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
                     }
@@ -1717,7 +1691,7 @@ impl GoodArtifactScanner {
                     match Self::scan_single_artifact(
                         &ocr_guard,
                         &substat_ocr_guard,
-                        &work_item.image,
+                        &work_item.frame,
                         &worker_scaler,
                         &worker_ocr_regions,
                         &worker_mappings,
@@ -1750,6 +1724,8 @@ impl GoodArtifactScanner {
                 initial_wait_ms: self.config.initial_wait,
             },
             extra_delay: self.config.extra_delay,
+            detail_panel_rect: Some(ARTIFACT_DETAIL_PANEL_RECT),
+            grid_vote_page_indices: &GRID_VOTING_PAGE_INDICES,
             probe_last_cell_per_page: false,
             detect_grid_duplicates: false,
         };
@@ -1771,7 +1747,7 @@ impl GoodArtifactScanner {
                 if item_tx
                     .send(WorkItem {
                         index: worker_idx,
-                        image: item.image,
+                        frame: item.frame,
                         metadata: item.metadata,
                         grid_annotation: item.grid_annotation,
                     })
@@ -1787,7 +1763,7 @@ impl GoodArtifactScanner {
             Ok(())
         };
 
-        bp.scan_grid(total, &scan_config, start_at, |_ctrl, event| {
+        bp.scan_grid(total, &scan_config, start_at, |ctrl, event| {
             match event {
                 GridEvent::PageStarted { .. } => ScanAction::Continue,
                 GridEvent::PageCompleted { .. } => ScanAction::Continue,
@@ -1795,7 +1771,7 @@ impl GoodArtifactScanner {
                     voter.reset_page();
                     ScanAction::Continue
                 },
-                GridEvent::Item { idx, image, .. } => {
+                GridEvent::Item { idx, frame, .. } => {
                     // Check if worker has signaled stop (e.g., too many errors)
                     if worker_handle.stop_requested() {
                         return ScanAction::Stop;
@@ -1806,22 +1782,22 @@ impl GoodArtifactScanner {
                     }
 
                     // Quick rarity check on main thread to stop early.
-                    // Before stopping, tie-break + flush deferred items
-                    // using this image; the trigger item itself is dropped.
                     if pixel_utils::artifact_below_min_rarity(
-                        &image,
+                        &frame,
                         &scaler,
                         self.config.min_rarity,
                     ) {
-                        let ready = voter.early_stop_flush(&image, idx, &scaler);
+                        if voter.needs_pass3_tiebreak() {
+                            if let Ok(full) = ctrl.capture_game() {
+                                voter.run_pass3_tiebreak(&full, idx, &scaler);
+                            }
+                        }
+                        let ready = voter.early_stop_flush(&frame.image, idx, &scaler);
                         let _ = emit_ready(ready, &item_tx);
                         return ScanAction::Stop;
                     }
 
-                    // Record the item with the voter; emit any items
-                    // that are now ready (the current item itself and/or
-                    // previously-deferred items flushed at pass 3).
-                    let ready = voter.record(idx, image, (), &scaler);
+                    let ready = voter.record(idx, frame, (), &scaler);
                     if emit_ready(ready, &item_tx).is_err() {
                         return ScanAction::Stop;
                     }
@@ -1831,8 +1807,13 @@ impl GoodArtifactScanner {
             }
         });
 
-        // After scan_grid returns, flush any remaining deferred items.
-        // This handles the case where scanning stopped between pass 2 and pass 3.
+        if voter.needs_pass3_tiebreak() {
+            if let Some(idx) = voter.last_deferred_idx() {
+                if let Ok(full) = ctrl.capture_game() {
+                    voter.run_pass3_tiebreak(&full, idx, &scaler);
+                }
+            }
+        }
         let leftover = voter.final_flush(&scaler);
         let _ = emit_ready(leftover, &item_tx);
 
@@ -1886,7 +1867,7 @@ impl GoodArtifactScanner {
     pub fn debug_scan_single(
         &self,
         ocr: &dyn ImageToText<RgbImage>,
-        image: &RgbImage,
+        image: &CaptureFrame,
         scaler: &CoordScaler,
     ) -> DebugScanResult {
         // Create substat OCR if different from main backend
@@ -2101,8 +2082,8 @@ impl GoodArtifactScanner {
 
         // Lock + astral mark (pixel)
         let t = Instant::now();
-        let lock = pixel_utils::detect_artifact_lock(image, scaler, y_shift);
-        let astral_mark = pixel_utils::detect_artifact_astral_mark(image, scaler, y_shift);
+        let lock = pixel_utils::detect_artifact_lock(&image.image, scaler, y_shift);
+        let astral_mark = pixel_utils::detect_artifact_astral_mark(&image.image, scaler, y_shift);
         fields.push(DebugOcrField {
             field_name: "pixel_detect".into(),
             raw_text: String::new(),
@@ -2165,7 +2146,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2195,7 +2176,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2223,7 +2204,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2251,7 +2232,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2302,7 +2283,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2364,7 +2345,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2415,7 +2396,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,
@@ -2466,7 +2447,7 @@ mod tests {
         let result = GoodArtifactScanner::scan_single_artifact(
             &level_ocr,
             &general_ocr,
-            &image,
+            &CaptureFrame::full(image.clone()),
             &scaler,
             &regions,
             &mappings,

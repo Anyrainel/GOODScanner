@@ -222,10 +222,7 @@ fn action_bar(
                 } else {
                     state.names_need_attention = false;
                     // Force immediate save before scanning (don't wait for debounce)
-                    if let Err(e) = genshin_scanner::cli::save_config(&state.user_config) {
-                        yas::log_warn!("配置保存失败: {}", "Config save failed: {}", e);
-                    }
-                    state.config_dirty_since = None;
+                    state.persist_config_now();
                     *scan_handle = Some(worker::spawn_scan(state));
                 }
             }

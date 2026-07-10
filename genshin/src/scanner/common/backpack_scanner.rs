@@ -6,6 +6,7 @@ use yas::{log_debug, log_error, log_info, log_warn};
 use yas::ocr::ImageToText;
 use yas::utils;
 
+use super::capture_frame::CaptureFrame;
 use super::constants::*;
 use super::coord_scaler::CoordScaler;
 use super::debug_dump::{next_filter_dump_index, DumpCollector};
@@ -300,7 +301,7 @@ pub enum GridEvent {
         idx: usize,
         row: usize,
         col: usize,
-        image: RgbImage,
+        frame: CaptureFrame,
     },
     /// Fired after all items on a page have been processed, before scrolling.
     /// Only fires if at least one item was emitted on the page. Useful for
@@ -329,6 +330,12 @@ pub struct BackpackScanConfig {
     pub panel_wait: PanelWaitMode,
     /// Extra delay (ms) after panel is ready, before capture.
     pub extra_delay: u64,
+    /// When set, most grid items capture only this rect. Items whose page-relative
+    /// index appears in [`Self::grid_vote_page_indices`] still capture the full window
+    /// for grid icon voting.
+    pub detail_panel_rect: Option<(f64, f64, f64, f64)>,
+    /// Page-relative indices (within a 40-item page) that require full-window capture.
+    pub grid_vote_page_indices: &'static [usize],
     /// If true, `scan_grid` clicks the bottom-right visible cell at the start
     /// of each page, captures its image, and emits `GridEvent::PageStarted`
     /// so the caller can decide whether to skip the page.
@@ -350,11 +357,27 @@ const PANEL_POOL_RECT: (f64, f64, f64, f64) = (1330.0, 478.0, 370.0, 187.0);
 // NOTE: The full right-panel detail area (covering all OCR + pixel-check
 // regions for both artifacts and weapons, with 10px margin) is approximately:
 //   (1310, 110, 480, 860)  — right edge at 1790, bottom at 970.
-// This can be used for partial-capture optimization in the future if the
-// grid voter is refactored to not need left-side grid icons from every image.
+// Artifact scans use this as a partial capture; grid voting still needs full
+// window at page-relative indices listed in GRID_VOTING_PAGE_INDICES.
 
 /// Fast timeout for duplicate items in Fingerprint mode (e.g., identical weapons).
 const PANEL_LOAD_FAST_TIMEOUT_MS: u64 = 100;
+
+fn capture_item_frame(
+    ctrl: &GenshinGameController,
+    config: &BackpackScanConfig,
+    page_rel: usize,
+) -> Result<CaptureFrame> {
+    let need_full = match config.detail_panel_rect {
+        None => true,
+        Some(_) => config.grid_vote_page_indices.contains(&page_rel),
+    };
+    if need_full {
+        Ok(CaptureFrame::full(ctrl.capture_game()?))
+    } else {
+        CaptureFrame::from_region(ctrl, config.detail_panel_rect.unwrap())
+    }
+}
 
 /// Delay between scroll ticks (milliseconds).
 const SCROLL_TICK_DELAY_MS: u32 = 10;
@@ -693,8 +716,8 @@ impl<'a> BackpackScanner<'a> {
                             utils::sleep(config.extra_delay as u32);
                         }
 
-                        let image = match self.ctrl.capture_game() {
-                            Ok(img) => img,
+                        let frame = match capture_item_frame(self.ctrl, config, page_item_idx) {
+                            Ok(f) => f,
                             Err(e) => {
                                 log_error!(
                                     "[backpack] 截图失败: {}",
@@ -714,7 +737,7 @@ impl<'a> BackpackScanner<'a> {
                                 idx: scanned_count,
                                 row: cur_row,
                                 col,
-                                image,
+                                frame,
                             },
                         );
                         match action {
