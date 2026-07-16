@@ -24,11 +24,16 @@
 
 ### 下载
 
-从 [Releases](https://github.com/Anyrainel/GOODScanner/releases) 页面下载最新的 `GOODScanner.exe`。
+发布页提供两个可执行文件：
+
+- `GOODScanner.exe` — OCR 扫描器 + 管理器
+- `GOODCapture_Scanner.exe` — 抓包 + OCR 扫描器 + 管理器
+
+请从 [Releases](https://github.com/Anyrainel/GOODScanner/releases) 页面下载。
 
 ### 使用步骤
 
-1. 以**管理员身份**运行 `GOODScanner.exe`
+1. 以**管理员身份**运行所需的可执行文件
 2. 首次运行会提示输入自定义角色名（旅行者/流浪者等），配置保存在 `data/good_config.json`
 3. 确保原神已运行，按回车开始扫描（程序会自动切换到游戏窗口并打开对应界面）
 4. 扫描过程中可按**鼠标右键**终止
@@ -111,7 +116,8 @@ git lfs pull
 # 构建
 cargo build --release
 
-# 产物位于 target/release/GOODScanner.exe
+# 产物位于 target/release/GOODScanner.exe；使用 --features capture 时还会生成
+# target/release/GOODCapture_Scanner.exe
 ```
 
 ## 致谢

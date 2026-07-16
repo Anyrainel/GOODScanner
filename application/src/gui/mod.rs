@@ -42,13 +42,21 @@ pub fn run_gui() {
     // ALL threads — worker, update, refresh, and GUI main.
     install_panic_hook();
 
-    // Kick off background update check
-    update_banner::spawn_check(genshin_scanner::updater::ASSET_SCANNER, &state.update_state);
+    // Kick off background update check for the executable that is running.
+    #[cfg(feature = "capture")]
+    const UPDATE_ASSET: &str = genshin_scanner::updater::ASSET_CAPTURE_SCANNER;
+    #[cfg(not(feature = "capture"))]
+    const UPDATE_ASSET: &str = genshin_scanner::updater::ASSET_SCANNER;
+    update_banner::spawn_check(UPDATE_ASSET, &state.update_state);
 
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon_64.png"))
         .expect("Failed to load window icon");
 
-    let window_title = genshin_scanner::updater::window_title("GOOD Scanner");
+    #[cfg(feature = "capture")]
+    const PRODUCT_NAME: &str = "GOODCapture Scanner";
+    #[cfg(not(feature = "capture"))]
+    const PRODUCT_NAME: &str = "GOOD Scanner";
+    let window_title = genshin_scanner::updater::window_title(PRODUCT_NAME);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -60,7 +68,7 @@ pub fn run_gui() {
     };
 
     eframe::run_native(
-        "GOOD Scanner",
+        PRODUCT_NAME,
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
@@ -101,6 +109,7 @@ enum ActiveTab {
     Manager,
     #[cfg(feature = "capture")]
     Capture,
+    #[cfg(not(feature = "capture"))]
     Credits,
 }
 
@@ -120,6 +129,9 @@ impl GuiApp {
             capture_tab::CaptureTabState::from_config(state.output_dir.clone(), &state.user_config);
         Self {
             state,
+            #[cfg(feature = "capture")]
+            active_tab: ActiveTab::Capture,
+            #[cfg(not(feature = "capture"))]
             active_tab: ActiveTab::Scanner,
             scan_handle: None,
             server_handle: None,
@@ -141,6 +153,12 @@ impl eframe::App for GuiApp {
         // Top bar with tabs + language toggle
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                #[cfg(feature = "capture")]
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    ActiveTab::Capture,
+                    egui::RichText::new(l.t("抓包", "Capture")).size(20.0),
+                );
                 ui.selectable_value(
                     &mut self.active_tab,
                     ActiveTab::Scanner,
@@ -151,14 +169,8 @@ impl eframe::App for GuiApp {
                     ActiveTab::Manager,
                     egui::RichText::new(l.t("管理器", "Manager")).size(20.0),
                 );
-                #[cfg(feature = "capture")]
-                ui.selectable_value(
-                    &mut self.active_tab,
-                    ActiveTab::Capture,
-                    egui::RichText::new(l.t("抓包", "Capture")).size(20.0),
-                );
 
-                // Right-aligned: language toggle + credits tab
+                // Right-aligned: language toggle + credits tab for standalone GOODScanner
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = match l {
                         Lang::Zh => "EN",
@@ -172,6 +184,7 @@ impl eframe::App for GuiApp {
                         self.state.user_config.lang = self.state.lang.to_str().to_string();
                         yas::lang::set_lang(self.state.lang.to_str());
                     }
+                    #[cfg(not(feature = "capture"))]
                     ui.selectable_value(
                         &mut self.active_tab,
                         ActiveTab::Credits,
@@ -186,7 +199,7 @@ impl eframe::App for GuiApp {
 
         // Bottom panel: per-tab log area.
         // Manager tab shows manager logs; everything else shows scanner logs
-        // (scanner tab, capture tab, credits, plus startup/update logs).
+        // (scanner/capture tabs, credits, plus startup/update logs).
         let log_buf = match self.active_tab {
             ActiveTab::Manager => &self.state.manager_log_lines,
             _ => &self.state.scanner_log_lines,
@@ -240,6 +253,7 @@ impl eframe::App for GuiApp {
                     is_scan_running || is_server_running,
                 );
             },
+            #[cfg(not(feature = "capture"))]
             ActiveTab::Credits => {
                 credits::show(ui, l, credits::CreditSet::Scanner);
             },

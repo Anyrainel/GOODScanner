@@ -24,11 +24,16 @@ Scans in-game character, weapon, and artifact data and exports it as [GOOD v3](h
 
 ### Download
 
-Get the latest `GOODScanner.exe` from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page.
+The releases page provides two executables:
+
+- `GOODScanner.exe` — OCR Scanner + Manager
+- `GOODCapture_Scanner.exe` — Capture + OCR Scanner + Manager
+
+Download them from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page.
 
 ### Usage
 
-1. Run `GOODScanner.exe` **as administrator**
+1. Run the executable you need **as administrator**
 2. On first run, you'll be prompted for custom character names (Traveler, Wanderer, etc.). Config is saved to `data/good_config.json`
 3. Make sure Genshin Impact is running, then press Enter to start (the program will automatically focus the game window and open the correct screens)
 4. **Right-click to abort** during scanning
@@ -111,7 +116,8 @@ git lfs pull
 # Build
 cargo build --release
 
-# Binary is at target/release/GOODScanner.exe
+# Binaries are at target/release/GOODScanner.exe and
+# target/release/GOODCapture_Scanner.exe (with --features capture)
 ```
 
 ## Acknowledgments

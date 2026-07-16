@@ -203,6 +203,13 @@ pub fn show(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: bo
             ),
         );
     }
+    ui.colored_label(
+        egui::Color32::from_rgb(80, 150, 220),
+        l.t(
+            "GOODCapture 现已包含 GOODScanner，今后只需使用一个程序即可。",
+            "GOODScanner is now included in GOODCapture, so you only need one program going forward.",
+        ),
+    );
     ui.add_space(4.0);
     ui.separator();
 
