@@ -14,14 +14,14 @@ use crate::scanner::common::backpack_scanner::{
     self as backpack_scanner, BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode,
     ScanAction,
 };
-use crate::scanner::common::constants::*;
 use crate::scanner::common::capture_frame::CaptureFrame;
+use crate::scanner::common::constants::*;
 use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::equip_parser;
 use crate::scanner::common::fuzzy_match::fuzzy_match_map;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::grid_icon_detector::{GridIconResult, GridMode};
-use crate::scanner::common::grid_voter::{PagedGridVoter, ReadyItem};
+use crate::scanner::common::grid_voter::{GridVoteSchedule, PagedGridVoter, ReadyItem};
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodArtifact, GoodSubStat};
 use crate::scanner::common::ocr_factory;
@@ -1725,7 +1725,7 @@ impl GoodArtifactScanner {
             },
             extra_delay: self.config.extra_delay,
             detail_panel_rect: Some(ARTIFACT_DETAIL_PANEL_RECT),
-            grid_vote_page_indices: &GRID_VOTING_PAGE_INDICES,
+            grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: false,
             detect_grid_duplicates: false,
         };
@@ -1787,12 +1787,8 @@ impl GoodArtifactScanner {
                         &scaler,
                         self.config.min_rarity,
                     ) {
-                        if voter.needs_pass3_tiebreak() {
-                            if let Ok(full) = ctrl.capture_game() {
-                                voter.run_pass3_tiebreak(&full, idx, &scaler);
-                            }
-                        }
-                        let ready = voter.early_stop_flush(&frame.image, idx, &scaler);
+                        voter.finish_additional_passes(&scaler, || ctrl.capture_game().ok());
+                        let ready = voter.early_stop_flush();
                         let _ = emit_ready(ready, &item_tx);
                         return ScanAction::Stop;
                     }
@@ -1807,14 +1803,8 @@ impl GoodArtifactScanner {
             }
         });
 
-        if voter.needs_pass3_tiebreak() {
-            if let Some(idx) = voter.last_deferred_idx() {
-                if let Ok(full) = ctrl.capture_game() {
-                    voter.run_pass3_tiebreak(&full, idx, &scaler);
-                }
-            }
-        }
-        let leftover = voter.final_flush(&scaler);
+        voter.finish_additional_passes(&scaler, || ctrl.capture_game().ok());
+        let leftover = voter.final_flush();
         let _ = emit_ready(leftover, &item_tx);
 
         // Drop sender to signal worker that no more items are coming

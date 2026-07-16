@@ -8,16 +8,18 @@ use yas::{log_debug, log_info, log_warn};
 use super::ui_actions::{d_action, d_cell};
 use crate::scanner::artifact::GoodArtifactScanner;
 use crate::scanner::common::annotator;
-use crate::scanner::common::capture_frame::CaptureFrame;
 use crate::scanner::common::backpack_scanner::{
     self, BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction,
 };
+use crate::scanner::common::capture_frame::CaptureFrame;
 use crate::scanner::common::constants::*;
 use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::debug_dump::DumpCtx;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::grid_icon_detector::{GridIconResult, GridMode};
-use crate::scanner::common::grid_voter::{GridAnnotation, PagedGridVoter, ReadyItem};
+use crate::scanner::common::grid_voter::{
+    GridAnnotation, GridVoteSchedule, PagedGridVoter, ReadyItem,
+};
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::GoodArtifact;
 use crate::scanner::common::ocr_pool::{OcrPool, SharedOcrPools};
@@ -335,7 +337,7 @@ impl LockManager {
             },
             extra_delay: capture_delay,
             detail_panel_rect: None,
-            grid_vote_page_indices: &[],
+            grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: max_target_level >= 0,
             detect_grid_duplicates: false,
         };
@@ -439,7 +441,8 @@ impl LockManager {
                         );
                         rarity_stopped = true;
                         stop_requested = true;
-                        let ready = voter.early_stop_flush(&frame.image, idx, &scaler_cb);
+                        voter.finish_additional_passes(&scaler_cb, || ctrl_cb.capture_game().ok());
+                        let ready = voter.early_stop_flush();
                         dispatch(ready, &mut dispatched);
                         return ScanAction::Stop;
                     }
@@ -452,9 +455,10 @@ impl LockManager {
 
                 // ---------------- Drain + match + toggle locks ----------------
                 GridEvent::PageCompleted { .. } => {
-                    // Flush any still-deferred items via voter final_flush
-                    // (tie-breaks on the last deferred image if needed).
-                    let leftover = voter.final_flush(&scaler_cb);
+                    // Finish short-page voting while the current page is still
+                    // visible; final_flush only drains settled metadata.
+                    voter.finish_additional_passes(&scaler_cb, || ctrl_cb.capture_game().ok());
+                    let leftover = voter.final_flush();
                     for item in leftover {
                         let d_idx = item.idx;
                         let (d_row, d_col) = item.payload;

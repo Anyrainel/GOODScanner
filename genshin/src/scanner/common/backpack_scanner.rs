@@ -11,6 +11,8 @@ use super::constants::*;
 use super::coord_scaler::CoordScaler;
 use super::debug_dump::{next_filter_dump_index, DumpCollector};
 use super::game_controller::GenshinGameController;
+use super::grid_icon_detector::ITEMS_PER_PAGE;
+use super::grid_voter::GridVoteSchedule;
 use super::pixel_utils;
 
 fn pixel_rgb(image: &RgbImage, scaler: &CoordScaler, pos: (f64, f64)) -> [u8; 3] {
@@ -330,12 +332,12 @@ pub struct BackpackScanConfig {
     pub panel_wait: PanelWaitMode,
     /// Extra delay (ms) after panel is ready, before capture.
     pub extra_delay: u64,
-    /// When set, most grid items capture only this rect. Items whose page-relative
-    /// index appears in [`Self::grid_vote_page_indices`] still capture the full window
-    /// for grid icon voting.
+    /// When set, most grid items capture only this rect. Items at the
+    /// page-relative indices produced by `grid_vote_schedule` still capture
+    /// the full window for grid icon voting.
     pub detail_panel_rect: Option<(f64, f64, f64, f64)>,
-    /// Page-relative indices (within a 40-item page) that require full-window capture.
-    pub grid_vote_page_indices: &'static [usize],
+    /// Produces the full-window vote positions for the current page size.
+    pub grid_vote_schedule: fn(usize) -> GridVoteSchedule,
     /// If true, `scan_grid` clicks the bottom-right visible cell at the start
     /// of each page, captures its image, and emits `GridEvent::PageStarted`
     /// so the caller can decide whether to skip the page.
@@ -358,7 +360,7 @@ const PANEL_POOL_RECT: (f64, f64, f64, f64) = (1330.0, 478.0, 370.0, 187.0);
 // regions for both artifacts and weapons, with 10px margin) is approximately:
 //   (1310, 110, 480, 860)  — right edge at 1790, bottom at 970.
 // Artifact scans use this as a partial capture; grid voting still needs full
-// window at page-relative indices listed in GRID_VOTING_PAGE_INDICES.
+// window at the schedule positions for the current page size.
 
 /// Fast timeout for duplicate items in Fingerprint mode (e.g., identical weapons).
 const PANEL_LOAD_FAST_TIMEOUT_MS: u64 = 100;
@@ -367,10 +369,13 @@ fn capture_item_frame(
     ctrl: &GenshinGameController,
     config: &BackpackScanConfig,
     page_rel: usize,
+    page_items: usize,
 ) -> Result<CaptureFrame> {
     let need_full = match config.detail_panel_rect {
         None => true,
-        Some(_) => config.grid_vote_page_indices.contains(&page_rel),
+        Some(_) => (config.grid_vote_schedule)(page_items)
+            .indices
+            .contains(&page_rel),
     };
     if need_full {
         Ok(CaptureFrame::full(ctrl.capture_game()?))
@@ -637,6 +642,7 @@ impl<'a> BackpackScanner<'a> {
                 }
                 scanned_row += rows_added;
             } else {
+                let page_items = (total - page_start_idx).min(ITEMS_PER_PAGE);
                 // Duplicate detection: fingerprint grid cells at page start.
                 if config.detect_grid_duplicates {
                     if let Ok(grid_img) = self.ctrl.capture_game() {
@@ -716,7 +722,12 @@ impl<'a> BackpackScanner<'a> {
                             utils::sleep(config.extra_delay as u32);
                         }
 
-                        let frame = match capture_item_frame(self.ctrl, config, page_item_idx) {
+                        let frame = match capture_item_frame(
+                            self.ctrl,
+                            config,
+                            page_item_idx,
+                            page_items,
+                        ) {
                             Ok(f) => f,
                             Err(e) => {
                                 log_error!(

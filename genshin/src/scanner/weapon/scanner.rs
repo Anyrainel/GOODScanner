@@ -17,7 +17,7 @@ use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::equip_parser;
 use crate::scanner::common::fuzzy_match::{fuzzy_match_map, fuzzy_match_map_pair};
 use crate::scanner::common::grid_icon_detector::{GridIconResult, GridMode};
-use crate::scanner::common::grid_voter::{PagedGridVoter, ReadyItem};
+use crate::scanner::common::grid_voter::{GridVoteSchedule, PagedGridVoter, ReadyItem};
 
 lazy_static::lazy_static! {
     static ref SLASH_RE: Regex = Regex::new(r"(\d+)\s*/\s*(\d+)").unwrap();
@@ -653,7 +653,7 @@ impl GoodWeaponScanner {
             },
             extra_delay: 0,
             detail_panel_rect: None,
-            grid_vote_page_indices: &[],
+            grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: false,
             detect_grid_duplicates: true,
         };
@@ -686,7 +686,7 @@ impl GoodWeaponScanner {
             Ok(())
         };
 
-        bp.scan_grid(total, &scan_config, start_at, |_ctrl, event| match event {
+        bp.scan_grid(total, &scan_config, start_at, |ctrl, event| match event {
             GridEvent::PageStarted { .. } => ScanAction::Continue,
             GridEvent::PageCompleted { .. } => ScanAction::Continue,
             GridEvent::PageScrolled => {
@@ -700,8 +700,13 @@ impl GoodWeaponScanner {
                 if let Some(pf) = progress_fn {
                     pf(idx + 1, total, "", "");
                 }
-                if pixel_utils::weapon_below_min_rarity(&frame.image, &scaler, self.config.min_rarity) {
-                    let ready = voter.early_stop_flush(&frame.image, idx, &scaler);
+                if pixel_utils::weapon_below_min_rarity(
+                    &frame.image,
+                    &scaler,
+                    self.config.min_rarity,
+                ) {
+                    voter.finish_additional_passes(&scaler, || ctrl.capture_game().ok());
+                    let ready = voter.early_stop_flush();
                     let _ = emit_ready(ready, &item_tx);
                     return ScanAction::Stop;
                 }
@@ -713,7 +718,8 @@ impl GoodWeaponScanner {
             },
         });
 
-        let leftover = voter.final_flush(&scaler);
+        voter.finish_additional_passes(&scaler, || ctrl.capture_game().ok());
+        let leftover = voter.final_flush();
         let _ = emit_ready(leftover, &item_tx);
 
         drop(item_tx);
