@@ -60,8 +60,8 @@ jobs:
       - name: Build GOODScanner (Release)
         run: cargo build --release --bin GOODScanner
 
-      - name: Build GOODCapture_Scanner (Release)
-        run: cargo build --release --bin GOODCapture_Scanner --features capture
+      - name: Build GOODCapture (Release)
+        run: cargo build --release --bin GOODCapture --features capture
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -69,7 +69,7 @@ jobs:
           name: GOODScanner_${{ env.VERSION }}
           path: |
             target/release/GOODScanner.exe
-            target/release/GOODCapture_Scanner.exe
+            target/release/GOODCapture.exe
 
       - name: Delete existing release if any
         run: gh release delete $env:VERSION --yes --cleanup-tag 2>$null
@@ -84,5 +84,5 @@ jobs:
           name: ${{ env.VERSION }}
           files: |
             target/release/GOODScanner.exe
-            target/release/GOODCapture_Scanner.exe
+            target/release/GOODCapture.exe
           make_latest: true

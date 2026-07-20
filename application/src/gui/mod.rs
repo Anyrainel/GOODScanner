@@ -44,7 +44,7 @@ pub fn run_gui() {
 
     // Kick off background update check for the executable that is running.
     #[cfg(feature = "capture")]
-    const UPDATE_ASSET: &str = genshin_scanner::updater::ASSET_CAPTURE_SCANNER;
+    const UPDATE_ASSET: &str = genshin_scanner::updater::ASSET_CAPTURE;
     #[cfg(not(feature = "capture"))]
     const UPDATE_ASSET: &str = genshin_scanner::updater::ASSET_SCANNER;
     update_banner::spawn_check(UPDATE_ASSET, &state.update_state);

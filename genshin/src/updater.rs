@@ -22,7 +22,7 @@ use yas::{log_debug, log_info, log_warn};
 /// Asset filename for the OCR scanner binary.
 pub const ASSET_SCANNER: &str = "GOODScanner.exe";
 /// Asset filename for the merged packet capture + OCR/manager binary.
-pub const ASSET_CAPTURE_SCANNER: &str = "GOODCapture_Scanner.exe";
+pub const ASSET_CAPTURE: &str = "GOODCapture.exe";
 
 /// Download mirror prefixes, tried in order.  Empty string = direct GitHub.
 const DOWNLOAD_MIRRORS: &[&str] = &[
@@ -230,7 +230,7 @@ fn extract_tag_from_url(url: &str) -> Option<&str> {
 /// Query GitHub for the latest release and compare with the running version.
 ///
 /// `asset_name` selects which binary to check for (e.g. [`ASSET_SCANNER`] or
-/// [`ASSET_CAPTURE_SCANNER`]).  The download URL in [`UpdateStatus::UpdateAvailable`]
+/// [`ASSET_CAPTURE`]).  The download URL in [`UpdateStatus::UpdateAvailable`]
 /// points to that specific asset.
 pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
     let current_int = match current_version_int() {

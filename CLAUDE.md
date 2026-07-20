@@ -28,7 +28,7 @@ Yas (Yet Another Scanner) is a Rust application that scans Genshin Impact in-gam
 
 - **`yas`** (`yas_core`) — Platform-agnostic core library: screen capture, OCR (PaddlePaddle ONNX models), system control (mouse/keyboard), game window detection, positioning/scaling utilities.
 - **`genshin`** (`genshin_scanner`) — Genshin-specific scanner logic: GOOD v3 scanners for characters, weapons, and artifacts. Handles in-game navigation, panel OCR, and name matching via remote mappings.
-- **`application`** (`good_tools_app`) — Binary crate. Two user-facing targets: `GOODScanner.exe` (OCR scanner + manager) and `GOODCapture_Scanner.exe` (capture + OCR scanner + manager, behind the `capture` feature flag).
+- **`application`** (`good_tools_app`) — Binary crate. Two user-facing targets: `GOODScanner.exe` (OCR scanner + manager) and `GOODCapture.exe` (capture + OCR scanner + manager, behind the `capture` feature flag).
 
 ### Key Modules (genshin)
 
@@ -71,7 +71,7 @@ src/
 src/
 ├── main.rs                    # Entry point: CLI mode or GUI mode (GOODScanner.exe)
 ├── bin/
-│   └── yas.rs                 # Entry point for GOODScanner.exe and GOODCapture_Scanner.exe
+│   └── yas.rs                 # Entry point for GOODScanner.exe and GOODCapture.exe
 └── gui/
     ├── mod.rs                 # eframe App impl, tab routing
     ├── state.rs               # AppState: all GUI state fields
@@ -328,12 +328,12 @@ Elixir artifacts display a purple banner ("祝圣之霜定义") that shifts all 
 
 ## GOODCapture (Packet Capture Scanner)
 
-GOODCapture_Scanner is the merged binary (`GOODCapture_Scanner.exe`) with Capture, Scanner, and Manager tabs. It exports GOOD v3 data either by sniffing game network packets or by OCR. The standalone GOODScanner.exe remains available for users who do not need packet capture.
+GOODCapture is the merged binary (`GOODCapture.exe`) with Capture, Scanner, and Manager tabs. It exports GOOD v3 data either by sniffing game network packets or by OCR. The standalone GOODScanner.exe remains available for users who do not need packet capture.
 
 ### Build
 
 ```bash
-cargo build --release --features capture --bin GOODCapture_Scanner
+cargo build --release --features capture --bin GOODCapture
 ```
 
 ### How It Works

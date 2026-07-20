@@ -44,7 +44,7 @@ path = "src/bin/yas.rs"
 test = false
 
 [[bin]]
-name = "GOODCapture_Scanner"
+name = "GOODCapture"
 path = "src/bin/yas.rs"
 required-features = ["capture"]
 

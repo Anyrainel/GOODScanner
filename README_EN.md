@@ -27,7 +27,7 @@ Scans in-game character, weapon, and artifact data and exports it as [GOOD v3](h
 The releases page provides two executables:
 
 - `GOODScanner.exe` — OCR Scanner + Manager
-- `GOODCapture_Scanner.exe` — Capture + OCR Scanner + Manager
+- `GOODCapture.exe` — Capture + OCR Scanner + Manager
 
 Download them from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page.
 
@@ -117,7 +117,7 @@ git lfs pull
 cargo build --release
 
 # Binaries are at target/release/GOODScanner.exe and
-# target/release/GOODCapture_Scanner.exe (with --features capture)
+# target/release/GOODCapture.exe (with --features capture)
 ```
 
 ## Acknowledgments

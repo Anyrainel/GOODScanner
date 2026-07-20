@@ -21,7 +21,7 @@ fn main() {
             "GOOD Scanner"
         };
         let original_filename = if is_capture_scanner {
-            "GOODCapture_Scanner.exe"
+            "GOODCapture.exe"
         } else {
             "GOODScanner.exe"
         };

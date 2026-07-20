@@ -27,7 +27,7 @@
 发布页提供两个可执行文件：
 
 - `GOODScanner.exe` — OCR 扫描器 + 管理器
-- `GOODCapture_Scanner.exe` — 抓包 + OCR 扫描器 + 管理器
+- `GOODCapture.exe` — 抓包 + OCR 扫描器 + 管理器
 
 请从 [Releases](https://github.com/Anyrainel/GOODScanner/releases) 页面下载。
 
@@ -117,7 +117,7 @@ git lfs pull
 cargo build --release
 
 # 产物位于 target/release/GOODScanner.exe；使用 --features capture 时还会生成
-# target/release/GOODCapture_Scanner.exe
+# target/release/GOODCapture.exe
 ```
 
 ## 致谢
