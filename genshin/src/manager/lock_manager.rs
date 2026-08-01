@@ -176,7 +176,7 @@ impl LockManager {
         let mut matched: HashMap<usize, usize> = HashMap::new();
 
         // --- Open backpack to artifact tab (same as artifact scanner) ---
-        let mut total = match backpack_scanner::open_backpack_to_tab(
+        let total = match backpack_scanner::open_backpack_to_tab(
             ctrl,
             "artifact",
             1200,
@@ -228,35 +228,16 @@ impl LockManager {
                     dump_images,
                 ) {
                     Ok(selected_count) if selected_count > 0 => {
-                        let filtered_count = {
-                            let bp = BackpackScanner::new(ctrl);
-                            bp.read_item_count(&count_ocr_guard)
-                        };
-                        match filtered_count {
-                            Ok((count, _max)) => {
-                                total = count.max(0) as usize;
-                                log_info!(
-                                    "[lock_manager] 已筛选{}个相关套装，筛选后圣遗物数量={}",
-                                    "[lock_manager] Filtered {} involved sets, artifact count={}",
-                                    selected_count,
-                                    total
-                                );
-                            },
-                            Err(e) => {
-                                log_warn!(
-                                    "[lock_manager] 筛选后无法读取圣遗物数量: {}",
-                                    "[lock_manager] Cannot read artifact count after filtering: {}",
-                                    e
-                                );
-                                return (
-                                    make_error_results(targets, InstructionStatus::OcrError),
-                                    scanned_artifacts,
-                                    HashMap::new(),
-                                    false,
-                                    0,
-                                );
-                            },
-                        }
+                        // 筛选后游戏UI右上角仍显示总容量而非筛选后数量，
+                        // 无法通过 read_item_count 获取准确的筛选后数量。
+                        // 保留筛选前的 total（总容量），依赖 detect_empty_cells
+                        // 机制在扫描遇到空格子时自动停止。
+                        log_info!(
+                            "[lock_manager] 已筛选{}个相关套装（筛选后UI显示总容量，将依赖空格子检测停止扫描，total={}）",
+                            "[lock_manager] Filtered {} involved sets (UI shows total capacity after filter; will rely on empty-cell detection, total={})",
+                            selected_count,
+                            total
+                        );
                     },
                     Ok(_) => {
                         log_warn!(
@@ -340,6 +321,7 @@ impl LockManager {
             grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: max_target_level >= 0,
             detect_grid_duplicates: false,
+            detect_empty_cells: filter_involved_sets,
         };
 
         // Clones for closure capture.

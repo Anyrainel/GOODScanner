@@ -1728,6 +1728,7 @@ impl GoodArtifactScanner {
             grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: false,
             detect_grid_duplicates: false,
+            detect_empty_cells: false,
         };
 
         // Per-page 3-pass voting state (shared across artifact / weapon / manager).
