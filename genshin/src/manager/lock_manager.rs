@@ -44,8 +44,11 @@ pub struct LockManager {
     pools: Arc<SharedOcrPools>,
 }
 
-/// An artifact identified on the current page that needs a lock toggle.
-struct PageToggle {
+/// A matched artifact whose authoritative panel lock state still needs to be
+/// confirmed before deciding whether to toggle or report `AlreadyCorrect`.
+struct PageLockAction {
+    /// Absolute scanned artifact index.
+    scanned_idx: usize,
     result_id: String,
     /// Row within the current visible page (0-based).
     row: usize,
@@ -53,8 +56,45 @@ struct PageToggle {
     col: usize,
     /// Desired lock state.
     desired_lock: bool,
+    /// Lock state reported by the fast grid detector.
+    grid_lock: bool,
     /// Y-shift for elixir artifacts.
     y_shift: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmedLockDecision {
+    AlreadyCorrect,
+    Toggle,
+}
+
+fn decide_confirmed_lock_action(
+    grid_lock: bool,
+    panel_lock: bool,
+    desired_lock: bool,
+) -> (ConfirmedLockDecision, bool) {
+    let decision = if panel_lock == desired_lock {
+        ConfirmedLockDecision::AlreadyCorrect
+    } else {
+        ConfirmedLockDecision::Toggle
+    };
+    (decision, grid_lock != panel_lock)
+}
+
+fn update_scanned_lock_state(
+    scanned_artifacts: &mut [(usize, GoodArtifact)],
+    scanned_idx: usize,
+    lock: bool,
+) {
+    if let Some((_, artifact)) = scanned_artifacts
+        .iter_mut()
+        .find(|(idx, _)| *idx == scanned_idx)
+    {
+        artifact.lock = lock;
+        if !lock {
+            artifact.astral_mark = false;
+        }
+    }
 }
 
 /// Panel pool rect for wait_until_panel_loaded (same as backpack_scanner).
@@ -321,7 +361,7 @@ impl LockManager {
         // Scan-wide flags.
         let mut rarity_stopped = false;
         let mut stop_requested = false;
-        let mut toggle_counter: usize = 0;
+        let mut lock_action_counter: usize = 0;
         // Once the last-cell probe shows a level within range (or OCR succeeds
         // with level <= max_target_level), we stop probing and scan every item.
         // OCR failure (-1) does NOT count as "in range" — keep probing.
@@ -488,8 +528,11 @@ impl LockManager {
                     page_results.sort_by_key(|(idx, _, _, _)| *idx);
                     dispatched = 0;
 
-                    // Match against unmatched targets; collect toggles.
-                    let mut page_toggles: Vec<PageToggle> = Vec::new();
+                    // Match against unmatched targets. Grid lock state is only
+                    // the fast scan observation; every matched artifact is
+                    // re-opened below so the settled panel decides whether the
+                    // manager toggles or reports AlreadyCorrect.
+                    let mut page_actions: Vec<PageLockAction> = Vec::new();
                     for (idx, row, col, artifact_opt) in &page_results {
                         if let Some(ref artifact) = artifact_opt {
                             scanned_artifacts.push((*idx, artifact.clone()));
@@ -505,48 +548,139 @@ impl LockManager {
                             {
                                 matched.insert(target_idx, *idx);
                                 let target = &targets[target_idx];
-                                if artifact.lock == target.desired_lock {
-                                    results.insert(target.result_id.clone(), InstructionResult {
-                                        id: target.result_id.clone(),
-                                        status: InstructionStatus::AlreadyCorrect,
-                                    });
-                                } else {
-                                    let y_shift = if artifact.elixir_crafted { 40.0 } else { 0.0 };
-                                    page_toggles.push(PageToggle {
-                                        result_id: target.result_id.clone(),
-                                        row: *row,
-                                        col: *col,
-                                        desired_lock: target.desired_lock,
-                                        y_shift,
-                                    });
-                                }
+                                let y_shift = if artifact.elixir_crafted { 40.0 } else { 0.0 };
+                                page_actions.push(PageLockAction {
+                                    scanned_idx: *idx,
+                                    result_id: target.result_id.clone(),
+                                    row: *row,
+                                    col: *col,
+                                    desired_lock: target.desired_lock,
+                                    grid_lock: artifact.lock,
+                                    y_shift,
+                                });
                             }
                         } else {
                             ocr_failures += 1;
                         }
                     }
 
-                    // Apply lock toggles (unchanged behavior: delays, click
-                    // sequence, pixel verification).
-                    for toggle in &page_toggles {
+                    // Confirm every matched target from its settled detail
+                    // panel, then toggle only when that authoritative state
+                    // differs from the requested state.
+                    for action in &page_actions {
                         if ctrl_cb.check_rmb() {
-                            results.insert(toggle.result_id.clone(), InstructionResult {
-                                id: toggle.result_id.clone(),
+                            results.insert(action.result_id.clone(), InstructionResult {
+                                id: action.result_id.clone(),
                                 status: InstructionStatus::Aborted,
                             });
                             continue;
                         }
 
-                        let x = GRID_FIRST_X + toggle.col as f64 * GRID_OFFSET_X;
-                        let y = GRID_FIRST_Y + toggle.row as f64 * GRID_OFFSET_Y;
+                        let action_idx = lock_action_counter;
+                        lock_action_counter += 1;
+                        let x = GRID_FIRST_X + action.col as f64 * GRID_OFFSET_X;
+                        let y = GRID_FIRST_Y + action.row as f64 * GRID_OFFSET_Y;
                         ctrl_cb.click_at(x, y);
                         let _ = ctrl_cb.wait_until_panel_loaded(PANEL_POOL_RECT, panel_timeout, initial_wait);
                         yas::utils::sleep(d_cell());
 
-                        if let Err(e) = ui_actions::click_lock_button(ctrl_cb, toggle.y_shift) {
+                        let mut panel_image = match ctrl_cb.capture_game() {
+                            Ok(img) => img,
+                            Err(e) => {
+                                log_warn!("[lock_manager] 面板确认截图失败: {}", "[lock_manager] Panel confirmation capture failed: {}", e);
+                                results.insert(action.result_id.clone(), InstructionResult {
+                                    id: action.result_id.clone(),
+                                    status: InstructionStatus::UiError,
+                                });
+                                continue;
+                            }
+                        };
+                        if pixel_utils::is_artifact_lock_ambiguous(
+                            &panel_image,
+                            &scaler_cb,
+                            action.y_shift,
+                        ) {
+                            yas::utils::sleep(d_cell());
+                            panel_image = match ctrl_cb.capture_game() {
+                                Ok(img) => img,
+                                Err(e) => {
+                                    log_warn!("[lock_manager] 面板确认重试截图失败: {}", "[lock_manager] Panel confirmation retry capture failed: {}", e);
+                                    results.insert(action.result_id.clone(), InstructionResult {
+                                        id: action.result_id.clone(),
+                                        status: InstructionStatus::UiError,
+                                    });
+                                    continue;
+                                }
+                            };
+                            if pixel_utils::is_artifact_lock_ambiguous(
+                                &panel_image,
+                                &scaler_cb,
+                                action.y_shift,
+                            ) {
+                                log_warn!(
+                                    "[lock_manager] 面板锁定状态仍不明确 ({},{}), 跳过操作",
+                                    "[lock_manager] Panel lock state remains ambiguous ({},{}); skipping action",
+                                    action.row,
+                                    action.col
+                                );
+                                results.insert(action.result_id.clone(), InstructionResult {
+                                    id: action.result_id.clone(),
+                                    status: InstructionStatus::UiError,
+                                });
+                                continue;
+                            }
+                        }
+                        let panel_lock = pixel_utils::detect_artifact_lock(
+                            &panel_image,
+                            &scaler_cb,
+                            action.y_shift,
+                        );
+                        let (decision, grid_disagrees) = decide_confirmed_lock_action(
+                            action.grid_lock,
+                            panel_lock,
+                            action.desired_lock,
+                        );
+                        update_scanned_lock_state(
+                            &mut scanned_artifacts,
+                            action.scanned_idx,
+                            panel_lock,
+                        );
+
+                        if grid_disagrees {
+                            log_warn!(
+                                "[lock_manager] 网格与面板锁定状态不一致 ({},{}): 网格={} 面板={}，采用面板状态",
+                                "[lock_manager] Grid/panel lock disagreement ({},{}): grid={} panel={}; using panel state",
+                                action.row,
+                                action.col,
+                                action.grid_lock,
+                                panel_lock
+                            );
+                        }
+                        if dump_images {
+                            let ctx = DumpCtx::new(
+                                "debug_images", "manager_lock_confirm", action_idx, "",
+                            );
+                            ctx.dump_full(&panel_image);
+                            ctx.dump_pixel(
+                                "lock_px",
+                                &panel_image,
+                                (ARTIFACT_LOCK_POS1.0, ARTIFACT_LOCK_POS1.1 + action.y_shift),
+                                5,
+                                &scaler_cb,
+                            );
+                        }
+                        if decision == ConfirmedLockDecision::AlreadyCorrect {
+                            results.insert(action.result_id.clone(), InstructionResult {
+                                id: action.result_id.clone(),
+                                status: InstructionStatus::AlreadyCorrect,
+                            });
+                            continue;
+                        }
+
+                        if let Err(e) = ui_actions::click_lock_button(ctrl_cb, action.y_shift) {
                             log_warn!("[lock_manager] 锁定切换失败: {}", "[lock_manager] Lock toggle failed: {}", e);
-                            results.insert(toggle.result_id.clone(), InstructionResult {
-                                id: toggle.result_id.clone(),
+                            results.insert(action.result_id.clone(), InstructionResult {
+                                id: action.result_id.clone(),
                                 status: InstructionStatus::UiError,
                             });
                             continue;
@@ -557,44 +691,47 @@ impl LockManager {
                             Ok(img) => img,
                             Err(e) => {
                                 log_warn!("[lock_manager] 截图失败: {}", "[lock_manager] Capture failed: {}", e);
-                                results.insert(toggle.result_id.clone(), InstructionResult {
-                                    id: toggle.result_id.clone(),
+                                results.insert(action.result_id.clone(), InstructionResult {
+                                    id: action.result_id.clone(),
                                     status: InstructionStatus::UiError,
                                 });
                                 continue;
                             }
                         };
                         let verified = pixel_utils::verify_artifact_lock_toggled(
-                            &image, &scaler_cb, toggle.y_shift, toggle.desired_lock,
+                            &image, &scaler_cb, action.y_shift, action.desired_lock,
                         );
                         let new_lock = if verified {
-                            toggle.desired_lock
+                            action.desired_lock
                         } else {
-                            pixel_utils::detect_artifact_lock(&image, &scaler_cb, toggle.y_shift)
+                            pixel_utils::detect_artifact_lock(&image, &scaler_cb, action.y_shift)
                         };
+                        update_scanned_lock_state(
+                            &mut scanned_artifacts,
+                            action.scanned_idx,
+                            new_lock,
+                        );
 
                         if dump_images {
                             let ctx = DumpCtx::new(
-                                "debug_images", "manager_lock_verify", toggle_counter, "",
+                                "debug_images", "manager_lock_verify", action_idx, "",
                             );
                             ctx.dump_full(&image);
                             ctx.dump_pixel("lock_px", &image, ARTIFACT_LOCK_POS1, 5, &scaler_cb);
                         }
-                        toggle_counter += 1;
-
-                        if new_lock == toggle.desired_lock {
-                            results.insert(toggle.result_id.clone(), InstructionResult {
-                                id: toggle.result_id.clone(),
+                        if new_lock == action.desired_lock {
+                            results.insert(action.result_id.clone(), InstructionResult {
+                                id: action.result_id.clone(),
                                 status: InstructionStatus::Success,
                             });
                         } else {
                             log_warn!(
                                 "[lock_manager] 锁定验证失败 ({},{}): 期望={} 实际={}",
                                 "[lock_manager] Lock verify failed ({},{}): expected={} actual={}",
-                                toggle.row, toggle.col, toggle.desired_lock, new_lock
+                                action.row, action.col, action.desired_lock, new_lock
                             );
-                            results.insert(toggle.result_id.clone(), InstructionResult {
-                                id: toggle.result_id.clone(),
+                            results.insert(action.result_id.clone(), InstructionResult {
+                                id: action.result_id.clone(),
                                 status: InstructionStatus::UiError,
                             });
                         }
@@ -667,5 +804,34 @@ impl LockManager {
             scan_complete,
             ocr_failures,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_lock_overrides_false_unlocked_grid_before_unlock() {
+        let (decision, grid_disagrees) = decide_confirmed_lock_action(false, true, false);
+
+        assert_eq!(decision, ConfirmedLockDecision::Toggle);
+        assert!(grid_disagrees);
+    }
+
+    #[test]
+    fn panel_lock_overrides_false_locked_grid_before_lock() {
+        let (decision, grid_disagrees) = decide_confirmed_lock_action(true, false, true);
+
+        assert_eq!(decision, ConfirmedLockDecision::Toggle);
+        assert!(grid_disagrees);
+    }
+
+    #[test]
+    fn panel_state_controls_already_correct_even_when_grid_disagrees() {
+        let (decision, grid_disagrees) = decide_confirmed_lock_action(true, false, false);
+
+        assert_eq!(decision, ConfirmedLockDecision::AlreadyCorrect);
+        assert!(grid_disagrees);
     }
 }

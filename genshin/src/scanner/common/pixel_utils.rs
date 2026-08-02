@@ -90,7 +90,7 @@ pub fn get_pixel_brightness(
 pub fn is_artifact_icon_ambiguous(image: &RgbImage, scaler: &CoordScaler) -> bool {
     use super::constants::{ARTIFACT_ASTRAL_POS1, ARTIFACT_LOCK_POS1};
     let lock_b = get_pixel_brightness(image, scaler, ARTIFACT_LOCK_POS1.0, ARTIFACT_LOCK_POS1.1);
-    if lock_b >= ICON_BRIGHT_PRESENT && lock_b <= ICON_BRIGHT_ABSENT {
+    if is_icon_brightness_ambiguous(lock_b) {
         return true;
     }
     let astral_b = get_pixel_brightness(
@@ -99,7 +99,7 @@ pub fn is_artifact_icon_ambiguous(image: &RgbImage, scaler: &CoordScaler) -> boo
         ARTIFACT_ASTRAL_POS1.0,
         ARTIFACT_ASTRAL_POS1.1,
     );
-    if astral_b >= ICON_BRIGHT_PRESENT && astral_b <= ICON_BRIGHT_ABSENT {
+    if is_icon_brightness_ambiguous(astral_b) {
         return true;
     }
     // Impossible state: astral present (dark) but lock not present.
@@ -110,6 +110,35 @@ pub fn is_artifact_icon_ambiguous(image: &RgbImage, scaler: &CoordScaler) -> boo
         return true;
     }
     false
+}
+
+/// Check whether the artifact lock button is still transitioning between its
+/// locked and unlocked states. Both calibrated pixels must agree on a stable
+/// side of the brightness gap before a manager action treats the panel state
+/// as authoritative.
+pub fn is_artifact_lock_ambiguous(image: &RgbImage, scaler: &CoordScaler, y_shift: f64) -> bool {
+    use super::constants::{ARTIFACT_LOCK_POS1, ARTIFACT_LOCK_POS2};
+
+    let b1 = get_pixel_brightness(
+        image,
+        scaler,
+        ARTIFACT_LOCK_POS1.0,
+        ARTIFACT_LOCK_POS1.1 + y_shift,
+    );
+    let b2 = get_pixel_brightness(
+        image,
+        scaler,
+        ARTIFACT_LOCK_POS2.0,
+        ARTIFACT_LOCK_POS2.1 + y_shift,
+    );
+    let p1 = b1 < 128;
+    let p2 = b2 < 128;
+
+    is_icon_brightness_ambiguous(b1) || is_icon_brightness_ambiguous(b2) || p1 != p2
+}
+
+fn is_icon_brightness_ambiguous(brightness: u32) -> bool {
+    brightness >= ICON_BRIGHT_PRESENT && brightness <= ICON_BRIGHT_ABSENT
 }
 
 /// Check if the weapon lock icon pixel is in the ambiguous brightness zone.
@@ -308,13 +337,22 @@ pub fn detect_artifact_rarity(frame: &CaptureFrame, scaler: &CoordScaler) -> i32
     rarity
 }
 
-fn is_star_yellow_frame(frame: &CaptureFrame, scaler: &CoordScaler, base_x: f64, base_y: f64) -> bool {
+fn is_star_yellow_frame(
+    frame: &CaptureFrame,
+    scaler: &CoordScaler,
+    base_x: f64,
+    base_y: f64,
+) -> bool {
     let rgb = frame.pixel(scaler, base_x, base_y);
     rgb[0] > 150 && rgb[1] > 100 && rgb[2] < 100
 }
 
 /// Check if an artifact's detected rarity is below the minimum threshold.
-pub fn artifact_below_min_rarity(frame: &CaptureFrame, scaler: &CoordScaler, min_rarity: i32) -> bool {
+pub fn artifact_below_min_rarity(
+    frame: &CaptureFrame,
+    scaler: &CoordScaler,
+    min_rarity: i32,
+) -> bool {
     let rarity = detect_artifact_rarity(frame, scaler);
     if rarity < min_rarity {
         log_debug!(
@@ -695,7 +733,10 @@ mod tests {
         let mut image = make_1080p_image();
         paint_rarity_stars(&mut image, 5);
         let scaler = make_1080p_scaler();
-        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 5);
+        assert_eq!(
+            detect_artifact_rarity(&CaptureFrame::full(image), &scaler),
+            5
+        );
     }
 
     #[test]
@@ -703,7 +744,10 @@ mod tests {
         let mut image = make_1080p_image();
         paint_rarity_stars(&mut image, 4);
         let scaler = make_1080p_scaler();
-        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 4);
+        assert_eq!(
+            detect_artifact_rarity(&CaptureFrame::full(image), &scaler),
+            4
+        );
     }
 
     #[test]
@@ -711,7 +755,10 @@ mod tests {
         let mut image = make_1080p_image();
         paint_rarity_stars(&mut image, 3);
         let scaler = make_1080p_scaler();
-        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 3);
+        assert_eq!(
+            detect_artifact_rarity(&CaptureFrame::full(image), &scaler),
+            3
+        );
     }
 
     #[test]
@@ -719,7 +766,10 @@ mod tests {
         let image = make_1080p_image();
         let scaler = make_1080p_scaler();
         // Blank image has no star pixels; fallback single-pixel checks also fail → returns 3
-        assert_eq!(detect_artifact_rarity(&CaptureFrame::full(image), &scaler), 3);
+        assert_eq!(
+            detect_artifact_rarity(&CaptureFrame::full(image), &scaler),
+            3
+        );
     }
 
     #[test]
@@ -807,5 +857,20 @@ mod tests {
         set_pixel(&mut image, 1683, 428, dark);
         set_pixel(&mut image, 1768, 428, dark);
         assert!(!is_artifact_icon_ambiguous(&image, &scaler));
+    }
+
+    #[test]
+    fn test_artifact_lock_ambiguity_respects_elixir_shift() {
+        let mut image = make_1080p_image();
+        let scaler = make_1080p_scaler();
+        paint_artifact_lock(&mut image, false, 0.0);
+        paint_artifact_lock(&mut image, true, 40.0);
+
+        assert!(!is_artifact_lock_ambiguous(&image, &scaler, 40.0));
+
+        let mid: [u8; 3] = [150, 150, 150];
+        set_pixel(&mut image, 1683, 468, mid);
+        set_pixel(&mut image, 1768, 468, mid);
+        assert!(is_artifact_lock_ambiguous(&image, &scaler, 40.0));
     }
 }
