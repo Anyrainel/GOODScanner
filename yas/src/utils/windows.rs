@@ -319,21 +319,33 @@ pub fn show_window_and_set_foreground(hwnd: HWND) -> Result<bool> {
     }
 }
 
-#[allow(static_mut_refs)]
 unsafe fn iterate_window_unsafe() -> Vec<HWND> {
-    static mut ALL_HANDLES: Vec<HWND> = Vec::new();
+    // The accumulator is a per-call local passed through EnumWindows' LPARAM.
+    //
+    // It used to be a process-wide `static mut Vec<HWND>` mutated from the
+    // callback with no synchronisation.  `iterate_window` is a safe fn called
+    // concurrently from at least two threads — the HTTP thread on every
+    // `GET /health` (`genshin/src/server.rs`) and the execution thread during
+    // game window detection (`genshin/src/scanner/common/game_controller.rs`).
+    // Racing `Vec::push` on the shared (ptr, len, cap) triple let two threads
+    // reallocate at once, so one freed a buffer the other was still writing to.
+    // That double-free corrupted the process heap and killed the app later with
+    // STATUS_STACK_BUFFER_OVERRUN / FAST_FAIL_CORRUPT_LIST_ENTRY.
+    let mut handles: Vec<HWND> = Vec::new();
 
-    extern "system" fn callback(hwnd: HWND, _vec_ptr: LPARAM) -> BOOL {
-        unsafe {
-            ALL_HANDLES.push(hwnd);
-        }
+    extern "system" fn callback(hwnd: HWND, vec_ptr: LPARAM) -> BOOL {
+        // SAFETY: `vec_ptr` is the `*mut Vec<HWND>` handed to EnumWindows
+        // below. EnumWindows drives the callback synchronously on the calling
+        // thread, so the pointer is live and uniquely owned for the whole
+        // enumeration.
+        let handles = unsafe { &mut *(vec_ptr as *mut Vec<HWND>) };
+        handles.push(hwnd);
         1
     }
 
-    ALL_HANDLES.clear();
-    EnumWindows(Some(callback), 0);
+    EnumWindows(Some(callback), &mut handles as *mut Vec<HWND> as LPARAM);
 
-    ALL_HANDLES.clone()
+    handles
 }
 
 pub fn iterate_window() -> Vec<HWND> {
