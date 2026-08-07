@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use indicatif::{ProgressBar, ProgressStyle};
-use yas::log_error;
+use yas::{log_error, log_info};
 
 use super::capture_frame::CaptureFrame;
 use super::grid_voter::GridAnnotation;
@@ -43,6 +42,43 @@ impl<R> WorkerHandle<R> {
     }
 }
 
+enum WorkerEvent<R> {
+    ItemProcessed(usize, anyhow::Result<Option<R>>),
+    CaptureFinished { total: usize },
+}
+
+/// Announce the handoff from controller-driven capture to background OCR.
+///
+/// Call this only after the controller has submitted every screenshot for the
+/// current phase. `processed` may be non-zero because OCR runs concurrently.
+pub fn log_capture_finished(processed: usize, total: usize) {
+    if processed < total {
+        log_info!(
+            "[OCR] 本轮截图采集已完成，OCR仍在处理中，请等待：{}/{}",
+            "[OCR] this screenshot capture phase is complete; OCR is still processing, please wait: {}/{}",
+            processed,
+            total
+        );
+    } else {
+        log_info!(
+            "[OCR] 本轮截图采集已完成，OCR处理进度：{}/{}",
+            "[OCR] this screenshot capture phase is complete; OCR processing progress: {}/{}",
+            processed,
+            total
+        );
+    }
+}
+
+/// Log OCR progress after [`log_capture_finished`] has announced the handoff.
+pub fn log_ocr_progress(processed: usize, total: usize) {
+    log_info!(
+        "[OCR] 处理进度：{}/{}",
+        "[OCR] processing progress: {}/{}",
+        processed,
+        total
+    );
+}
+
 /// Start a parallel scan worker.
 ///
 /// Items are received via the returned sender, dispatched to rayon for
@@ -53,10 +89,11 @@ impl<R> WorkerHandle<R> {
 /// - `Ok(None)` — skip this item (e.g., non-artifact)
 /// - `Err(e)` — log error, skip item
 ///
-/// The worker shows an indicatif progress bar and can signal the capture
-/// thread to stop via `WorkerHandle::should_stop`.
+/// OCR progress stays silent while the capture thread controls the game. Once
+/// all screenshots have been submitted, the worker logs processed/total
+/// progress and can signal the capture thread to stop via
+/// `WorkerHandle::should_stop`.
 pub fn start_worker<M, R, F>(
-    total: usize,
     process_fn: F,
 ) -> (crossbeam_channel::Sender<WorkItem<M>>, WorkerHandle<R>)
 where
@@ -73,22 +110,26 @@ where
     let handle = std::thread::spawn(move || {
         let process_fn = Arc::new(process_fn);
 
-        // Result channel: rayon tasks send (index, result) here
-        let (result_tx, result_rx) =
-            crossbeam_channel::unbounded::<(usize, anyhow::Result<Option<R>>)>();
+        // Result channel: rayon tasks send completed items here. The dispatch
+        // thread sends CaptureFinished only after the screenshot sender closes,
+        // so no OCR progress is logged while the controller is still active.
+        let (result_tx, result_rx) = crossbeam_channel::unbounded::<WorkerEvent<R>>();
 
         // Dispatch: receive items and spawn rayon tasks
         let dispatch_result_tx = result_tx.clone();
         let dispatch_handle = std::thread::spawn(move || {
+            let mut total = 0;
             for item in item_rx {
+                total += 1;
                 let process_fn = process_fn.clone();
                 let tx = dispatch_result_tx.clone();
                 let index = item.index;
                 rayon::spawn(move || {
                     let result = process_fn(item);
-                    let _ = tx.send((index, result));
+                    let _ = tx.send(WorkerEvent::ItemProcessed(index, result));
                 });
             }
+            let _ = dispatch_result_tx.send(WorkerEvent::CaptureFinished { total });
             // Drop our sender so result_rx eventually closes
             drop(dispatch_result_tx);
         });
@@ -96,65 +137,68 @@ where
         drop(result_tx);
 
         // Collection: reorder results via BTreeMap
-        let pb = ProgressBar::new(total as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-                )
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-
         let mut results_map: BTreeMap<usize, anyhow::Result<Option<R>>> = BTreeMap::new();
         let mut next_index: usize = 0;
         let mut output: Vec<R> = Vec::new();
         let mut index_map: Vec<usize> = Vec::new();
         let mut consecutive_errors: usize = 0;
+        let mut processed: usize = 0;
+        let mut capture_total: Option<usize> = None;
 
-        for (index, result) in result_rx {
-            results_map.insert(index, result);
+        for event in result_rx {
+            match event {
+                WorkerEvent::ItemProcessed(index, result) => {
+                    processed += 1;
+                    results_map.insert(index, result);
 
-            // Drain consecutive ready results
-            while let Some(result) = results_map.remove(&next_index) {
-                pb.inc(1);
-                let current_index = next_index;
-                next_index += 1;
+                    if let Some(total) = capture_total {
+                        log_ocr_progress(processed, total);
+                    }
 
-                match result {
-                    Ok(Some(item)) => {
-                        output.push(item);
-                        index_map.push(current_index);
-                        consecutive_errors = 0;
-                    },
-                    Ok(None) => {
-                        // Skipped item
-                        consecutive_errors = 0;
-                    },
-                    Err(e) => {
-                        log_error!(
-                            "[worker] 第{}项错误: {}",
-                            "[worker] item {} error: {}",
-                            current_index,
-                            e
-                        );
-                        consecutive_errors += 1;
-                        if consecutive_errors >= 10 {
-                            log_error!(
-                                "[worker] 连续{}个错误，发送停止信号",
-                                "[worker] {} consecutive errors, signaling stop",
-                                consecutive_errors
-                            );
-                            should_stop_clone.store(true, Ordering::Relaxed);
+                    // Drain consecutive ready results
+                    while let Some(result) = results_map.remove(&next_index) {
+                        let current_index = next_index;
+                        next_index += 1;
+
+                        match result {
+                            Ok(Some(item)) => {
+                                output.push(item);
+                                index_map.push(current_index);
+                                consecutive_errors = 0;
+                            },
+                            Ok(None) => {
+                                // Skipped item
+                                consecutive_errors = 0;
+                            },
+                            Err(e) => {
+                                log_error!(
+                                    "[worker] 第{}项错误: {}",
+                                    "[worker] item {} error: {}",
+                                    current_index,
+                                    e
+                                );
+                                consecutive_errors += 1;
+                                if consecutive_errors >= 10 {
+                                    log_error!(
+                                        "[worker] 连续{}个错误，发送停止信号",
+                                        "[worker] {} consecutive errors, signaling stop",
+                                        consecutive_errors
+                                    );
+                                    should_stop_clone.store(true, Ordering::Relaxed);
+                                }
+                            },
                         }
-                    },
-                }
+                    }
+                },
+                WorkerEvent::CaptureFinished { total } => {
+                    capture_total = Some(total);
+                    log_capture_finished(processed, total);
+                },
             }
         }
 
         // Drain any remaining buffered results
         while let Some(result) = results_map.remove(&next_index) {
-            pb.inc(1);
             let current_index = next_index;
             next_index += 1;
             if let Ok(Some(item)) = result {
@@ -163,7 +207,6 @@ where
             }
         }
 
-        pb.finish_with_message("done");
         let _ = dispatch_handle.join();
 
         (output, index_map)

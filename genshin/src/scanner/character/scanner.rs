@@ -22,6 +22,7 @@ use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodCharacter, GoodTalent};
 use crate::scanner::common::ocr_factory;
 use crate::scanner::common::ocr_pool::{OcrPool, SharedOcrPools};
+use crate::scanner::common::scan_worker;
 use crate::scanner::common::stat_parser::level_to_ascension;
 
 // ── Data Structures ─────────────────────────────────────────────────────────
@@ -1501,6 +1502,7 @@ impl GoodCharacterScanner {
 
         let mut first_name: Option<String> = None;
         let mut viewed_count: usize = 0;
+        let mut queued_phase1: usize = 0;
         let mut consecutive_failures: usize = 0;
         let mut reverse = false;
 
@@ -1693,6 +1695,7 @@ impl GoodCharacterScanner {
                 );
                 break;
             }
+            queued_phase1 += 1;
 
             // Navigate to next character
             ctrl.click_at(CHAR_NEXT_POS.0, CHAR_NEXT_POS.1);
@@ -1733,6 +1736,9 @@ impl GoodCharacterScanner {
 
         // Signal Phase 1 done and collect remaining results
         let _ = work_tx.send(CharacterWork::Done);
+        if !ctrl.is_cancelled() {
+            scan_worker::log_capture_finished(scan_metas.len(), queued_phase1);
+        }
         loop {
             if ctrl.is_cancelled() {
                 break;
@@ -1770,6 +1776,7 @@ impl GoodCharacterScanner {
                         }
                     }
                     scan_metas.push(meta);
+                    scan_worker::log_ocr_progress(scan_metas.len(), queued_phase1);
                 },
                 Ok(CharacterResult::PhaseDone) => break,
                 Ok(_) => {},
@@ -1926,6 +1933,29 @@ impl GoodCharacterScanner {
         }
     }
 
+    fn handle_phase2_result(
+        result: CharacterResult,
+        characters: &mut [GoodCharacter],
+        processed: &mut usize,
+        progress_total: Option<usize>,
+    ) -> bool {
+        match result {
+            CharacterResult::Rescanned {
+                char_index,
+                character,
+            } => {
+                characters[char_index] = character;
+                *processed += 1;
+                if let Some(total) = progress_total {
+                    scan_worker::log_ocr_progress(*processed, total);
+                }
+                false
+            },
+            CharacterResult::PhaseDone => true,
+            _ => false,
+        }
+    }
+
     /// Phase 2: reopen character screen, navigate to each suspicious character,
     /// capture all fallback images, and send to worker for processing.
     #[allow(unused_assignments)]
@@ -1969,6 +1999,7 @@ impl GoodCharacterScanner {
         }
 
         let mut current_index: usize = 0;
+        let mut queued_phase2: usize = 0;
         let td = self.config.tab_delay;
 
         for &(char_idx, viewed_idx) in suspicious {
@@ -2185,20 +2216,38 @@ impl GoodCharacterScanner {
                 );
                 break;
             }
+            queued_phase2 += 1;
         }
 
         // Signal Phase 2 done and collect results
         let _ = work_tx.send(CharacterWork::Done);
-        loop {
+        let mut processed_phase2 = 0;
+        let mut phase_done = false;
+        while let Ok(result) = result_rx.try_recv() {
+            if Self::handle_phase2_result(result, characters, &mut processed_phase2, None) {
+                phase_done = true;
+                break;
+            }
+        }
+
+        let log_phase2_progress = queued_phase2 > 0 && !ctrl.is_cancelled();
+        if log_phase2_progress {
+            scan_worker::log_capture_finished(processed_phase2, queued_phase2);
+        }
+
+        while !phase_done {
             match result_rx.recv() {
-                Ok(CharacterResult::Rescanned {
-                    char_index,
-                    character,
-                }) => {
-                    characters[char_index] = character;
+                Ok(result) => {
+                    let progress_total = log_phase2_progress.then_some(queued_phase2);
+                    if Self::handle_phase2_result(
+                        result,
+                        characters,
+                        &mut processed_phase2,
+                        progress_total,
+                    ) {
+                        break;
+                    }
                 },
-                Ok(CharacterResult::PhaseDone) => break,
-                Ok(_) => {},
                 Err(_) => break,
             }
         }

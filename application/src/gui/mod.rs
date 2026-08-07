@@ -109,7 +109,6 @@ enum ActiveTab {
     Manager,
     #[cfg(feature = "capture")]
     Capture,
-    #[cfg(not(feature = "capture"))]
     Credits,
 }
 
@@ -157,7 +156,7 @@ impl eframe::App for GuiApp {
                 ui.selectable_value(
                     &mut self.active_tab,
                     ActiveTab::Capture,
-                    egui::RichText::new(l.t("抓包", "Capture")).size(20.0),
+                    egui::RichText::new(l.t("抓包器", "Capture")).size(20.0),
                 );
                 ui.selectable_value(
                     &mut self.active_tab,
@@ -170,7 +169,7 @@ impl eframe::App for GuiApp {
                     egui::RichText::new(l.t("管理器", "Manager")).size(20.0),
                 );
 
-                // Right-aligned: language toggle + credits tab for standalone GOODScanner
+                // Right-aligned: GGArtifact link, credits tab, language toggle
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = match l {
                         Lang::Zh => "EN",
@@ -184,12 +183,20 @@ impl eframe::App for GuiApp {
                         self.state.user_config.lang = self.state.lang.to_str().to_string();
                         yas::lang::set_lang(self.state.lang.to_str());
                     }
-                    #[cfg(not(feature = "capture"))]
                     ui.selectable_value(
                         &mut self.active_tab,
                         ActiveTab::Credits,
                         egui::RichText::new(l.t("致谢", "Credits")).size(20.0),
                     );
+                    let ggartifact_label = l.t("打开GGArtifact", "Open GGArtifact");
+                    if ui
+                        .button(egui::RichText::new(format!("{ggartifact_label} ↗")).size(16.0))
+                        .on_hover_text("https://ggartifact.com")
+                        .clicked()
+                    {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab("https://ggartifact.com"));
+                    }
                 });
             });
         });
@@ -253,8 +260,10 @@ impl eframe::App for GuiApp {
                     is_scan_running || is_server_running,
                 );
             },
-            #[cfg(not(feature = "capture"))]
             ActiveTab::Credits => {
+                #[cfg(feature = "capture")]
+                credits::show(ui, l, credits::CreditSet::Full);
+                #[cfg(not(feature = "capture"))]
                 credits::show(ui, l, credits::CreditSet::Scanner);
             },
         });

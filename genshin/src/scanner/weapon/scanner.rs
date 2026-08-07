@@ -598,7 +598,6 @@ impl GoodWeaponScanner {
 
         let (item_tx, worker_handle) =
             scan_worker::start_worker::<Option<GridIconResult>, GoodWeapon, _>(
-                total_count as usize,
                 move |work_item: WorkItem<Option<GridIconResult>>| {
                     // Skip queued work if the run was cancelled mid-scan.
                     if worker_cancel.is_cancelled() {

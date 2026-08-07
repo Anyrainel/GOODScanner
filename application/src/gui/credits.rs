@@ -7,8 +7,10 @@ use super::state::Lang;
 pub enum CreditSet {
     /// GOODScanner: OCR-based scanning credits (no capture libs).
     Scanner,
-    /// GOODCapture: packet-capture credits only.
+    /// Packet-capture credits only.
     Capture,
+    /// GOODCapture: scanner + capture attributions.
+    Full,
 }
 
 /// Render the credits / third-party attribution panel.
@@ -25,7 +27,7 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
         );
         ui.add_space(4.0);
 
-        if set == CreditSet::Scanner {
+        if matches!(set, CreditSet::Scanner | CreditSet::Full) {
             entry(
                 ui,
                 l,
@@ -51,7 +53,7 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
             );
         }
 
-        if set == CreditSet::Capture {
+        if matches!(set, CreditSet::Capture | CreditSet::Full) {
             entry(
                 ui,
                 l,
@@ -77,7 +79,7 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
             );
         }
 
-        if set == CreditSet::Scanner {
+        if matches!(set, CreditSet::Scanner | CreditSet::Full) {
             entry(
                 ui,
                 l,
