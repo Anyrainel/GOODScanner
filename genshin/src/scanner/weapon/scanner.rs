@@ -655,6 +655,7 @@ impl GoodWeaponScanner {
             grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: false,
             detect_grid_duplicates: true,
+            detect_empty_cells: false,
         };
 
         let total = total_count as usize;

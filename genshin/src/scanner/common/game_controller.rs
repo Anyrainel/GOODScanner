@@ -608,6 +608,10 @@ impl GenshinGameController {
     /// `self.panel_snapshot` starts empty, so the first item is always
     /// accepted (any capture differs from empty).
     ///
+    /// Returns `Ok(true)` if the panel loaded (content changed and is stable),
+    /// or `Ok(false)` on timeout (content did not change — likely an empty cell
+    /// was clicked). `Err` is returned only on capture failure.
+    ///
     /// `pool_rect` is in base 1920x1080 coordinates.
     /// `timeout_ms` is the maximum wait time in milliseconds.
     pub fn wait_until_panel_loaded(
@@ -615,10 +619,10 @@ impl GenshinGameController {
         pool_rect: (f64, f64, f64, f64),
         timeout_ms: u64,
         initial_wait_ms: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if self.game_info.is_cloud {
             utils::sleep(300);
-            return Ok(());
+            return Ok(true);
         }
 
         let now = SystemTime::now();
@@ -658,7 +662,7 @@ impl GenshinGameController {
                         wait_ms,
                         capture_count
                     );
-                    return Ok(());
+                    return Ok(true);
                 }
                 last_capture = raw;
                 // Sleep to span a frame boundary before confirming stability.
@@ -680,7 +684,7 @@ impl GenshinGameController {
             timeout_ms,
             capture_count
         );
-        Ok(())
+        Ok(false)
     }
 
     /// Capture the color of a single pixel at base 1920x1080 coordinates.

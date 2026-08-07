@@ -347,6 +347,14 @@ pub struct BackpackScanConfig {
     /// cell, the panel wait is skipped entirely (for FixedDelay mode) or uses
     /// a shorter timeout (for Fingerprint mode).
     pub detect_grid_duplicates: bool,
+    /// When true, detect empty grid cells by checking if the detail panel
+    /// failed to change after clicking (wait_until_panel_loaded returns
+    /// false). On empty cell: skip the probe (don't SkipPage) and stop
+    /// item scanning. Also enables stuck-page detection after scroll.
+    /// Used by LockManager when filter_involved_sets is active, because
+    /// the game's item count display shows total capacity (not filtered
+    /// count) after filtering, making `total` unreliable.
+    pub detect_empty_cells: bool,
 }
 
 /// Panel pool rect — substats + set name region whose pixel sum changes
@@ -439,6 +447,11 @@ impl<'a> BackpackScanner<'a> {
     /// Read the item count from the backpack header ("X/Y" format).
     pub fn read_item_count(&self, ocr_model: &dyn ImageToText<RgbImage>) -> Result<(i32, i32)> {
         let text = self.ctrl.ocr_region(ocr_model, ITEM_COUNT_RECT)?;
+        log_debug!(
+            "[backpack] 物品数量OCR原文: '{}'",
+            "[backpack] item count OCR raw text: '{}'",
+            text.trim()
+        );
         let re = Regex::new(r"(\d+)\s*/\s*(\d+)")?;
         if let Some(caps) = re.captures(&text) {
             let current: i32 = caps[1].parse().unwrap_or(0);
@@ -531,6 +544,28 @@ impl<'a> BackpackScanner<'a> {
         // Click the first grid position to ensure focus
         self.ctrl.click_at(GRID_FIRST_X, GRID_FIRST_Y);
 
+        // When detecting empty cells, set a panel baseline by waiting for the
+        // first item's panel to load. This allows subsequent probe/item clicks
+        // to detect if the panel didn't change (empty cell clicked).
+        if config.detect_empty_cells {
+            match &config.panel_wait {
+                PanelWaitMode::FixedDelay { delay_ms } => {
+                    utils::sleep(*delay_ms as u32);
+                    let _ = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100);
+                },
+                PanelWaitMode::Fingerprint {
+                    timeout_ms,
+                    initial_wait_ms,
+                } => {
+                    let _ = self.ctrl.wait_until_panel_loaded(
+                        PANEL_POOL_RECT,
+                        *timeout_ms,
+                        *initial_wait_ms,
+                    );
+                },
+            }
+        }
+
         let row = GRID_ROWS.min(total_row);
         let mut scanned_row: usize = 0;
         let mut scanned_count: usize = 0;
@@ -564,6 +599,11 @@ impl<'a> BackpackScanner<'a> {
             let page_start_idx = scanned_count;
             let mut page_had_items = false;
             let mut skip_page = false;
+            // True when the page probe clicked an empty cell. The first item
+            // on the page was already selected before the probe, so clicking
+            // it again won't change the panel — we must skip empty-cell
+            // detection for that one item to avoid a false positive.
+            let mut probe_found_empty = false;
 
             // --- Optional page probe: click bottom-right new cell, capture, ask callback. ---
             if config.probe_last_cell_per_page {
@@ -579,6 +619,7 @@ impl<'a> BackpackScanner<'a> {
                 let x = GRID_FIRST_X + probe_col as f64 * GRID_OFFSET_X;
                 let y = GRID_FIRST_Y + probe_screen_row as f64 * GRID_OFFSET_Y;
                 self.ctrl.click_at(x, y);
+                let mut probe_panel_loaded = true;
                 match &config.panel_wait {
                     PanelWaitMode::FixedDelay { delay_ms } => {
                         utils::sleep(*delay_ms as u32);
@@ -588,13 +629,24 @@ impl<'a> BackpackScanner<'a> {
                         timeout_ms,
                         initial_wait_ms,
                     } => {
-                        let _ = self.ctrl.wait_until_panel_loaded(
+                        probe_panel_loaded = self.ctrl.wait_until_panel_loaded(
                             PANEL_POOL_RECT,
                             *timeout_ms,
                             *initial_wait_ms,
-                        );
+                        ).unwrap_or(true);
                     },
                 }
+                // Empty cell detection: if the panel didn't change after
+                // clicking, the probed cell is likely empty. Skip the probe
+                // and scan the page normally.
+                if config.detect_empty_cells && !probe_panel_loaded {
+                    probe_found_empty = true;
+                    log_debug!(
+                        "[backpack] 探测点击后面板未变化，可能为空格子，正常扫描此页 (page_start={})",
+                        "[backpack] Panel unchanged after probe click, likely empty cell, scanning page normally (page_start={})",
+                        page_start_idx
+                    );
+                } else {
                 if config.extra_delay > 0 {
                     utils::sleep(config.extra_delay as u32);
                 }
@@ -621,6 +673,7 @@ impl<'a> BackpackScanner<'a> {
                         );
                     },
                 }
+                } // else: probe_panel_loaded or !detect_empty_cells
             }
 
             if skip_page {
@@ -693,6 +746,7 @@ impl<'a> BackpackScanner<'a> {
                             && page_cell_fps[page_item_idx] == page_cell_fps[page_item_idx - 1];
 
                         // Wait for panel to load based on configured mode
+                        let mut panel_loaded = true;
                         match &config.panel_wait {
                             PanelWaitMode::FixedDelay { delay_ms } => {
                                 if !is_duplicate {
@@ -709,12 +763,40 @@ impl<'a> BackpackScanner<'a> {
                                 } else {
                                     *timeout_ms
                                 };
-                                let _ = self.ctrl.wait_until_panel_loaded(
+                                panel_loaded = self.ctrl.wait_until_panel_loaded(
                                     PANEL_POOL_RECT,
                                     timeout,
                                     *initial_wait_ms,
-                                );
+                                ).unwrap_or(true);
                             },
+                        }
+
+                        // Empty cell detection: if the panel didn't change
+                        // after clicking (and this isn't a known duplicate),
+                        // the cell is likely empty — stop scanning.
+                        //
+                        // Exception: on the first page (pages_scrolled == 0),
+                        // when the probe found an empty cell, the first item
+                        // was already selected before the probe clicked
+                        // elsewhere. Re-clicking it won't change the panel,
+                        // so skip the empty-cell check for that one item
+                        // (page_item_idx == 0). On later pages the first cell
+                        // is NOT pre-selected, so an unchanged panel there
+                        // genuinely means an empty cell.
+                        if config.detect_empty_cells
+                            && !is_duplicate
+                            && !panel_loaded
+                            && !(probe_found_empty
+                                && page_item_idx == 0
+                                && self.pages_scrolled == 0)
+                        {
+                            log_debug!(
+                                "[backpack] 物品扫描面板未变化，检测到空格子，停止扫描 (idx={})",
+                                "[backpack] Panel unchanged during item scan, empty cell detected, stopping (idx={})",
+                                scanned_count
+                            );
+                            stopped = true;
+                            break 'page;
                         }
 
                         // Extra delay after panel ready
@@ -795,12 +877,49 @@ impl<'a> BackpackScanner<'a> {
             let scroll_row = remain_row.min(GRID_ROWS);
             start_row = GRID_ROWS - scroll_row;
 
+            // Stuck-page detection: fingerprint a few grid cells before
+            // scrolling to compare against post-scroll capture.
+            let pre_scroll_fp = if config.detect_empty_cells {
+                self.ctrl.capture_game().ok().map(|img| {
+                    (
+                        cell_fingerprint(&img, &self.ctrl.scaler, 0, 0),
+                        cell_fingerprint(&img, &self.ctrl.scaler, 2, 4),
+                    )
+                })
+            } else {
+                None
+            };
+
             if !self.scroll_rows(scroll_row) {
                 break 'outer;
             }
 
-            // Reset fingerprint after scroll — new page means panel content changed
-            self.ctrl.reset_panel_fingerprint();
+            // After scroll: check if the page actually changed.
+            if let Some((fp1_pre, fp2_pre)) = pre_scroll_fp {
+                if let Ok(img) = self.ctrl.capture_game() {
+                    let fp1_post = cell_fingerprint(&img, &self.ctrl.scaler, 0, 0);
+                    let fp2_post = cell_fingerprint(&img, &self.ctrl.scaler, 2, 4);
+                    // Relative tolerance: < 1% difference means same page
+                    let same1 = (fp1_pre.abs_diff(fp1_post) as f64
+                        / fp1_pre.max(1u64) as f64) < 0.01;
+                    let same2 = (fp2_pre.abs_diff(fp2_post) as f64
+                        / fp2_pre.max(1u64) as f64) < 0.01;
+                    if same1 && same2 {
+                        log_warn!(
+                            "[backpack] 翻页后网格未变化，可能已到达最后一页，停止扫描",
+                            "[backpack] Grid unchanged after scroll, likely last page, stopping scan"
+                        );
+                        break 'outer;
+                    }
+                }
+            }
+
+            // Reset fingerprint after scroll — new page means panel content changed.
+            // Skip reset when detecting empty cells: keeping the previous panel
+            // snapshot as baseline allows detecting empty cells on the new page.
+            if !config.detect_empty_cells {
+                self.ctrl.reset_panel_fingerprint();
+            }
 
             let action = callback(&mut *self.ctrl, GridEvent::PageScrolled);
             if matches!(action, ScanAction::Stop) {
