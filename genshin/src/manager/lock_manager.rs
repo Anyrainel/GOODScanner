@@ -209,6 +209,7 @@ impl LockManager {
             },
         };
 
+        let mut filter_applied = false;
         if total > 0 && filter_involved_sets {
             let mut involved_sets: Vec<&str> = Vec::new();
             for target in targets {
@@ -228,6 +229,7 @@ impl LockManager {
                     dump_images,
                 ) {
                     Ok(selected_count) if selected_count > 0 => {
+                        filter_applied = true;
                         // 筛选后游戏UI右上角仍显示总容量而非筛选后数量，
                         // 无法通过 read_item_count 获取准确的筛选后数量。
                         // 保留筛选前的 total（总容量），依赖 detect_empty_cells
@@ -321,7 +323,7 @@ impl LockManager {
             grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: max_target_level >= 0,
             detect_grid_duplicates: false,
-            detect_empty_cells: filter_involved_sets,
+            detect_empty_cells: filter_applied,
         };
 
         // Clones for closure capture.
