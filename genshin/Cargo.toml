@@ -43,7 +43,7 @@ tiny_http = "0.12"
 uuid = { version = "1", features = ["v4"] }
 
 # capture-only dependencies
-auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "c5fa36b84e05ad0339fee8a0a420d26900b824b7", optional = true }
+auto-artifactarium = { git = "https://github.com/konkers/auto-artifactarium", rev = "4ba25fac64b88970143af6bc2a2ef51338e620d0", optional = true }
 protobuf = { version = "3.7", optional = true }
 indexmap = { version = "2", optional = true }
 base64 = { version = "0.22", optional = true }

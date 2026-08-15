@@ -103,6 +103,13 @@ impl PlayerData {
         }
     }
 
+    /// Clear data accumulated by the previous capture session.
+    pub fn begin_capture(&mut self) {
+        self.characters.clear();
+        self.items.clear();
+        self.character_equip_guid_map.clear();
+    }
+
     /// Count characters (formal avatars only, avatar_type == 1).
     pub fn character_count(&self) -> usize {
         self.characters
@@ -139,7 +146,23 @@ impl PlayerData {
     }
 
     pub fn process_items(&mut self, items: &[Item]) {
-        self.items = items.into();
+        // Store categories may arrive in separate notifications. Merge by GUID
+        // so a later weapon batch cannot discard an earlier artifact batch (or
+        // vice versa), while still replacing refreshed data for the same item.
+        let mut index_by_guid: HashMap<u64, usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.guid, index))
+            .collect();
+        for item in items {
+            if let Some(index) = index_by_guid.get(&item.guid).copied() {
+                self.items[index] = item.clone();
+            } else {
+                index_by_guid.insert(item.guid, self.items.len());
+                self.items.push(item.clone());
+            }
+        }
     }
 
     pub fn export(&self, settings: &CaptureExportSettings) -> anyhow::Result<GoodExport> {

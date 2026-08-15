@@ -10,13 +10,11 @@
 ///
 /// - **Command IDs**: every decrypted command is tested heuristically,
 ///   regardless of its `command_id`.
-/// - **Outer field numbers**: instead of relying on a fixed proto schema for
-///   the outer container (`PacketWithItems.items = field 10`,
-///   `AvatarDataNotify.avatar_list = field 15`), we parse the outer message
-///   as `Unk` (generic protobuf) and try every repeated length-delimited
-///   field as `Item` or `AvatarInfo`.  Only structurally valid results are
-///   accepted (≥5 items with weapon/reliquary data, ≥4 avatars with ≥2
-///   having equipment).
+/// - **Outer field numbers and wrappers**: instead of relying on a fixed proto
+///   schema for the outer container, we first try every repeated
+///   length-delimited field. Item packets also get a wire-level fallback that
+///   finds structurally valid `Item` records inside opaque/prefixed wrappers,
+///   without assuming a wrapper field number, item tag, or byte offset.
 ///
 /// Dispatch keys are loaded from an external `keys/gi.json` file first
 /// (next to the exe), falling back to the compile-time embedded copy.
@@ -160,13 +158,15 @@ impl CaptureMonitor {
                 if self.capture_cancel_token.is_some() {
                     return false;
                 }
+                self.player_data.begin_capture();
                 let cancel_token = CancellationToken::new();
                 tokio::spawn(capture_task(cancel_token.clone(), self.packet_tx.clone()));
                 self.capture_cancel_token = Some(cancel_token);
                 if let Ok(mut state) = self.state.lock() {
-                    state.capturing = true;
-                    state.complete = false;
-                    state.error = None;
+                    *state = CaptureState {
+                        capturing: true,
+                        ..CaptureState::default()
+                    };
                 }
             },
             CaptureCommand::StopCapture => {
@@ -219,9 +219,12 @@ impl CaptureMonitor {
                 );
                 self.player_data.process_items(&items);
                 if let Ok(mut state) = self.state.lock() {
-                    state.has_items = true;
                     state.weapon_count = self.player_data.weapon_count();
                     state.artifact_count = self.player_data.artifact_count();
+                    // Recent game versions may split store categories across
+                    // multiple notifications. Do not stop after a weapon-only
+                    // batch before the artifact batch has arrived.
+                    state.has_items = state.weapon_count > 0 && state.artifact_count > 0;
                 }
             } else if let Some(avatars) = try_match_avatars(&command.proto_data) {
                 log_info!(
@@ -300,9 +303,25 @@ fn find_best_field<T: Message>(
 ///
 /// Survives both command ID rotation AND outer field number changes.
 fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
-    let (field, items) = find_best_field::<Item>(proto_data, MIN_ITEM_ENTRIES, |item| {
+    let direct = find_best_field::<Item>(proto_data, MIN_ITEM_ENTRIES, |item| {
         item.item_id != 0 && item.guid != 0
-    })?;
+    });
+
+    let (source, items) = match direct {
+        Some((field, items)) => (format!("field={field}"), items),
+        None => {
+            // Avatar notifications can contain their equipped Item records.
+            // They are real gear, but only a partial inventory snapshot, so
+            // prefer the stronger avatar packet classification when it fits.
+            if try_match_avatars(proto_data).is_some() {
+                return None;
+            }
+            (
+                "nested wire scan".to_string(),
+                find_nested_items(proto_data),
+            )
+        },
+    };
 
     let gear_count = items
         .iter()
@@ -310,9 +329,9 @@ fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
         .count();
     if gear_count < MIN_GEAR_COUNT {
         log_debug!(
-            "物品数据包候选被拒（field={}, {} 个物品，{} 个武器/圣遗物）",
-            "Item packet candidate rejected (field={}, {} items, {} weapons/artifacts)",
-            field,
+            "物品数据包候选被拒（来源={}，{} 个物品，{} 个武器/圣遗物）",
+            "Item packet candidate rejected ({}, {} items, {} weapons/artifacts)",
+            source,
             items.len(),
             gear_count,
         );
@@ -320,12 +339,84 @@ fn try_match_items(proto_data: &[u8]) -> Option<Vec<Item>> {
     }
 
     log_debug!(
-        "物品数据包匹配成功（field={}, {} 个物品）",
-        "Item packet matched (field={}, {} items)",
-        field,
+        "物品数据包匹配成功（来源={}，{} 个物品）",
+        "Item packet matched ({}, {} items)",
+        source,
         items.len(),
     );
     Some(items)
+}
+
+/// Find equipment `Item` records anywhere in a command payload.
+///
+/// Some versions wrap repeated item records in an opaque blob with a non-proto
+/// prefix. Walking possible length-delimited wire records byte-by-byte lets us
+/// enter such blobs naturally and does not bake in the wrapper's field number,
+/// the repeated-item tag, or the prefix length. Structural validation plus GUID
+/// deduplication keeps unrelated protobuf messages from becoming item packets.
+fn find_nested_items(data: &[u8]) -> Vec<Item> {
+    let mut items_by_guid = HashMap::new();
+    let mut offset = 0usize;
+
+    while offset < data.len() {
+        let Some((key, key_len)) = read_varint(&data[offset..]) else {
+            offset += 1;
+            continue;
+        };
+        if key >> 3 == 0 || key & 0x07 != 2 {
+            offset += 1;
+            continue;
+        }
+
+        let len_offset = offset + key_len;
+        let Some((value_len, value_len_size)) = data.get(len_offset..).and_then(read_varint) else {
+            offset += 1;
+            continue;
+        };
+        let Ok(value_len) = usize::try_from(value_len) else {
+            offset += 1;
+            continue;
+        };
+        let value_start = len_offset + value_len_size;
+        let Some(value_end) = value_start.checked_add(value_len) else {
+            offset += 1;
+            continue;
+        };
+        if value_end > data.len() {
+            offset += 1;
+            continue;
+        }
+
+        if let Ok(item) = Item::parse_from_bytes(&data[value_start..value_end]) {
+            if item.item_id != 0
+                && item.guid != 0
+                && item.has_equip()
+                && (item.equip().has_weapon() || item.equip().has_reliquary())
+            {
+                items_by_guid.insert(item.guid, item);
+                offset = value_end;
+                continue;
+            }
+        }
+
+        // The value may itself contain a prefixed protobuf stream, so advance
+        // by one byte rather than skipping the whole length-delimited value.
+        offset += 1;
+    }
+
+    items_by_guid.into_values().collect()
+}
+
+fn read_varint(data: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for (index, byte) in data.iter().copied().take(10).enumerate() {
+        let shift = u32::try_from(index).ok()?.checked_mul(7)?;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some((value, index + 1));
+        }
+    }
+    None
 }
 
 /// Field-number-agnostic avatar packet detection.
@@ -461,6 +552,39 @@ mod tests {
             .count();
         assert!(weapons > 50, "expected >50 weapons, got {}", weapons);
         assert!(artifacts > 50, "expected >50 artifacts, got {}", artifacts);
+    }
+
+    #[test]
+    fn match_items_inside_prefixed_unknown_wrapper() {
+        let (_, items) = find_best_field::<Item>(ITEMS_BIN, 10, |i| i.item_id != 0 && i.guid != 0)
+            .expect("fixture should contain items");
+
+        let mut opaque = vec![0xff, 0x00, 0x7f, 0x80, 0x00];
+        for item in items.into_iter().filter(|i| i.has_equip()).take(12) {
+            let bytes = item.write_to_bytes().expect("serialize item");
+            // Deliberately use an arbitrary two-byte field key. The matcher
+            // must not depend on the historical field-2 tag (0x12).
+            push_varint((37u64 << 3) | 2, &mut opaque);
+            push_varint(bytes.len() as u64, &mut opaque);
+            opaque.extend_from_slice(&bytes);
+        }
+
+        let mut wrapped = vec![0x91, 0x92, 0x93];
+        push_varint((91u64 << 3) | 2, &mut wrapped);
+        push_varint(opaque.len() as u64, &mut wrapped);
+        wrapped.extend_from_slice(&opaque);
+
+        let matched = try_match_items(&wrapped).expect("should scan nested item records");
+        assert!(matched.len() >= MIN_GEAR_COUNT);
+        assert!(matched.iter().all(|item| item.has_equip()));
+    }
+
+    fn push_varint(mut value: u64, output: &mut Vec<u8>) {
+        while value >= 0x80 {
+            output.push((value as u8 & 0x7f) | 0x80);
+            value >>= 7;
+        }
+        output.push(value as u8);
     }
 
     #[test]
