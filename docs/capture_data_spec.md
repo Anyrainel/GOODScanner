@@ -15,7 +15,7 @@ them for compatibility.
 - **URL**: `https://ggartifact.com/good/data_cache.json`
 - **Downloaded to**: `data/data_cache.json` (next to existing `data/mappings.json`)
 - **Metadata file**: `data/data_cache_meta.json` (same format as `mappings_meta.json`: `{"lastFetchTime": <unix_seconds>}`)
-- **TTL**: 24 hours (same as mappings)
+- **TTL**: 2 hours
 - **Fallback**: If fetch fails, use stale cache; if no cache, error
 
 ## Top-Level Structure
