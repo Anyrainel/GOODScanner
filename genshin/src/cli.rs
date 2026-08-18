@@ -680,6 +680,8 @@ pub struct GoodUserConfig {
     pub capture_include_weapons: bool,
     #[serde(default = "default_true")]
     pub capture_include_artifacts: bool,
+    #[serde(default = "default_true")]
+    pub capture_include_achievements: bool,
     #[serde(default)]
     pub capture_dump_packets: bool,
     #[serde(default)]
@@ -779,6 +781,7 @@ impl Default for GoodUserConfig {
             capture_include_characters: true,
             capture_include_weapons: true,
             capture_include_artifacts: true,
+            capture_include_achievements: true,
             capture_dump_packets: false,
             capture_only_keep_latest_export: false,
             ocr_pool_v5_override: 0,
@@ -1676,6 +1679,7 @@ mod tests {
         assert!(defaults.capture_include_characters);
         assert!(defaults.capture_include_weapons);
         assert!(defaults.capture_include_artifacts);
+        assert!(defaults.capture_include_achievements);
         assert!(!defaults.capture_dump_packets);
         assert!(!defaults.capture_only_keep_latest_export);
 
@@ -1684,6 +1688,7 @@ mod tests {
                 "capture_include_characters": false,
                 "capture_include_weapons": true,
                 "capture_include_artifacts": false,
+                "capture_include_achievements": false,
                 "capture_dump_packets": true,
                 "capture_only_keep_latest_export": true
             }"#,
@@ -1693,6 +1698,7 @@ mod tests {
         assert!(!cfg.capture_include_characters);
         assert!(cfg.capture_include_weapons);
         assert!(!cfg.capture_include_artifacts);
+        assert!(!cfg.capture_include_achievements);
         assert!(cfg.capture_dump_packets);
         assert!(cfg.capture_only_keep_latest_export);
 
@@ -1700,6 +1706,7 @@ mod tests {
         assert_eq!(json["capture_include_characters"], false);
         assert_eq!(json["capture_include_weapons"], true);
         assert_eq!(json["capture_include_artifacts"], false);
+        assert_eq!(json["capture_include_achievements"], false);
         assert_eq!(json["capture_dump_packets"], true);
         assert_eq!(json["capture_only_keep_latest_export"], true);
     }

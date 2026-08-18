@@ -60,6 +60,7 @@ pub struct CaptureTabState {
     pub include_characters: bool,
     pub include_weapons: bool,
     pub include_artifacts: bool,
+    pub include_achievements: bool,
     pub output_dir: String,
 
     // Advanced
@@ -78,6 +79,7 @@ impl CaptureTabState {
             include_characters: true,
             include_weapons: true,
             include_artifacts: true,
+            include_achievements: true,
             output_dir,
             dump_packets: false,
             only_keep_latest_dump: false,
@@ -90,6 +92,7 @@ impl CaptureTabState {
         state.include_characters = config.capture_include_characters;
         state.include_weapons = config.capture_include_weapons;
         state.include_artifacts = config.capture_include_artifacts;
+        state.include_achievements = config.capture_include_achievements;
         state.dump_packets = config.capture_dump_packets;
         state.only_keep_latest_dump = config.capture_only_keep_latest_export;
         state
@@ -99,6 +102,7 @@ impl CaptureTabState {
         config.capture_include_characters = self.include_characters;
         config.capture_include_weapons = self.include_weapons;
         config.capture_include_artifacts = self.include_artifacts;
+        config.capture_include_achievements = self.include_achievements;
         config.capture_dump_packets = self.dump_packets;
         config.capture_only_keep_latest_export = self.only_keep_latest_dump;
     }
@@ -116,6 +120,7 @@ fn spawn_capture(
     capture_state: Arc<Mutex<CaptureState>>,
     cmd_tx_out: &mut Option<tokio::sync::mpsc::UnboundedSender<CaptureCommand>>,
     dump_packets: bool,
+    include_achievements: bool,
 ) -> std::thread::JoinHandle<()> {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     *cmd_tx_out = Some(cmd_tx.clone());
@@ -163,7 +168,9 @@ fn spawn_capture(
                 };
 
                 // Initialization succeeded — immediately start capture
-                let _ = cmd_tx.send(CaptureCommand::StartCapture);
+                let _ = cmd_tx.send(CaptureCommand::StartCapture {
+                    include_achievements,
+                });
 
                 monitor.run(cmd_rx).await;
             });
@@ -198,8 +205,8 @@ pub fn show(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: bo
         ui.colored_label(
             egui::Color32::from_rgb(120, 120, 120),
             l.t(
-                "通过抓包获取游戏数据（角色/武器/圣遗物），需管理员权限。",
-                "Capture game data (characters/weapons/artifacts) via packet sniffing. Requires admin.",
+                "通过抓包获取游戏数据（角色/武器/圣遗物/成就），需管理员权限。",
+                "Capture game data (characters/weapons/artifacts/achievements) via packet sniffing. Requires admin.",
             ),
         );
     }
@@ -230,6 +237,8 @@ pub fn show(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: bo
                             ui.checkbox(&mut tab.include_weapons, l.t("武器", "Weapons"));
                             ui.add_space(12.0);
                             ui.checkbox(&mut tab.include_artifacts, l.t("圣遗物", "Artifacts"));
+                            ui.add_space(12.0);
+                            ui.checkbox(&mut tab.include_achievements, l.t("成就", "Achievements"));
                         });
                     });
                 });
@@ -330,8 +339,12 @@ fn action_bar(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: 
                     } else {
                         tab.capture_state = Arc::new(Mutex::new(CaptureState::default()));
                         let mut cmd_tx = None;
-                        let thread =
-                            spawn_capture(tab.capture_state.clone(), &mut cmd_tx, tab.dump_packets);
+                        let thread = spawn_capture(
+                            tab.capture_state.clone(),
+                            &mut cmd_tx,
+                            tab.dump_packets,
+                            tab.include_achievements,
+                        );
                         tab.handle = Some(CaptureHandle {
                             _thread: thread,
                             cmd_tx: cmd_tx.unwrap(),
@@ -384,7 +397,7 @@ fn action_bar(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: 
 
             // Show partial progress
             if let Ok(cs) = tab.capture_state.lock() {
-                if cs.has_characters || cs.has_items {
+                if cs.has_characters || cs.has_items || cs.has_achievements {
                     let mut parts = Vec::new();
                     if cs.has_characters {
                         parts.push(match l {
@@ -403,17 +416,32 @@ fn action_bar(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: 
                             ),
                         });
                     }
+                    if cs.has_achievements {
+                        parts.push(match l {
+                            Lang::Zh => format!("成就: {}", cs.achievement_count),
+                            Lang::En => format!("Achievements: {}", cs.achievement_count),
+                        });
+                    }
                     ui.colored_label(egui::Color32::from_rgb(100, 200, 100), parts.join("  |  "));
 
-                    let missing = match (cs.has_characters, cs.has_items) {
-                        (true, false) => Some(l.t("等待物品数据...", "Waiting for item data...")),
-                        (false, true) => {
-                            Some(l.t("等待角色数据...", "Waiting for character data..."))
-                        },
-                        _ => None,
-                    };
-                    if let Some(hint) = missing {
-                        ui.colored_label(egui::Color32::from_rgb(255, 200, 50), hint);
+                    let mut missing = Vec::new();
+                    if !cs.has_characters {
+                        missing.push(l.t("角色", "characters"));
+                    }
+                    if !cs.has_items {
+                        missing.push(l.t("物品", "items"));
+                    }
+                    if tab.include_achievements && !cs.has_achievements {
+                        missing.push(l.t("成就", "achievements"));
+                    }
+                    if !missing.is_empty() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 200, 50),
+                            match l {
+                                Lang::Zh => format!("等待{}数据...", missing.join("、")),
+                                Lang::En => format!("Waiting for {} data...", missing.join(", ")),
+                            },
+                        );
                     }
                 }
             }
@@ -492,11 +520,15 @@ fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
                             let cc = export.characters.as_ref().map_or(0, |v| v.len());
                             let wc = export.weapons.as_ref().map_or(0, |v| v.len());
                             let ac = export.artifacts.as_ref().map_or(0, |v| v.len());
+                            let hc = export.achievements.as_ref().map_or(0, |v| v.len());
                             let summary = UiText::new(
-                                format!("已导出: {} 角色, {} 武器, {} 圣遗物", cc, wc, ac),
                                 format!(
-                                    "Exported: {} characters, {} weapons, {} artifacts",
-                                    cc, wc, ac
+                                    "已导出: {} 角色, {} 武器, {} 圣遗物, {} 成就",
+                                    cc, wc, ac, hc
+                                ),
+                                format!(
+                                    "Exported: {} characters, {} weapons, {} artifacts, {} achievements",
+                                    cc, wc, ac, hc
                                 ),
                             );
                             yas::log_info!("{} → {}", "{} → {}", summary, path.display());
@@ -580,6 +612,7 @@ fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
                 include_characters: tab.include_characters,
                 include_weapons: tab.include_weapons,
                 include_artifacts: tab.include_artifacts,
+                include_achievements: tab.include_achievements,
                 ..Default::default()
             };
             let (tx, rx) = tokio::sync::oneshot::channel();

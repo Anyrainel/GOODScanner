@@ -30,6 +30,7 @@ pub struct CaptureExportSettings {
     pub include_characters: bool,
     pub include_artifacts: bool,
     pub include_weapons: bool,
+    pub include_achievements: bool,
 
     pub min_character_level: u32,
     pub min_character_ascension: u32,
@@ -48,6 +49,7 @@ impl Default for CaptureExportSettings {
             include_characters: true,
             include_artifacts: true,
             include_weapons: true,
+            include_achievements: true,
             min_character_level: 0,
             min_character_ascension: 0,
             min_character_constellation: 0,
@@ -90,6 +92,7 @@ pub struct PlayerData {
     data_cache: DataCache,
     characters: Vec<AvatarInfo>,
     items: Vec<Item>,
+    completed_achievement_ids: Vec<u32>,
     character_equip_guid_map: HashMap<u64, u32>,
 }
 
@@ -99,6 +102,7 @@ impl PlayerData {
             data_cache,
             characters: Vec::new(),
             items: Vec::new(),
+            completed_achievement_ids: Vec::new(),
             character_equip_guid_map: HashMap::new(),
         }
     }
@@ -107,6 +111,7 @@ impl PlayerData {
     pub fn begin_capture(&mut self) {
         self.characters.clear();
         self.items.clear();
+        self.completed_achievement_ids.clear();
         self.character_equip_guid_map.clear();
     }
 
@@ -132,6 +137,19 @@ impl PlayerData {
             .iter()
             .filter(|item| item.has_equip() && item.equip().has_reliquary())
             .count()
+    }
+
+    pub fn achievement_count(&self) -> usize {
+        self.completed_achievement_ids.len()
+    }
+
+    pub fn process_achievements(&mut self, completed_ids: &[u32]) {
+        // Achievement notifications may be split. Merge them just like store
+        // item batches so a later packet cannot discard earlier completions.
+        self.completed_achievement_ids
+            .extend_from_slice(completed_ids);
+        self.completed_achievement_ids.sort_unstable();
+        self.completed_achievement_ids.dedup();
     }
 
     pub fn process_characters(&mut self, avatars: &[AvatarInfo]) {
@@ -184,6 +202,12 @@ impl PlayerData {
             None
         };
 
+        let achievements = if settings.include_achievements {
+            Some(self.completed_achievement_ids.clone())
+        } else {
+            None
+        };
+
         Ok(GoodExport {
             format: "GOOD".to_string(),
             version: 3,
@@ -191,6 +215,7 @@ impl PlayerData {
             characters,
             weapons,
             artifacts,
+            achievements,
         })
     }
 
@@ -481,6 +506,7 @@ mod tests {
         assert_eq!(export.characters.unwrap().len(), 0);
         assert_eq!(export.weapons.unwrap().len(), 0);
         assert_eq!(export.artifacts.unwrap().len(), 0);
+        assert_eq!(export.achievements.unwrap().len(), 0);
     }
 
     #[test]
@@ -502,11 +528,34 @@ mod tests {
             include_characters: false,
             include_weapons: false,
             include_artifacts: true,
+            include_achievements: false,
             ..Default::default()
         };
         let export = player.export(&settings).unwrap();
         assert!(export.characters.is_none());
         assert!(export.weapons.is_none());
         assert!(export.artifacts.is_some());
+        assert!(export.achievements.is_none());
+    }
+
+    #[test]
+    fn export_achievements_are_sorted_and_deduplicated() {
+        let data_cache = DataCache {
+            version: 1,
+            git_hash: String::new(),
+            affix_map: HashMap::new(),
+            artifact_map: HashMap::new(),
+            character_map: HashMap::new(),
+            material_map: HashMap::new(),
+            property_map: HashMap::new(),
+            set_map: HashMap::new(),
+            skill_type_map: HashMap::new(),
+            weapon_map: HashMap::new(),
+        };
+        let mut player = PlayerData::new(data_cache);
+        player.process_achievements(&[82003, 80001, 82003]);
+
+        let export = player.export(&CaptureExportSettings::default()).unwrap();
+        assert_eq!(export.achievements, Some(vec![80001, 82003]));
     }
 }

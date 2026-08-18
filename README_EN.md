@@ -17,6 +17,7 @@ Scans in-game character, weapon, and artifact data and exports it as [GOOD v3](h
 - **Character scanning**: level, ascension, constellation, talents
 - **Weapon scanning**: name, level, ascension, refinement, equipped character, lock status
 - **Artifact scanning**: set, slot, main stat, substats, level, rarity, lock, astral mark, elixir crafted flag, unactivated substats
+- **Achievement capture**: GOODCapture exports the account's completed achievement IDs by default
 - **Dual-engine OCR**: PPOCRv4 (general) + PPOCRv5 (level-specific), automatically picks the best result
 - **Substat validation**: Roll Solver verifies substat combinations against game mechanics
 
@@ -30,6 +31,14 @@ The releases page provides two executables:
 - `GOODCapture.exe` — Capture + OCR Scanner + Manager
 
 Download them from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page.
+
+GOODCapture stores achievements in a backwards-compatible GOOD v3 extension field:
+
+```json
+{"achievements":[80001,80002,81001]}
+```
+
+The field is a compact array of completed achievement IDs. When present, including as an empty array, importers should replace achievement state. When the user disables the Achievements export option, the field is omitted and importers should preserve existing achievement state. Standard GOOD v3 fields and the format version remain unchanged.
 
 ### Usage
 

@@ -43,11 +43,18 @@ const MIN_ITEM_ENTRIES: usize = 10;
 const MIN_GEAR_COUNT: usize = 5; // items with actual weapon/reliquary equip data
 const MIN_AVATAR_ENTRIES: usize = 4;
 const MIN_AVATARS_WITH_PROPS: usize = 2; // avatars with non-empty prop_map
+const MIN_ACHIEVEMENT_ENTRIES: usize = 5;
+const MIN_ACHIEVEMENT_ID: u64 = 80_000;
+const MAX_ACHIEVEMENT_ID_EXCLUSIVE: u64 = 100_000;
+const MIN_FINISH_TIMESTAMP: u64 = 1_500_000_000;
+const MAX_FINISH_TIMESTAMP: u64 = 4_102_444_800; // 2100-01-01 UTC
 use crate::scanner::common::models::GoodExport;
 
 /// Commands the UI can send to the monitor.
 pub enum CaptureCommand {
-    StartCapture,
+    StartCapture {
+        include_achievements: bool,
+    },
     StopCapture,
     Export {
         settings: CaptureExportSettings,
@@ -59,13 +66,15 @@ pub enum CaptureCommand {
 #[derive(Clone, Debug)]
 pub struct CaptureState {
     pub capturing: bool,
-    /// Both characters and items have been received; capture auto-stopped.
+    /// All requested packet categories have been received; capture auto-stopped.
     pub complete: bool,
     pub has_characters: bool,
     pub has_items: bool,
+    pub has_achievements: bool,
     pub character_count: usize,
     pub weapon_count: usize,
     pub artifact_count: usize,
+    pub achievement_count: usize,
     pub error: Option<String>,
 }
 
@@ -76,9 +85,11 @@ impl Default for CaptureState {
             complete: false,
             has_characters: false,
             has_items: false,
+            has_achievements: false,
             character_count: 0,
             weapon_count: 0,
             artifact_count: 0,
+            achievement_count: 0,
             error: None,
         }
     }
@@ -95,6 +106,7 @@ pub struct CaptureMonitor {
     dump_packets: bool,
     dump_dir: std::path::PathBuf,
     dump_counter: u32,
+    require_achievements: bool,
 }
 
 impl CaptureMonitor {
@@ -131,6 +143,7 @@ impl CaptureMonitor {
             dump_packets,
             dump_dir,
             dump_counter: 0,
+            require_achievements: false,
         })
     }
 
@@ -154,11 +167,14 @@ impl CaptureMonitor {
     /// Returns true if the loop should exit.
     fn handle_command(&mut self, cmd: CaptureCommand) -> bool {
         match cmd {
-            CaptureCommand::StartCapture => {
+            CaptureCommand::StartCapture {
+                include_achievements,
+            } => {
                 if self.capture_cancel_token.is_some() {
                     return false;
                 }
                 self.player_data.begin_capture();
+                self.require_achievements = include_achievements;
                 let cancel_token = CancellationToken::new();
                 tokio::spawn(capture_task(cancel_token.clone(), self.packet_tx.clone()));
                 self.capture_cancel_token = Some(cancel_token);
@@ -210,7 +226,19 @@ impl CaptureMonitor {
                 self.dump_counter += 1;
             }
 
-            if let Some(items) = try_match_items(&command.proto_data) {
+            if let Some(achievement_ids) = try_match_achievements(&command.proto_data) {
+                log_info!(
+                    "捕获到成就数据包 (cmd={})，共 {} 个已完成成就",
+                    "Captured achievement packet (cmd={}), {} completed achievements",
+                    command.command_id,
+                    achievement_ids.len(),
+                );
+                self.player_data.process_achievements(&achievement_ids);
+                if let Ok(mut state) = self.state.lock() {
+                    state.has_achievements = true;
+                    state.achievement_count = self.player_data.achievement_count();
+                }
+            } else if let Some(items) = try_match_items(&command.proto_data) {
                 log_info!(
                     "捕获到物品数据包 (cmd={})，共 {} 个物品",
                     "Captured item packet (cmd={}), {} items",
@@ -241,11 +269,15 @@ impl CaptureMonitor {
             }
         }
 
-        // Auto-stop when we have both characters and items
-        let should_stop = self
-            .state
-            .lock()
-            .map_or(false, |s| s.has_characters && s.has_items && s.capturing);
+        // Auto-stop once the normal GOOD data and every requested extension
+        // have arrived. Achievement capture is optional for backwards-compatible
+        // workflows, but defaults on in GOODCapture.
+        let should_stop = self.state.lock().map_or(false, |s| {
+            s.has_characters
+                && s.has_items
+                && (!self.require_achievements || s.has_achievements)
+                && s.capturing
+        });
         if should_stop {
             log_info!(
                 "已收集到所有数据，自动停止抓包",
@@ -297,6 +329,126 @@ fn find_best_field<T: Message>(
         }
     }
     best
+}
+
+/// Field-number-agnostic achievement packet detection.
+///
+/// Achievement entries are generic protobuf messages whose field numbers are
+/// obfuscated per game version. We identify the repeated entry field by its
+/// structure, then infer the ID and finish-time fields from value domains. This
+/// deliberately avoids command IDs, protobuf tags, byte offsets, and a single
+/// sentinel achievement ID. Only records with a finish timestamp are exported:
+/// those are the achievements the account has actually completed.
+fn try_match_achievements(proto_data: &[u8]) -> Option<Vec<u32>> {
+    let outer = Unk::parse_from_bytes(proto_data).ok()?;
+    let mut field_map: HashMap<u32, Vec<&[u8]>> = HashMap::new();
+    for (field_num, value) in outer.unknown_fields().iter() {
+        if let UnknownValueRef::LengthDelimited(bytes) = value {
+            field_map.entry(field_num).or_default().push(bytes);
+        }
+    }
+
+    let mut best: Option<(usize, Vec<u32>)> = None;
+    for blobs in field_map.values() {
+        if blobs.len() < MIN_ACHIEVEMENT_ENTRIES {
+            continue;
+        }
+
+        let records: Vec<HashMap<u32, u64>> = blobs
+            .iter()
+            .filter_map(|bytes| parse_varint_record(bytes))
+            .collect();
+        if records.len() < MIN_ACHIEVEMENT_ENTRIES {
+            continue;
+        }
+
+        let Some(id_tag) = infer_achievement_id_tag(&records) else {
+            continue;
+        };
+        let Some(timestamp_tag) = infer_finish_timestamp_tag(&records) else {
+            continue;
+        };
+
+        let mut all_ids = Vec::new();
+        let mut completed_ids = Vec::new();
+        for record in &records {
+            let Some(&id) = record.get(&id_tag) else {
+                continue;
+            };
+            all_ids.push(id as u32);
+            if record.get(&timestamp_tag).is_some_and(|timestamp| {
+                (MIN_FINISH_TIMESTAMP..=MAX_FINISH_TIMESTAMP).contains(timestamp)
+            }) {
+                completed_ids.push(id as u32);
+            }
+        }
+
+        all_ids.sort_unstable();
+        all_ids.dedup();
+        // A real all-achievement notification has a unique ID on nearly every
+        // repeated entry. This rejects unrelated repeated-varint messages.
+        if all_ids.len() * 5 < records.len() * 4 {
+            continue;
+        }
+        completed_ids.sort_unstable();
+        completed_ids.dedup();
+
+        if best
+            .as_ref()
+            .map_or(true, |(record_count, _)| records.len() > *record_count)
+        {
+            best = Some((records.len(), completed_ids));
+        }
+    }
+
+    best.map(|(_, ids)| ids)
+}
+
+fn parse_varint_record(bytes: &[u8]) -> Option<HashMap<u32, u64>> {
+    let record = Unk::parse_from_bytes(bytes).ok()?;
+    let mut values = HashMap::new();
+    for (field_num, value) in record.unknown_fields().iter() {
+        match value {
+            UnknownValueRef::Varint(value) => {
+                values.insert(field_num, value);
+            },
+            // AchievementInfo consists solely of scalar varints. Rejecting
+            // other wire types is a useful false-positive guard.
+            _ => return None,
+        }
+    }
+    (!values.is_empty()).then_some(values)
+}
+
+fn infer_achievement_id_tag(records: &[HashMap<u32, u64>]) -> Option<u32> {
+    let mut counts = HashMap::<u32, usize>::new();
+    for record in records {
+        for (&tag, &value) in record {
+            if (MIN_ACHIEVEMENT_ID..MAX_ACHIEVEMENT_ID_EXCLUSIVE).contains(&value) {
+                *counts.entry(tag).or_default() += 1;
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count >= MIN_ACHIEVEMENT_ENTRIES)
+        .max_by_key(|(_, count)| *count)
+        .map(|(tag, _)| tag)
+}
+
+fn infer_finish_timestamp_tag(records: &[HashMap<u32, u64>]) -> Option<u32> {
+    let mut counts = HashMap::<u32, usize>::new();
+    for record in records {
+        for (&tag, &value) in record {
+            if (MIN_FINISH_TIMESTAMP..=MAX_FINISH_TIMESTAMP).contains(&value) {
+                *counts.entry(tag).or_default() += 1;
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(tag, _)| tag)
 }
 
 /// Field-number-agnostic item packet detection.
@@ -585,6 +737,101 @@ mod tests {
             value >>= 7;
         }
         output.push(value as u8);
+    }
+
+    fn push_varint_field(field: u32, value: u64, output: &mut Vec<u8>) {
+        push_varint(u64::from(field) << 3, output);
+        push_varint(value, output);
+    }
+
+    fn push_message_field(field: u32, message: &[u8], output: &mut Vec<u8>) {
+        push_varint((u64::from(field) << 3) | 2, output);
+        push_varint(message.len() as u64, output);
+        output.extend_from_slice(message);
+    }
+
+    fn achievement_packet(
+        outer_tag: u32,
+        id_tag: u32,
+        timestamp_tag: u32,
+        records: &[(u32, Option<u64>)],
+    ) -> Vec<u8> {
+        let mut packet = Vec::new();
+        for (index, &(id, timestamp)) in records.iter().enumerate() {
+            let mut record = Vec::new();
+            // These arbitrary status/progress tags make the fixture resemble
+            // AchievementInfo without teaching the matcher fixed positions.
+            push_varint_field(2, if timestamp.is_some() { 2 } else { 1 }, &mut record);
+            push_varint_field(id_tag, u64::from(id), &mut record);
+            push_varint_field(19, index as u64, &mut record);
+            if let Some(timestamp) = timestamp {
+                push_varint_field(timestamp_tag, timestamp, &mut record);
+            }
+            push_message_field(outer_tag, &record, &mut packet);
+        }
+        packet
+    }
+
+    #[test]
+    fn match_achievements_infers_obfuscated_fields() {
+        let packet = achievement_packet(
+            47,
+            11,
+            29,
+            &[
+                (87007, Some(1_725_000_000)),
+                (82003, None),
+                (80001, Some(1_600_000_000)),
+                (84512, None),
+                (86101, Some(1_700_000_000)),
+                (83009, None),
+            ],
+        );
+
+        assert_eq!(
+            try_match_achievements(&packet),
+            Some(vec![80001, 86101, 87007])
+        );
+    }
+
+    #[test]
+    fn match_achievements_survives_another_tag_layout_without_sentinel_id() {
+        let packet = achievement_packet(
+            5,
+            73,
+            4,
+            &[
+                (81001, Some(1_650_000_000)),
+                (81002, Some(1_650_000_001)),
+                (81003, None),
+                (81004, None),
+                (81005, Some(1_650_000_002)),
+            ],
+        );
+
+        assert_eq!(
+            try_match_achievements(&packet),
+            Some(vec![81001, 81002, 81005])
+        );
+    }
+
+    #[test]
+    fn match_achievements_rejects_duplicate_id_records() {
+        let packet = achievement_packet(
+            5,
+            7,
+            9,
+            &[
+                (80001, Some(1_650_000_000)),
+                (80001, Some(1_650_000_001)),
+                (80001, Some(1_650_000_002)),
+                (80001, Some(1_650_000_003)),
+                (80001, Some(1_650_000_004)),
+            ],
+        );
+
+        assert!(try_match_achievements(&packet).is_none());
+        assert!(try_match_achievements(NOISE_BIN).is_none());
     }
 
     #[test]
