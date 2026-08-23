@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use auto_artifactarium::r#gen::protos::{AvatarInfo, Item};
 use indexmap::IndexMap;
 
+use crate::scanner::common::character_element::{
+    good_element_from_skill_depot, MULTI_ELEMENT_CHARACTERS,
+};
 use crate::scanner::common::models::{
     GoodArtifact, GoodCharacter, GoodExport, GoodSubStat, GoodTalent, GoodWeapon,
 };
@@ -272,8 +275,15 @@ impl PlayerData {
                     return None;
                 }
 
+                let key = to_good_key(name);
+                let element = if MULTI_ELEMENT_CHARACTERS.contains(&key.as_str()) {
+                    good_element_from_skill_depot(character.skill_depot_id).map(str::to_string)
+                } else {
+                    None
+                };
+
                 Some(GoodCharacter {
-                    key: to_good_key(name),
+                    key,
                     level: level as i32,
                     constellation: constellation as i32,
                     ascension: ascension as i32,
@@ -282,7 +292,7 @@ impl PlayerData {
                         skill: skill as i32,
                         burst: burst as i32,
                     },
-                    element: None,
+                    element,
                 })
             })
             .collect()
@@ -457,7 +467,25 @@ fn round_stat(property: Property, value: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use auto_artifactarium::r#gen::protos::PropValue;
+
     use super::*;
+
+    fn captured_character(avatar_id: u32, skill_depot_id: u32) -> AvatarInfo {
+        let mut character = AvatarInfo::new();
+        character.avatar_id = avatar_id;
+        character.avatar_type = AVATAR_TYPE_FORMAL;
+        character.skill_depot_id = skill_depot_id;
+
+        let mut level = PropValue::new();
+        level.val = 90;
+        character.prop_map.insert(PROP_LEVEL, level);
+
+        let mut ascension = PropValue::new();
+        ascension.val = 6;
+        character.prop_map.insert(PROP_ASCENSION, ascension);
+        character
+    }
 
     #[test]
     fn round_stat_percentage() {
@@ -557,5 +585,53 @@ mod tests {
 
         let export = player.export(&CaptureExportSettings::default()).unwrap();
         assert_eq!(export.achievements, Some(vec![80001, 82003]));
+    }
+
+    #[test]
+    fn capture_exports_elements_for_traveler_manekin_and_manekina() {
+        let mut character_map = HashMap::new();
+        character_map.insert(10000005, "Traveler".to_string());
+        character_map.insert(10000007, "Traveler".to_string());
+        character_map.insert(10000117, "Manekin".to_string());
+        character_map.insert(10000118, "Manekina".to_string());
+        let data_cache = DataCache {
+            version: 1,
+            git_hash: String::new(),
+            affix_map: HashMap::new(),
+            artifact_map: HashMap::new(),
+            character_map,
+            material_map: HashMap::new(),
+            property_map: HashMap::new(),
+            set_map: HashMap::new(),
+            skill_type_map: HashMap::new(),
+            weapon_map: HashMap::new(),
+        };
+        let mut player = PlayerData::new(data_cache);
+        player.process_characters(&[
+            captured_character(10000005, 507),   // male Traveler, Electro
+            captured_character(10000007, 708),   // female Traveler, Dendro
+            captured_character(10000117, 11706), // Manekin, Anemo
+            captured_character(10000118, 11803), // Manekina, Hydro
+        ]);
+
+        let characters = player
+            .export(&CaptureExportSettings::default())
+            .unwrap()
+            .characters
+            .unwrap();
+        let exported: Vec<_> = characters
+            .iter()
+            .map(|character| (character.key.as_str(), character.element.as_deref()))
+            .collect();
+
+        assert_eq!(
+            exported,
+            vec![
+                ("Traveler", Some("Electro")),
+                ("Traveler", Some("Dendro")),
+                ("Manekin", Some("Anemo")),
+                ("Manekina", Some("Hydro")),
+            ]
+        );
     }
 }

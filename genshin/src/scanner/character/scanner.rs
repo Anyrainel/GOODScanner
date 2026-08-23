@@ -13,6 +13,7 @@ use yas::utils;
 
 use super::GoodCharacterScannerConfig;
 use crate::scanner::common::annotator;
+use crate::scanner::common::character_element::{good_element_from_zh, MULTI_ELEMENT_CHARACTERS};
 use crate::scanner::common::constants::*;
 use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::debug_dump::level_cap_display;
@@ -249,18 +250,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_name_keeps_special_character_in_element_scope() {
+    fn parse_name_keeps_all_multi_element_characters_in_element_scope() {
         let scanner = scanner_with_names(&[
             ("\u{65C5}\u{884C}\u{8005}", "Traveler", "anemo"), // 旅行者
+            ("\u{5947}\u{5076}\u{7537}\u{6027}", "Manekin", "anemo"), // 奇偶男性
+            ("\u{5947}\u{5076}\u{5973}\u{6027}", "Manekina", "anemo"), // 奇偶女性
             ("\u{8D5B}\u{8BFA}", "Cyno", "electro"),           // 赛诺
         ]);
 
-        let (key, element, entity) =
-            scanner.parse_name_and_element("\u{706B}/\u{65C5}\u{884C}\u{8005}");
-
-        assert_eq!(key.as_deref(), Some("Traveler"));
-        assert_eq!(element.as_deref(), Some("\u{706B}"));
-        assert_eq!(entity.as_deref(), Some("\u{65C5}\u{884C}\u{8005}"));
+        for (text, expected_key, expected_name) in [
+            (
+                "\u{706B}/\u{65C5}\u{884C}\u{8005}",
+                "Traveler",
+                "\u{65C5}\u{884C}\u{8005}",
+            ),
+            (
+                "\u{6C34}/\u{5947}\u{5076}\u{7537}\u{6027}",
+                "Manekin",
+                "\u{5947}\u{5076}\u{7537}\u{6027}",
+            ),
+            (
+                "\u{8349}/\u{5947}\u{5076}\u{5973}\u{6027}",
+                "Manekina",
+                "\u{5947}\u{5076}\u{5973}\u{6027}",
+            ),
+        ] {
+            let (key, element, entity) = scanner.parse_name_and_element(text);
+            assert_eq!(key.as_deref(), Some(expected_key));
+            assert!(element.is_some());
+            assert_eq!(entity.as_deref(), Some(expected_name));
+        }
     }
 }
 
@@ -294,35 +313,11 @@ impl GoodCharacterScanner {
         Ok(text.trim().to_string())
     }
 
-    /// Characters that use the element field (multi-element or renameable).
-    const ELEMENT_CHARACTERS: &'static [&'static str] = &["Traveler", "Manekin", "Manekina"];
-    const ELEMENT_SCOPE_EXEMPT_CHARACTERS: &'static [&'static str] =
-        &["Traveler", "Manekin", "Manekina"];
-
-    /// Map Chinese element name to English GOOD element key.
-    fn zh_element_to_good(zh: &str) -> Option<String> {
-        let zh = zh.trim();
-        for (needle, element) in [
-            ("\u{706B}", "Pyro"),    // 火
-            ("\u{6C34}", "Hydro"),   // 水
-            ("\u{96F7}", "Electro"), // 雷
-            ("\u{51B0}", "Cryo"),    // 冰
-            ("\u{98CE}", "Anemo"),   // 风
-            ("\u{5CA9}", "Geo"),     // 岩
-            ("\u{8349}", "Dendro"),  // 草
-        ] {
-            if zh.contains(needle) {
-                return Some(element.into());
-            }
-        }
-        None
-    }
-
     fn scoped_character_name_map_for_element(
         &self,
         element_text: &str,
     ) -> Option<HashMap<String, String>> {
-        let Some(element) = Self::zh_element_to_good(element_text) else {
+        let Some(element) = good_element_from_zh(element_text) else {
             return None;
         };
 
@@ -331,7 +326,7 @@ impl GoodCharacterScanner {
             .character_name_map
             .iter()
             .filter(|(_, key)| {
-                Self::ELEMENT_SCOPE_EXEMPT_CHARACTERS.contains(&key.as_str())
+                MULTI_ELEMENT_CHARACTERS.contains(&key.as_str())
                     || self
                         .mappings
                         .character_element_map
@@ -434,12 +429,13 @@ impl GoodCharacterScanner {
                 Some((n, k)) => (Some(n), Some(k)),
                 None => {
                     // Fallback to full map if scoped map yielded no match (in case element was misread)
-                    let full_pair = fuzzy_match_map_pair(&cleaned_name, &self.mappings.character_name_map);
+                    let full_pair =
+                        fuzzy_match_map_pair(&cleaned_name, &self.mappings.character_name_map);
                     match full_pair {
                         Some((n, k)) => (Some(n), Some(k)),
                         None => (None, None),
                     }
-                }
+                },
             };
             (good_key, Some(el.clone()), entity_name)
         } else {
@@ -1084,8 +1080,11 @@ impl GoodCharacterScanner {
         let (adj_auto, adj_skill, adj_burst, talent_suspicious) =
             self.adjust_talents(auto, skill, burst, &name, constellation);
 
-        let good_element = if Self::ELEMENT_CHARACTERS.contains(&name.as_str()) {
-            element.as_deref().and_then(Self::zh_element_to_good)
+        let good_element = if MULTI_ELEMENT_CHARACTERS.contains(&name.as_str()) {
+            element
+                .as_deref()
+                .and_then(good_element_from_zh)
+                .map(str::to_string)
         } else {
             None
         };
@@ -1289,7 +1288,7 @@ impl GoodCharacterScanner {
         let (adj_auto, adj_skill, adj_burst, _) =
             self.adjust_talents(raw_auto, raw_skill, raw_burst, &name, new_constellation);
 
-        let good_element = if Self::ELEMENT_CHARACTERS.contains(&name.as_str()) {
+        let good_element = if MULTI_ELEMENT_CHARACTERS.contains(&name.as_str()) {
             old.element.clone()
         } else {
             None
@@ -2348,8 +2347,11 @@ impl GoodCharacterScanner {
             duration_ms: t.elapsed().as_millis() as u64,
         });
 
-        let good_element = if Self::ELEMENT_CHARACTERS.contains(&name_key.as_str()) {
-            element.as_deref().and_then(Self::zh_element_to_good)
+        let good_element = if MULTI_ELEMENT_CHARACTERS.contains(&name_key.as_str()) {
+            element
+                .as_deref()
+                .and_then(good_element_from_zh)
+                .map(str::to_string)
         } else {
             None
         };
