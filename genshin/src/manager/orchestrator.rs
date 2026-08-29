@@ -189,7 +189,7 @@ impl ArtifactManager {
         // OCR failures mean artifacts were lost entirely.
         let solver_failures = scanned_artifacts
             .iter()
-            .filter(|(_, a)| a.level > 0 && a.total_rolls.is_none())
+            .filter(|(_, a)| a.total_rolls.is_none())
             .count();
         let has_data_errors = ocr_failures > 0 || solver_failures > 0;
         if has_data_errors && scan_complete {

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use image::RgbImage;
 use regex::Regex;
 use yas::{log_debug, log_error, log_info, log_warn};
@@ -11,6 +11,7 @@ use super::constants::*;
 use super::coord_scaler::CoordScaler;
 use super::debug_dump::{next_filter_dump_index, DumpCollector};
 use super::game_controller::GenshinGameController;
+#[cfg(test)]
 use super::grid_icon_detector::ITEMS_PER_PAGE;
 use super::grid_voter::GridVoteSchedule;
 use super::pixel_utils;
@@ -47,12 +48,25 @@ fn dump_order_by_recent_filter(image: &RgbImage, scaler: &CoordScaler, active: b
     collector.finalize_success(&result);
 }
 
-/// Fingerprint a grid cell's region (excludes 3px border to avoid selection highlight).
-/// Sampled every 4th row for speed.
-fn cell_fingerprint(image: &RgbImage, scaler: &CoordScaler, row: usize, col: usize) -> u64 {
+fn cell_sample_bounds(
+    image: &RgbImage,
+    scaler: &CoordScaler,
+    row: usize,
+    col: usize,
+) -> (u32, u32, u32, u32) {
+    cell_sample_bounds_with_y_offset(image, scaler, row, col, 0.0)
+}
+
+fn cell_sample_bounds_with_y_offset(
+    image: &RgbImage,
+    scaler: &CoordScaler,
+    row: usize,
+    col: usize,
+    y_offset: f64,
+) -> (u32, u32, u32, u32) {
     let cx = GRID_FIRST_X + col as f64 * GRID_OFFSET_X;
-    let cy = GRID_FIRST_Y + row as f64 * GRID_OFFSET_Y;
-    // Exclude outer 3px on each edge to avoid selection highlight bleed
+    let cy = GRID_FIRST_Y + row as f64 * GRID_OFFSET_Y + y_offset;
+    // Exclude outer 3px on each edge to avoid selection highlight bleed.
     let bx = cx - GRID_OFFSET_X * 0.5 + 3.0;
     let by = cy - GRID_OFFSET_Y * 0.5 + 3.0;
     let bw = GRID_OFFSET_X - 6.0;
@@ -63,21 +77,385 @@ fn cell_fingerprint(image: &RgbImage, scaler: &CoordScaler, row: usize, col: usi
     let x1 = (scaler.x(bx + bw) as u32).min(image.width());
     let y1 = (scaler.y(by + bh) as u32).min(image.height());
 
-    let mut sum: u64 = 0;
+    (x0, y0, x1, y1)
+}
+
+fn visit_cell_samples(
+    image: &RgbImage,
+    scaler: &CoordScaler,
+    row: usize,
+    col: usize,
+    mut visit: impl FnMut(u8),
+) {
+    let (x0, y0, x1, y1) = cell_sample_bounds(image, scaler, row, col);
+
     let mut y = y0;
     while y < y1 {
-        for x in x0..x1 {
-            let p = image.get_pixel(x, y);
-            sum = sum.wrapping_add(p[0] as u64 + p[1] as u64 + p[2] as u64);
+        let mut x = x0;
+        while x < x1 {
+            for channel in image.get_pixel(x, y).0 {
+                visit(channel);
+            }
+            x += 4;
         }
         y += 4;
     }
-    sum
 }
 
-/// Fingerprint all visible grid cells on the current page.
-/// Returns a vec of (grid_index, fingerprint) for items in [page_start..page_start+count].
-fn fingerprint_grid_cells(
+/// Sample a grid cell's interior, excluding the selection-highlight border.
+fn cell_samples(image: &RgbImage, scaler: &CoordScaler, row: usize, col: usize) -> Vec<u8> {
+    let mut samples = Vec::new();
+    visit_cell_samples(image, scaler, row, col, |channel| samples.push(channel));
+    samples
+}
+
+fn cell_samples_with_y_offset(
+    image: &RgbImage,
+    scaler: &CoordScaler,
+    row: usize,
+    col: usize,
+    y_offset: f64,
+) -> Vec<u8> {
+    let (x0, y0, x1, y1) = cell_sample_bounds_with_y_offset(image, scaler, row, col, y_offset);
+    let mut samples = Vec::new();
+    let mut y = y0;
+    while y < y1 {
+        let mut x = x0;
+        while x < x1 {
+            samples.extend_from_slice(&image.get_pixel(x, y).0);
+            x += 4;
+        }
+        y += 4;
+    }
+    samples
+}
+
+/// Sample every visible grid position for page-change detection.
+///
+/// Empty positions are intentionally included: an unchanged final page has the
+/// same occupied and empty layout, while a real scroll changes many positional
+/// samples. Comparing the complete grid avoids the old two-cell false positives
+/// on inventories containing repeated icons.
+#[cfg(test)]
+fn visible_grid_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<u8> {
+    visible_grid_cell_samples(image, scaler)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn visible_grid_cell_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<Vec<u8>> {
+    let mut samples = Vec::with_capacity(GRID_ROWS * GRID_COLS);
+    for row in 0..GRID_ROWS {
+        for col in 0..GRID_COLS {
+            samples.push(cell_samples(image, scaler, row, col));
+        }
+    }
+    samples
+}
+
+/// Sample the vertical gutter that contains the backpack scrollbar.
+///
+/// Genshin's inventory layout shifts the detail panel slightly between UI
+/// scales, so this deliberately uses a wide band instead of a single pixel.
+/// The selected detail card remains unchanged while the grid scrolls; the
+/// moving scrollbar thumb therefore provides independent movement evidence
+/// even when two filtered pages contain the same artifact icons.
+fn scrollbar_band_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<Vec<u8>> {
+    // Local 1920x1080 and 3840x2160 captures both place the track at base
+    // x≈1288. This narrow gutter excludes the rightmost grid cell (ending near
+    // x=1265) and the detail panel (starting near x=1310). Cover the complete
+    // vertical travel: the thumb can be near y=1000 late in a large inventory.
+    const BAND_RECT: (f64, f64, f64, f64) = (1278.0, 80.0, 22.0, 950.0);
+    let (x, y, width, height) = BAND_RECT;
+    let x0 = scaler.x(x).max(0) as u32;
+    let y0 = scaler.y(y).max(0) as u32;
+    let x1 = (scaler.x(x + width).max(0) as u32).min(image.width());
+    let y1 = (scaler.y(y + height).max(0) as u32).min(image.height());
+    let mut columns = Vec::new();
+    let mut sample_x = x0;
+    while sample_x < x1 {
+        let mut column = Vec::new();
+        let mut sample_y = y0;
+        while sample_y < y1 {
+            column.extend_from_slice(&image.get_pixel(sample_x, sample_y).0);
+            sample_y += 4;
+        }
+        columns.push(column);
+        sample_x += 4;
+    }
+    columns
+}
+
+#[derive(Debug, Clone)]
+struct ScrollVisualState {
+    image: RgbImage,
+    scaler: CoordScaler,
+    grid: Vec<u8>,
+    grid_cells: Vec<Vec<u8>>,
+    scrollbar_band: Vec<Vec<u8>>,
+}
+
+fn scroll_visual_state(image: &RgbImage, scaler: &CoordScaler) -> ScrollVisualState {
+    let grid_cells = visible_grid_cell_samples(image, scaler);
+    ScrollVisualState {
+        image: image.clone(),
+        scaler: scaler.clone(),
+        grid: grid_cells.iter().flatten().copied().collect(),
+        grid_cells,
+        scrollbar_band: scrollbar_band_samples(image, scaler),
+    }
+}
+
+fn nested_samples_compatible(first: &[Vec<u8>], second: &[Vec<u8>]) -> bool {
+    first.len() == second.len()
+        && !first.is_empty()
+        && first
+            .iter()
+            .zip(second.iter())
+            .all(|(left, right)| left.len() == right.len() && !left.is_empty())
+}
+
+fn scroll_state_shapes_compatible(first: &ScrollVisualState, second: &ScrollVisualState) -> bool {
+    first.grid.len() == second.grid.len()
+        && !first.grid.is_empty()
+        && nested_samples_compatible(&first.grid_cells, &second.grid_cells)
+        && first.grid_cells.len() == GRID_ROWS * GRID_COLS
+        && nested_samples_compatible(&first.scrollbar_band, &second.scrollbar_band)
+}
+
+fn scrollbar_band_moved(first: &[Vec<u8>], second: &[Vec<u8>]) -> Option<bool> {
+    if first.len() != second.len() || first.is_empty() {
+        return None;
+    }
+
+    // A scrollbar thumb is narrow but changes a substantial vertical slice.
+    // Requiring two adjacent sampled columns rejects isolated capture noise
+    // without diluting the thumb movement across the much wider search band.
+    const MIN_THUMB_COLUMNS: usize = 2;
+    const MAX_THUMB_COLUMNS: usize = 8;
+    let mut consecutive_changed_columns = 0;
+    let mut changed_runs = Vec::new();
+    for (left, right) in first.iter().zip(second.iter()) {
+        if left.len() != right.len() || left.is_empty() {
+            return None;
+        }
+        if visual_samples_similar(left, right) {
+            if consecutive_changed_columns > 0 {
+                changed_runs.push(consecutive_changed_columns);
+            }
+            consecutive_changed_columns = 0;
+        } else {
+            consecutive_changed_columns += 1;
+        }
+    }
+    if consecutive_changed_columns > 0 {
+        changed_runs.push(consecutive_changed_columns);
+    }
+
+    Some(
+        changed_runs
+            .into_iter()
+            .any(|width| (MIN_THUMB_COLUMNS..=MAX_THUMB_COLUMNS).contains(&width)),
+    )
+}
+
+fn scroll_states_similar(first: &ScrollVisualState, second: &ScrollVisualState) -> Option<bool> {
+    if !scroll_state_shapes_compatible(first, second) {
+        return None;
+    }
+    Some(
+        visual_samples_similar(&first.grid, &second.grid)
+            && !scrollbar_band_moved(&first.scrollbar_band, &second.scrollbar_band)?,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrollAdvance {
+    NoMovement,
+    RequestedRows,
+    PartialOrUncertain,
+}
+
+fn grid_rows_match_after_shift(
+    first: &ScrollVisualState,
+    second: &ScrollVisualState,
+    row_shift: usize,
+) -> bool {
+    if row_shift >= GRID_ROWS {
+        return false;
+    }
+
+    let comparisons = (GRID_ROWS - row_shift) * GRID_COLS;
+    // 49 wheel ticks are calibrated for five rows as a whole. Intermediate
+    // 10/9-tick chunks can land a few pixels either side of a row boundary, so
+    // search a tight residual window while still rejecting materially partial
+    // delivery (for example, half a row).
+    const MAX_ROW_RESIDUAL_BASE: i32 = 18;
+    for residual in -MAX_ROW_RESIDUAL_BASE..=MAX_ROW_RESIDUAL_BASE {
+        let mut matches = 0;
+        for row in 0..(GRID_ROWS - row_shift) {
+            for col in 0..GRID_COLS {
+                let before = &first.grid_cells[(row + row_shift) * GRID_COLS + col];
+                let after = cell_samples_with_y_offset(
+                    &second.image,
+                    &second.scaler,
+                    row,
+                    col,
+                    residual as f64,
+                );
+                if visual_samples_similar(before, &after) {
+                    matches += 1;
+                }
+            }
+        }
+
+        // One selected cell can retain a faint highlight after scrolling.
+        // Requiring three quarters of the physical cells to line up still
+        // identifies a real row overlap while rejecting coincidental icons.
+        if matches * 4 >= comparisons * 3 {
+            return true;
+        }
+    }
+    false
+}
+
+fn classify_scroll_advance(
+    first: &ScrollVisualState,
+    second: &ScrollVisualState,
+    requested_rows: usize,
+) -> Option<ScrollAdvance> {
+    if !scroll_state_shapes_compatible(first, second)
+        || requested_rows == 0
+        || requested_rows > GRID_ROWS
+    {
+        return None;
+    }
+
+    let grid_moved = !visual_samples_similar(&first.grid, &second.grid);
+    let scrollbar_moved = scrollbar_band_moved(&first.scrollbar_band, &second.scrollbar_band)?;
+    if !grid_moved {
+        // The thumb proves that something moved, but not how far. Never use it
+        // by itself to advance logical rows; a completely repeated grid is an
+        // uncertainty rather than permission to rescan physical artifacts.
+        return Some(if scrollbar_moved {
+            ScrollAdvance::PartialOrUncertain
+        } else {
+            ScrollAdvance::NoMovement
+        });
+    }
+
+    if requested_rows == GRID_ROWS {
+        if grid_moved
+            && (1..GRID_ROWS).any(|shift| grid_rows_match_after_shift(first, second, shift))
+        {
+            return Some(ScrollAdvance::PartialOrUncertain);
+        }
+        return Some(ScrollAdvance::RequestedRows);
+    }
+
+    let exact_shift = grid_rows_match_after_shift(first, second, requested_rows);
+    let competing_shift = (0..GRID_ROWS)
+        .filter(|shift| *shift != requested_rows)
+        .any(|shift| grid_rows_match_after_shift(first, second, shift));
+    Some(if exact_shift && !competing_shift {
+        ScrollAdvance::RequestedRows
+    } else {
+        ScrollAdvance::PartialOrUncertain
+    })
+}
+
+fn visual_samples_similar(first: &[u8], second: &[u8]) -> bool {
+    const NOISE_FLOOR: u8 = 6;
+    const CHANGED_BYTE_DIFF: u8 = 16;
+    const MAX_MEAN_EXCESS_DIFF: f64 = 0.5;
+    const MAX_CHANGED_BYTE_RATIO: f64 = 0.02;
+
+    if first.len() != second.len() || first.is_empty() {
+        return false;
+    }
+
+    let mut excess_diff_sum: u64 = 0;
+    let mut changed_bytes: usize = 0;
+    for (&left, &right) in first.iter().zip(second.iter()) {
+        let diff = left.abs_diff(right);
+        excess_diff_sum += diff.saturating_sub(NOISE_FLOOR) as u64;
+        if diff > CHANGED_BYTE_DIFF {
+            changed_bytes += 1;
+        }
+    }
+
+    let len = first.len() as f64;
+    excess_diff_sum as f64 / len <= MAX_MEAN_EXCESS_DIFF
+        && changed_bytes as f64 / len <= MAX_CHANGED_BYTE_RATIO
+}
+
+fn remember_occupied_samples(known: &mut Vec<Vec<u8>>, candidate: &[u8]) {
+    const MAX_KNOWN_OCCUPIED_CELLS: usize = 16;
+
+    if known
+        .iter()
+        .any(|samples| visual_samples_similar(samples, candidate))
+    {
+        return;
+    }
+    if known.len() == MAX_KNOWN_OCCUPIED_CELLS {
+        known.remove(0);
+    }
+    known.push(candidate.to_vec());
+}
+
+fn seeded_first_cell_is_preselected(
+    page_start_idx: usize,
+    page_item_idx: usize,
+    probe_changed_selection: bool,
+) -> bool {
+    page_start_idx == 0 && page_item_idx == 0 && !probe_changed_selection
+}
+
+fn visual_end_is_authoritative(scanned_count: usize, minimum_count: usize) -> bool {
+    scanned_count >= minimum_count
+}
+
+fn parse_item_count_text(text: &str) -> Result<(i32, i32)> {
+    let re = Regex::new(r"(\d+)\s*/\s*(\d+)")?;
+    let caps = re.captures(text).ok_or_else(|| {
+        anyhow!(
+            "无法识别背包物品数量 '{}' / Could not parse backpack item count '{}'",
+            text.trim(),
+            text.trim()
+        )
+    })?;
+    let current: i32 = caps[1].parse().map_err(|e| {
+        anyhow!(
+            "背包当前数量无效 '{}' / Invalid current backpack count '{}': {}",
+            &caps[1],
+            &caps[1],
+            e
+        )
+    })?;
+    let capacity: i32 = caps[2].parse().map_err(|e| {
+        anyhow!(
+            "背包容量无效 '{}' / Invalid backpack capacity '{}': {}",
+            &caps[2],
+            &caps[2],
+            e
+        )
+    })?;
+    if capacity <= 0 || current > capacity {
+        return Err(anyhow!(
+            "背包数量读数无效 {}/{} / Invalid backpack count reading {}/{}",
+            current,
+            capacity,
+            current,
+            capacity
+        ));
+    }
+    Ok((current, capacity))
+}
+
+/// Sample every expected grid cell for the current page.
+fn sample_grid_cells(
     image: &RgbImage,
     scaler: &CoordScaler,
     start_row: usize,
@@ -85,8 +463,8 @@ fn fingerprint_grid_cells(
     total_row: usize,
     scanned_row: usize,
     last_row_col: usize,
-) -> Vec<u64> {
-    let mut fps = Vec::new();
+) -> Vec<Vec<u8>> {
+    let mut samples = Vec::new();
     for r in start_row..start_row + visible_rows {
         let cum_row = scanned_row + (r - start_row);
         let cols = if cum_row == total_row - 1 {
@@ -95,10 +473,10 @@ fn fingerprint_grid_cells(
             GRID_COLS
         };
         for c in 0..cols {
-            fps.push(cell_fingerprint(image, scaler, r, c));
+            samples.push(cell_samples(image, scaler, r, c));
         }
     }
-    fps
+    samples
 }
 
 /// If the "5-star sort by acquired time" filter is active on the artifact tab,
@@ -234,18 +612,29 @@ pub fn open_backpack_to_tab(
         anyhow::bail!("cancelled");
     }
 
-    // Read item count (need a fresh BackpackScanner for the borrow)
-    let (count, max) = {
+    // Read item count (need a fresh BackpackScanner for the borrow). A zero or
+    // unreadable first result gets the same reopen-and-retry treatment; only a
+    // second unreadable header is returned as an error.
+    let first_reading = {
         let bp = BackpackScanner::new(ctrl);
-        bp.read_item_count(count_ocr)?
+        bp.read_item_count(count_ocr)
     };
 
-    if count == 0 {
-        log_info!(
+    match first_reading {
+        Ok((count, max)) if count > 0 => return Ok((count, max)),
+        Ok(_) => log_info!(
             "[backpack] 标签'{}'数量=0，重新打开背包...",
             "[backpack] count=0 on tab '{}', reopening backpack...",
             tab
-        );
+        ),
+        Err(ref e) => log_warn!(
+            "[backpack] 首次物品数量读取失败，重新打开背包后重试: {}",
+            "[backpack] first item-count read failed; reopening the backpack before retrying: {}",
+            e
+        ),
+    }
+
+    {
         if ctrl.check_rmb() {
             anyhow::bail!("cancelled");
         }
@@ -267,10 +656,8 @@ pub fn open_backpack_to_tab(
             }
         }
         let bp = BackpackScanner::new(ctrl);
-        return bp.read_item_count(count_ocr);
+        bp.read_item_count(count_ocr)
     }
-
-    Ok((count, max))
 }
 
 /// What the scan callback should do after processing an event.
@@ -285,7 +672,48 @@ pub enum ScanAction {
     SkipPage,
 }
 
+/// Why grid traversal ended.
+///
+/// Callers must not treat heuristic endings as proof that every requested item
+/// was absent. In particular, filtered scans use an unfiltered item count, so
+/// `EmptyCell` and `UnchangedPage` are expected ways to find the filtered end,
+/// but they are not authoritative enough to label unresolved work `NotFound`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanTermination {
+    /// Every item implied by the supplied count was visited or skipped.
+    Exhausted,
+    /// The callback intentionally requested an early stop.
+    CallbackStop,
+    /// User cancellation interrupted traversal.
+    Cancelled,
+    /// The detail panel did not change after clicking a presumed grid item.
+    EmptyCell,
+    /// Re-focused, repeated scrolling left both the complete visible grid and
+    /// scrollbar gutter unchanged. This is an end-of-list hint, not proof of
+    /// absence for unresolved work.
+    UnchangedPage,
+    /// Required capture evidence was unavailable before traversal completed.
+    CaptureFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanGridOutcome {
+    pub termination: ScanTermination,
+    pub scanned_count: usize,
+    /// Grid positions that could not be fully confirmed.
+    pub missed_count: usize,
+    /// Grid positions intentionally skipped by the callback's page shortcut.
+    pub skipped_count: usize,
+}
+
 /// Events delivered to the scan callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridPageLayout {
+    pub page_start_idx: usize,
+    pub page_items: usize,
+    pub screen_start_row: usize,
+}
+
 pub enum GridEvent {
     /// Fired at the start of each page if `probe_last_cell_per_page` is set.
     /// `scan_grid` has already clicked the bottom-right visible cell, waited
@@ -303,6 +731,8 @@ pub enum GridEvent {
         idx: usize,
         row: usize,
         col: usize,
+        /// Authoritative logical-to-screen mapping for this visible page.
+        layout: GridPageLayout,
         frame: CaptureFrame,
     },
     /// Fired after all items on a page have been processed, before scrolling.
@@ -343,7 +773,7 @@ pub struct BackpackScanConfig {
     /// so the caller can decide whether to skip the page.
     pub probe_last_cell_per_page: bool,
     /// Enable duplicate grid cell detection. When true, at the start of each
-    /// page the grid cells are fingerprinted. If a cell matches the previous
+    /// page the grid cells are sampled. If a cell matches the previous
     /// cell, the panel wait is skipped entirely (for FixedDelay mode) or uses
     /// a shorter timeout (for Fingerprint mode).
     pub detect_grid_duplicates: bool,
@@ -355,6 +785,10 @@ pub struct BackpackScanConfig {
     /// the game's item count display shows total capacity (not filtered
     /// count) after filtering, making `total` unreliable.
     pub detect_empty_cells: bool,
+    /// A visual empty/page-end result before this many positions have been
+    /// visited is recovery evidence, not a valid end. Unfiltered manager scans
+    /// use the observed header count; filtered and ordinary scans use zero.
+    pub min_items_before_visual_end: usize,
 }
 
 /// Panel pool rect — substats + set name region whose pixel sum changes
@@ -363,6 +797,11 @@ pub struct BackpackScanConfig {
 /// Top at y=478 avoids the lock icon area (y=428) whose fade-in animation
 /// would prevent fingerprint stabilization.
 const PANEL_POOL_RECT: (f64, f64, f64, f64) = (1330.0, 478.0, 370.0, 187.0);
+/// Wider, settled detail-panel region used only to confirm whether a timed-out
+/// cell is occupied. It includes the item name, main stat, substats, set, and
+/// state icons, making two different occupied cards much less likely to look
+/// identical than the fast substat-only pool.
+const OCCUPANCY_PANEL_RECT: (f64, f64, f64, f64) = (1310.0, 110.0, 480.0, 860.0);
 
 // NOTE: The full right-panel detail area (covering all OCR + pixel-check
 // regions for both artifacts and weapons, with 10px margin) is approximately:
@@ -395,8 +834,31 @@ fn capture_item_frame(
 /// Delay between scroll ticks (milliseconds).
 const SCROLL_TICK_DELAY_MS: u32 = 10;
 
-/// Wait time after all scroll ticks are sent, for animation to settle.
-const SCROLL_SETTLE_MS: u32 = 200;
+/// Minimum wait after all scroll ticks are sent, for animation to settle.
+const MIN_SCROLL_SETTLE_MS: u64 = 200;
+/// Additional stable-frame interval used before accepting scroll evidence.
+const SCROLL_STABLE_INTERVAL_MS: u32 = 80;
+/// A first unchanged page turn is never terminal; re-focus and send the wheel
+/// input once more before deciding that the inventory cannot advance.
+const SCROLL_RETRY_COUNT: usize = 1;
+
+fn scroll_ticks_for_row_step(step: usize, subtract_page_correction: bool) -> i32 {
+    let cumulative_ticks = |rows: usize| {
+        ((rows as i32 * SCROLL_TICKS_PER_PAGE) + GRID_ROWS as i32 / 2) / GRID_ROWS as i32
+    };
+    let mut ticks = cumulative_ticks(step + 1) - cumulative_ticks(step);
+    if subtract_page_correction && step + 1 == GRID_ROWS {
+        ticks -= 1;
+    }
+    ticks.max(1)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifiedScrollOutcome {
+    AdvancedRows(usize),
+    EndOfList,
+    Cancelled,
+}
 
 /// Reusable backpack grid scanner.
 ///
@@ -408,6 +870,13 @@ pub struct BackpackScanner<'a> {
     ctrl: &'a mut GenshinGameController,
     /// Number of pages scrolled so far (for correction tracking).
     pages_scrolled: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ConfirmedGridCell {
+    row: usize,
+    col: usize,
+    samples: Vec<u8>,
 }
 
 impl<'a> BackpackScanner<'a> {
@@ -452,46 +921,48 @@ impl<'a> BackpackScanner<'a> {
             "[backpack] item count OCR raw text: '{}'",
             text.trim()
         );
-        let re = Regex::new(r"(\d+)\s*/\s*(\d+)")?;
-        if let Some(caps) = re.captures(&text) {
-            let current: i32 = caps[1].parse().unwrap_or(0);
-            let total: i32 = caps[2].parse().unwrap_or(0);
-            Ok((current, total))
-        } else {
-            Ok((0, 0))
-        }
+        parse_item_count_text(&text)
     }
 
     /// Scroll down by a given number of rows using calibrated tick counts.
     ///
     /// Uses SCROLL_TICKS_PER_PAGE (49 ticks for 5 rows) as the base ratio.
     /// Applies correction every SCROLL_CORRECTION_INTERVAL pages.
-    fn scroll_rows(&mut self, row_count: usize) -> bool {
+    fn prepare_scroll_target(&mut self, settle_ms: u64) {
+        let center_x = GRID_FIRST_X + 3.0 * GRID_OFFSET_X;
+        let center_y = GRID_FIRST_Y + 2.0 * GRID_OFFSET_Y;
+        // A click is intentional: after PageCompleted, the detail panel may
+        // still own wheel focus. Capture baselines only after this focus and
+        // hover state has settled so it cannot masquerade as page movement.
+        self.ctrl.click_at(center_x, center_y);
+        utils::sleep(settle_ms.min(u32::MAX as u64) as u32);
+    }
+
+    fn scroll_rows(&mut self, row_count: usize, settle_ms: u64) -> bool {
         if row_count == 0 {
             return true;
         }
-
-        // Move mouse to grid center for consistent scroll behavior
-        let center_x = GRID_FIRST_X + 3.0 * GRID_OFFSET_X;
-        let center_y = GRID_FIRST_Y + 2.0 * GRID_OFFSET_Y;
-        self.ctrl.move_to(center_x, center_y);
-        utils::sleep(30);
 
         // Calculate ticks: SCROLL_TICKS_PER_PAGE ticks per GRID_ROWS rows
         let ticks_per_row = SCROLL_TICKS_PER_PAGE as f64 / GRID_ROWS as f64;
         let mut ticks = (ticks_per_row * row_count as f64).round() as i32;
 
-        // Apply correction for full-page scrolls
+        // Apply correction for the next full-page scroll. The page counter is
+        // committed only after visual confirmation, so a dropped or partial
+        // wheel delivery cannot shift later correction accounting.
         if row_count == GRID_ROWS {
-            self.pages_scrolled += 1;
             if SCROLL_CORRECTION_INTERVAL > 0
-                && self.pages_scrolled % SCROLL_CORRECTION_INTERVAL as u32 == 0
+                && (self.pages_scrolled + 1) % SCROLL_CORRECTION_INTERVAL as u32 == 0
             {
                 ticks -= 1;
             }
         }
 
-        // Send scroll ticks with small delays to avoid overwhelming the game
+        self.send_scroll_ticks(ticks, settle_ms)
+    }
+
+    fn send_scroll_ticks(&mut self, ticks: i32, settle_ms: u64) -> bool {
+        // Send scroll ticks with small delays to avoid overwhelming the game.
         for i in 0..ticks {
             if self.ctrl.check_rmb() {
                 return false;
@@ -503,9 +974,205 @@ impl<'a> BackpackScanner<'a> {
             }
         }
 
-        // Wait for scroll animation to settle
-        utils::sleep(SCROLL_SETTLE_MS);
+        // Honor the configured scroll delay, while retaining the historical
+        // 200 ms minimum that was calibrated for the inventory animation.
+        utils::sleep(settle_ms.max(MIN_SCROLL_SETTLE_MS).min(u32::MAX as u64) as u32);
         true
+    }
+
+    fn record_completed_scroll(&mut self, row_count: usize) {
+        self.pages_scrolled = self
+            .pages_scrolled
+            .saturating_add((row_count / GRID_ROWS) as u32);
+    }
+
+    /// Scroll manager traversal one row at a time and verify the expected
+    /// four-row overlap after every step. This proves distance as well as
+    /// movement, catches fractional delivery, and can preserve a short final
+    /// page without rescanning its overlapping rows under new indices.
+    fn scroll_rows_verified(
+        &mut self,
+        requested_rows: usize,
+        settle_ms: u64,
+    ) -> Result<VerifiedScrollOutcome> {
+        if requested_rows == 0 || requested_rows > GRID_ROWS {
+            return Err(anyhow!(
+                "无效的已验证滚动行数: {} / Invalid verified scroll row count: {}",
+                requested_rows,
+                requested_rows
+            ));
+        }
+
+        self.prepare_scroll_target(settle_ms.max(100));
+        let mut before = self.capture_stable_scroll_state()?;
+        let subtract_page_correction = requested_rows == GRID_ROWS
+            && SCROLL_CORRECTION_INTERVAL > 0
+            && (self.pages_scrolled + 1) % SCROLL_CORRECTION_INTERVAL as u32 == 0;
+        let mut advanced_rows = 0;
+
+        for step in 0..requested_rows {
+            let ticks = scroll_ticks_for_row_step(step, subtract_page_correction);
+            let mut row_advanced = false;
+            for attempt in 0..=SCROLL_RETRY_COUNT {
+                if attempt > 0 {
+                    self.prepare_scroll_target(settle_ms.max(100));
+                    before = self.capture_stable_scroll_state()?;
+                }
+
+                if !self.send_scroll_ticks(ticks, settle_ms) {
+                    return Ok(VerifiedScrollOutcome::Cancelled);
+                }
+                let after = self.capture_stable_scroll_state()?;
+                match classify_scroll_advance(&before, &after, 1) {
+                    Some(ScrollAdvance::RequestedRows) => {
+                        before = after;
+                        advanced_rows += 1;
+                        row_advanced = true;
+                        break;
+                    },
+                    Some(ScrollAdvance::NoMovement) if attempt < SCROLL_RETRY_COUNT => {
+                        log_warn!(
+                            "[backpack] 单行滚动未移动；重新聚焦后重试 (已确认移动={}行)",
+                            "[backpack] A one-row scroll did not move; refocusing and retrying (confirmed rows={})",
+                            advanced_rows
+                        );
+                    },
+                    Some(ScrollAdvance::NoMovement) => {
+                        if advanced_rows == 0 {
+                            return Ok(VerifiedScrollOutcome::EndOfList);
+                        }
+                        self.record_completed_scroll(advanced_rows);
+                        return Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows));
+                    },
+                    Some(ScrollAdvance::PartialOrUncertain) => {
+                        return Err(anyhow!(
+                            "单行滚动只移动了部分距离或距离无法确认 / A one-row scroll moved only partially or its distance could not be confirmed"
+                        ));
+                    },
+                    None => {
+                        return Err(anyhow!(
+                            "翻页前后的截图尺寸不一致 / Pre- and post-scroll captures had incompatible dimensions"
+                        ));
+                    },
+                }
+            }
+
+            if !row_advanced {
+                return Err(anyhow!(
+                    "单行滚动没有可确认的结果 / A one-row scroll had no confirmable outcome"
+                ));
+            }
+        }
+
+        self.record_completed_scroll(advanced_rows);
+        Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows))
+    }
+
+    /// Re-check a cell whose fast substat panel did not change.
+    ///
+    /// A visually matching occupied card is independent evidence that the candidate
+    /// is occupied. Otherwise, temporarily select a confirmed occupied anchor,
+    /// establish a wide-panel baseline, and re-select the candidate. An empty
+    /// cell leaves the anchor panel unchanged; a real artifact changes some
+    /// part of the wider detail panel even when its substat crop was identical.
+    fn confirm_timed_out_cell_occupied(
+        &mut self,
+        row: usize,
+        col: usize,
+        candidate_samples: Option<&[u8]>,
+        occupied_samples: &[Vec<u8>],
+        anchors: &[ConfirmedGridCell],
+        timeout_ms: u64,
+        initial_wait_ms: u64,
+    ) -> Result<Option<bool>> {
+        if candidate_samples.is_some_and(|candidate| {
+            occupied_samples
+                .iter()
+                .any(|occupied| visual_samples_similar(candidate, occupied))
+        }) {
+            return Ok(Some(true));
+        }
+
+        for anchor in anchors.iter().take(3) {
+            self.ctrl.click_at(
+                GRID_FIRST_X + anchor.col as f64 * GRID_OFFSET_X,
+                GRID_FIRST_Y + anchor.row as f64 * GRID_OFFSET_Y,
+            );
+            if initial_wait_ms > 0 {
+                utils::sleep(initial_wait_ms as u32);
+            }
+            self.ctrl.reset_panel_fingerprint();
+            self.ctrl
+                .ensure_panel_stable(OCCUPANCY_PANEL_RECT, timeout_ms.max(100))?;
+
+            self.ctrl.click_at(
+                GRID_FIRST_X + col as f64 * GRID_OFFSET_X,
+                GRID_FIRST_Y + row as f64 * GRID_OFFSET_Y,
+            );
+            let occupancy_result = self.ctrl.wait_until_panel_loaded(
+                OCCUPANCY_PANEL_RECT,
+                timeout_ms,
+                initial_wait_ms,
+            );
+            // wait_until_panel_loaded stores the wide rectangle in the
+            // controller's shared snapshot. Always restore the normal fast
+            // rectangle before the next grid click, even when the wide check
+            // itself failed.
+            let baseline_result = self
+                .ctrl
+                .ensure_panel_stable(PANEL_POOL_RECT, timeout_ms.max(100));
+            let occupied = occupancy_result?;
+            baseline_result?;
+            if occupied {
+                return Ok(Some(true));
+            }
+        }
+
+        if anchors.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(false))
+        }
+    }
+
+    fn capture_game_with_retry(&self) -> Result<RgbImage> {
+        match self.ctrl.capture_game() {
+            Ok(image) => Ok(image),
+            Err(first_error) => {
+                log_warn!(
+                    "[backpack] 网格截图失败，将重试: {}",
+                    "[backpack] grid capture failed, retrying: {}",
+                    first_error
+                );
+                utils::sleep(50);
+                self.ctrl.capture_game()
+            },
+        }
+    }
+
+    fn capture_scroll_state_with_retry(&self) -> Result<ScrollVisualState> {
+        let image = self.capture_game_with_retry()?;
+        Ok(scroll_visual_state(&image, &self.ctrl.scaler))
+    }
+
+    fn capture_stable_scroll_state(&self) -> Result<ScrollVisualState> {
+        let mut previous = self.capture_scroll_state_with_retry()?;
+        for _ in 0..3 {
+            utils::sleep(SCROLL_STABLE_INTERVAL_MS);
+            let current = self.capture_scroll_state_with_retry()?;
+            match scroll_states_similar(&previous, &current) {
+                Some(true) => return Ok(current),
+                Some(false) => previous = current,
+                None => {
+                    return Err(anyhow!(
+                        "翻页确认截图尺寸不一致 / Scroll-confirmation captures had incompatible dimensions"
+                    ));
+                },
+            }
+        }
+        Err(anyhow!(
+            "翻页后的背包画面持续变化，无法确认滚动位置 / Backpack view kept changing after the page turn; scroll position could not be confirmed"
+        ))
     }
 
     /// Main grid traversal with panel-load detection.
@@ -523,7 +1190,8 @@ impl<'a> BackpackScanner<'a> {
         config: &BackpackScanConfig,
         start_at: usize,
         mut callback: F,
-    ) where
+    ) -> ScanGridOutcome
+    where
         F: FnMut(&mut GenshinGameController, GridEvent) -> ScanAction,
     {
         let total_row = (total + GRID_COLS - 1) / GRID_COLS;
@@ -544,25 +1212,46 @@ impl<'a> BackpackScanner<'a> {
         // Click the first grid position to ensure focus
         self.ctrl.click_at(GRID_FIRST_X, GRID_FIRST_Y);
 
-        // When detecting empty cells, set a panel baseline by waiting for the
-        // first item's panel to load. This allows subsequent probe/item clicks
-        // to detect if the panel didn't change (empty cell clicked).
+        // When detecting empty cells, seed a fresh baseline from the first
+        // item's stable panel. Never reuse a snapshot from an earlier scan or
+        // a different rectangle.
         if config.detect_empty_cells {
-            match &config.panel_wait {
-                PanelWaitMode::FixedDelay { delay_ms } => {
-                    utils::sleep(*delay_ms as u32);
-                    let _ = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100);
-                },
+            let (settle_ms, timeout_ms) = match &config.panel_wait {
+                PanelWaitMode::FixedDelay { delay_ms } => (*delay_ms, 100),
                 PanelWaitMode::Fingerprint {
                     timeout_ms,
                     initial_wait_ms,
-                } => {
-                    let _ = self.ctrl.wait_until_panel_loaded(
-                        PANEL_POOL_RECT,
-                        *timeout_ms,
-                        *initial_wait_ms,
+                } => (*initial_wait_ms, *timeout_ms),
+            };
+            if settle_ms > 0 {
+                utils::sleep(settle_ms as u32);
+            }
+            if let Err(first_error) = self
+                .ctrl
+                .ensure_panel_stable(PANEL_POOL_RECT, timeout_ms.max(100))
+            {
+                log_warn!(
+                    "[backpack] 初始面板基线截图失败，将重试: {}",
+                    "[backpack] initial panel-baseline capture failed, retrying: {}",
+                    first_error
+                );
+                utils::sleep(50);
+                if let Err(e) = self
+                    .ctrl
+                    .ensure_panel_stable(PANEL_POOL_RECT, timeout_ms.max(100))
+                {
+                    log_error!(
+                        "[backpack] 无法建立初始面板基线: {}",
+                        "[backpack] could not establish the initial panel baseline: {}",
+                        e
                     );
-                },
+                    return ScanGridOutcome {
+                        termination: ScanTermination::CaptureFailure,
+                        scanned_count: 0,
+                        missed_count: 1,
+                        skipped_count: 0,
+                    };
+                }
             }
         }
 
@@ -570,9 +1259,13 @@ impl<'a> BackpackScanner<'a> {
         let mut scanned_row: usize = 0;
         let mut scanned_count: usize = 0;
         let mut start_row: usize = 0;
-        // Per-page grid cell fingerprints for duplicate detection.
+        let mut termination = ScanTermination::Exhausted;
+        let mut missed_count: usize = 0;
+        let mut skipped_count: usize = 0;
+        let mut occupied_cell_samples: Vec<Vec<u8>> = Vec::new();
+        // Per-page grid cell samples for duplicate and occupancy detection.
         // Index within this vec = position on visible page.
-        let mut page_cell_fps: Vec<u64> = Vec::new();
+        let mut page_cell_samples: Vec<Vec<u8>> = Vec::new();
 
         // Skip pages by scrolling
         if start_at > 0 {
@@ -586,9 +1279,16 @@ impl<'a> BackpackScanner<'a> {
                     skip_rows
                 );
                 let rows_to_scroll = full_pages * GRID_ROWS;
-                if !self.scroll_rows(rows_to_scroll) {
-                    return; // interrupted
+                self.prepare_scroll_target(config.delay_scroll.max(100));
+                if !self.scroll_rows(rows_to_scroll, config.delay_scroll) {
+                    return ScanGridOutcome {
+                        termination: ScanTermination::Cancelled,
+                        scanned_count,
+                        missed_count,
+                        skipped_count,
+                    };
                 }
+                self.record_completed_scroll(rows_to_scroll);
                 scanned_row = rows_to_scroll;
                 scanned_count = rows_to_scroll * GRID_COLS;
                 utils::sleep(200);
@@ -599,11 +1299,8 @@ impl<'a> BackpackScanner<'a> {
             let page_start_idx = scanned_count;
             let mut page_had_items = false;
             let mut skip_page = false;
-            // True when the page probe clicked an empty cell. The first item
-            // on the page was already selected before the probe, so clicking
-            // it again won't change the panel — we must skip empty-cell
-            // detection for that one item to avoid a false positive.
-            let mut probe_found_empty = false;
+            let mut confirmed_probe_cell: Option<(usize, usize)> = None;
+            let mut probe_changed_selection = false;
 
             // --- Optional page probe: click bottom-right new cell, capture, ask callback. ---
             if config.probe_last_cell_per_page {
@@ -620,64 +1317,92 @@ impl<'a> BackpackScanner<'a> {
                 let y = GRID_FIRST_Y + probe_screen_row as f64 * GRID_OFFSET_Y;
                 self.ctrl.click_at(x, y);
                 let mut probe_panel_loaded = true;
+                let mut probe_wait_failed = false;
                 match &config.panel_wait {
                     PanelWaitMode::FixedDelay { delay_ms } => {
                         utils::sleep(*delay_ms as u32);
-                        let _ = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100);
+                        if let Err(e) = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100) {
+                            log_error!(
+                                "[backpack] 探测面板稳定检查失败: {}",
+                                "[backpack] probe panel stability check failed: {}",
+                                e
+                            );
+                            probe_wait_failed = true;
+                        }
                     },
                     PanelWaitMode::Fingerprint {
                         timeout_ms,
                         initial_wait_ms,
                     } => {
-                        probe_panel_loaded = self.ctrl.wait_until_panel_loaded(
+                        match self.ctrl.wait_until_panel_loaded(
                             PANEL_POOL_RECT,
                             *timeout_ms,
                             *initial_wait_ms,
-                        ).unwrap_or(true);
+                        ) {
+                            Ok(loaded) => probe_panel_loaded = loaded,
+                            Err(e) => {
+                                log_error!(
+                                    "[backpack] 探测面板加载检查失败: {}",
+                                    "[backpack] probe panel load check failed: {}",
+                                    e
+                                );
+                                probe_wait_failed = true;
+                            },
+                        }
                     },
                 }
                 // Empty cell detection: if the panel didn't change after
                 // clicking, the probed cell is likely empty. Skip the probe
                 // and scan the page normally.
-                if config.detect_empty_cells && !probe_panel_loaded {
-                    probe_found_empty = true;
+                if probe_wait_failed {
+                    log_warn!(
+                        "[backpack] 无法确认页末探测位置，将禁用本页快速跳过并逐项扫描",
+                        "[backpack] Could not confirm the page probe; disabling the page-skip shortcut and scanning each item"
+                    );
+                } else if config.detect_empty_cells && !probe_panel_loaded {
                     log_debug!(
                         "[backpack] 探测点击后面板未变化，可能为空格子，正常扫描此页 (page_start={})",
                         "[backpack] Panel unchanged after probe click, likely empty cell, scanning page normally (page_start={})",
                         page_start_idx
                     );
                 } else {
-                if config.extra_delay > 0 {
-                    utils::sleep(config.extra_delay as u32);
-                }
-                match self.ctrl.capture_game() {
-                    Ok(image) => {
-                        let action = callback(
-                            &mut *self.ctrl,
-                            GridEvent::PageStarted {
-                                page_start_idx,
-                                last_cell_image: image,
-                            },
-                        );
-                        match action {
-                            ScanAction::Continue => {},
-                            ScanAction::SkipPage => skip_page = true,
-                            ScanAction::Stop => break 'outer,
-                        }
-                    },
-                    Err(e) => {
-                        log_error!(
-                            "[backpack] 探测截图失败: {}",
-                            "[backpack] probe capture failed: {}",
-                            e
-                        );
-                    },
-                }
+                    probe_changed_selection = true;
+                    confirmed_probe_cell = Some((probe_screen_row, probe_col));
+                    if config.extra_delay > 0 {
+                        utils::sleep(config.extra_delay as u32);
+                    }
+                    match self.ctrl.capture_game() {
+                        Ok(image) => {
+                            let action = callback(
+                                &mut *self.ctrl,
+                                GridEvent::PageStarted {
+                                    page_start_idx,
+                                    last_cell_image: image,
+                                },
+                            );
+                            match action {
+                                ScanAction::Continue => {},
+                                ScanAction::SkipPage => skip_page = true,
+                                ScanAction::Stop => {
+                                    termination = ScanTermination::CallbackStop;
+                                    break 'outer;
+                                },
+                            }
+                        },
+                        Err(e) => {
+                            log_error!(
+                                "[backpack] 探测截图失败: {}",
+                                "[backpack] probe capture failed: {}",
+                                e
+                            );
+                        },
+                    }
                 } // else: probe_panel_loaded or !detect_empty_cells
             }
 
             if skip_page {
                 // Advance counters past the skipped page without emitting items.
+                let before_skip = scanned_count;
                 let new_rows = row - start_row;
                 let mut rows_added = 0usize;
                 while rows_added < new_rows {
@@ -694,26 +1419,60 @@ impl<'a> BackpackScanner<'a> {
                     }
                 }
                 scanned_row += rows_added;
+                skipped_count += scanned_count - before_skip;
             } else {
-                let page_items = (total - page_start_idx).min(ITEMS_PER_PAGE);
-                // Duplicate detection: fingerprint grid cells at page start.
+                let visible_page_capacity = (row - start_row) * GRID_COLS;
+                let page_items = (total - page_start_idx).min(visible_page_capacity);
+                // Duplicate and occupancy detection: sample grid cells at page start.
+                page_cell_samples.clear();
                 if config.detect_grid_duplicates {
-                    if let Ok(grid_img) = self.ctrl.capture_game() {
-                        let visible_rows = row - start_row;
-                        page_cell_fps = fingerprint_grid_cells(
-                            &grid_img,
-                            &self.ctrl.scaler,
-                            start_row,
-                            visible_rows,
-                            total_row,
-                            scanned_row,
-                            last_row_col,
-                        );
+                    match self.capture_game_with_retry() {
+                        Ok(grid_img) => {
+                            let visible_rows = row - start_row;
+                            page_cell_samples = sample_grid_cells(
+                                &grid_img,
+                                &self.ctrl.scaler,
+                                start_row,
+                                visible_rows,
+                                total_row,
+                                scanned_row,
+                                last_row_col,
+                            );
+                        },
+                        Err(e) if config.detect_empty_cells => {
+                            log_error!(
+                                "[backpack] 无法获取本页网格占用证据: {}",
+                                "[backpack] Could not capture occupancy evidence for this page: {}",
+                                e
+                            );
+                            missed_count += 1;
+                            termination = ScanTermination::CaptureFailure;
+                            break 'outer;
+                        },
+                        Err(e) => {
+                            log_warn!(
+                                "[backpack] 无法获取本页重复项证据，将使用常规面板等待: {}",
+                                "[backpack] Could not capture duplicate-cell evidence; using normal panel waits: {}",
+                                e
+                            );
+                        },
                     }
                 }
 
                 let mut stopped = false;
                 let mut page_item_idx: usize = 0; // position within this page
+                let mut confirmed_cells: Vec<ConfirmedGridCell> = Vec::new();
+                if let Some((probe_row, probe_col)) = confirmed_probe_cell {
+                    let probe_page_idx = (probe_row - start_row) * GRID_COLS + probe_col;
+                    if let Some(samples) = page_cell_samples.get(probe_page_idx) {
+                        confirmed_cells.push(ConfirmedGridCell {
+                            row: probe_row,
+                            col: probe_col,
+                            samples: samples.clone(),
+                        });
+                        remember_occupied_samples(&mut occupied_cell_samples, samples);
+                    }
+                }
                 'page: for cur_row in start_row..row {
                     let row_item_count = if scanned_row == total_row - 1 {
                         last_row_col
@@ -722,7 +1481,12 @@ impl<'a> BackpackScanner<'a> {
                     };
 
                     for col in 0..row_item_count {
-                        if self.ctrl.check_rmb() || scanned_count >= total {
+                        if self.ctrl.check_rmb() {
+                            termination = ScanTermination::Cancelled;
+                            stopped = true;
+                            break 'page;
+                        }
+                        if scanned_count >= total {
                             stopped = true;
                             break 'page;
                         }
@@ -742,61 +1506,162 @@ impl<'a> BackpackScanner<'a> {
                         // Is this cell a known duplicate of the previous?
                         let is_duplicate = config.detect_grid_duplicates
                             && page_item_idx > 0
-                            && page_item_idx < page_cell_fps.len()
-                            && page_cell_fps[page_item_idx] == page_cell_fps[page_item_idx - 1];
+                            && page_item_idx < page_cell_samples.len()
+                            && visual_samples_similar(
+                                &page_cell_samples[page_item_idx],
+                                &page_cell_samples[page_item_idx - 1],
+                            );
+                        let candidate_samples = page_cell_samples.get(page_item_idx);
 
                         // Wait for panel to load based on configured mode
                         let mut panel_loaded = true;
+                        let mut panel_wait_failed = false;
                         match &config.panel_wait {
                             PanelWaitMode::FixedDelay { delay_ms } => {
                                 if !is_duplicate {
                                     utils::sleep(*delay_ms as u32);
-                                    let _ = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100);
+                                    if let Err(e) =
+                                        self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100)
+                                    {
+                                        log_error!(
+                                            "[backpack] 面板稳定检查失败: {}",
+                                            "[backpack] panel stability check failed: {}",
+                                            e
+                                        );
+                                        panel_wait_failed = true;
+                                    }
                                 }
                             },
                             PanelWaitMode::Fingerprint {
                                 timeout_ms,
                                 initial_wait_ms,
                             } => {
-                                let timeout = if is_duplicate {
+                                let timeout = if is_duplicate && !config.detect_empty_cells {
                                     PANEL_LOAD_FAST_TIMEOUT_MS
                                 } else {
                                     *timeout_ms
                                 };
-                                panel_loaded = self.ctrl.wait_until_panel_loaded(
+                                match self.ctrl.wait_until_panel_loaded(
                                     PANEL_POOL_RECT,
                                     timeout,
                                     *initial_wait_ms,
-                                ).unwrap_or(true);
+                                ) {
+                                    Ok(loaded) => panel_loaded = loaded,
+                                    Err(e) => {
+                                        log_error!(
+                                            "[backpack] 面板加载检查失败: {}",
+                                            "[backpack] panel load check failed: {}",
+                                            e
+                                        );
+                                        panel_wait_failed = true;
+                                    },
+                                }
                             },
                         }
 
-                        // Empty cell detection: if the panel didn't change
-                        // after clicking (and this isn't a known duplicate),
-                        // the cell is likely empty — stop scanning.
+                        if panel_wait_failed {
+                            missed_count += 1;
+                            if config.detect_empty_cells {
+                                termination = ScanTermination::CaptureFailure;
+                                stopped = true;
+                                break 'page;
+                            }
+                            // Non-filtered artifact/weapon scans historically
+                            // proceeded to the item capture after a transient
+                            // wait error. Preserve that behavior: the capture
+                            // itself remains the authoritative fallible step.
+                        }
+
+                        // An unchanged fast panel is only a suspicion. Re-check
+                        // it against independently confirmed occupied cells and
+                        // a much wider detail-panel region before concluding
+                        // that the candidate is empty.
                         //
-                        // Exception: on the first page (pages_scrolled == 0),
-                        // when the probe found an empty cell, the first item
-                        // was already selected before the probe clicked
-                        // elsewhere. Re-clicking it won't change the panel,
-                        // so skip the empty-cell check for that one item
-                        // (page_item_idx == 0). On later pages the first cell
-                        // is NOT pre-selected, so an unchanged panel there
-                        // genuinely means an empty cell.
+                        // Exception: the first cell was selected to seed the
+                        // initial panel baseline. Until a successful page probe
+                        // changes selection, re-clicking that cell cannot change
+                        // the panel and must not be mistaken for an empty slot.
+                        let preselected_first_cell = seeded_first_cell_is_preselected(
+                            page_start_idx,
+                            page_item_idx,
+                            probe_changed_selection,
+                        );
                         if config.detect_empty_cells
                             && !is_duplicate
                             && !panel_loaded
-                            && !(probe_found_empty
-                                && page_item_idx == 0
-                                && self.pages_scrolled == 0)
+                            && !preselected_first_cell
                         {
-                            log_debug!(
-                                "[backpack] 物品扫描面板未变化，检测到空格子，停止扫描 (idx={})",
-                                "[backpack] Panel unchanged during item scan, empty cell detected, stopping (idx={})",
-                                scanned_count
-                            );
-                            stopped = true;
-                            break 'page;
+                            let (timeout_ms, initial_wait_ms) = match &config.panel_wait {
+                                PanelWaitMode::Fingerprint {
+                                    timeout_ms,
+                                    initial_wait_ms,
+                                } => (*timeout_ms, *initial_wait_ms),
+                                PanelWaitMode::FixedDelay { delay_ms } => ((*delay_ms).max(100), 0),
+                            };
+                            match self.confirm_timed_out_cell_occupied(
+                                cur_row,
+                                col,
+                                candidate_samples.map(Vec::as_slice),
+                                &occupied_cell_samples,
+                                &confirmed_cells,
+                                timeout_ms,
+                                initial_wait_ms,
+                            ) {
+                                Ok(Some(true)) => {
+                                    log_debug!(
+                                        "[backpack] 快速面板未变化，但占用确认成功，继续扫描 (idx={})",
+                                        "[backpack] Fast panel was unchanged, but occupancy was confirmed; continuing (idx={})",
+                                        scanned_count
+                                    );
+                                },
+                                Ok(Some(false)) => {
+                                    if !visual_end_is_authoritative(
+                                        scanned_count,
+                                        config.min_items_before_visual_end,
+                                    ) {
+                                        log_warn!(
+                                            "[backpack] 在已读取数量之前出现疑似空格子；跳过该位置并继续扫描 (idx={}, 最低数量={})",
+                                            "[backpack] A suspected empty cell appeared before the observed count; skipping that position and continuing (idx={}, minimum={})",
+                                            scanned_count,
+                                            config.min_items_before_visual_end
+                                        );
+                                        missed_count += 1;
+                                        scanned_count += 1;
+                                        page_item_idx += 1;
+                                        continue;
+                                    }
+                                    log_debug!(
+                                        "[backpack] 多重确认后检测到空格子，停止扫描 (idx={})",
+                                        "[backpack] Empty cell confirmed after independent checks, stopping (idx={})",
+                                        scanned_count
+                                    );
+                                    termination = ScanTermination::EmptyCell;
+                                    stopped = true;
+                                    break 'page;
+                                },
+                                Ok(None) => {
+                                    log_warn!(
+                                        "[backpack] 快速面板未变化且本页尚无独立占用证据；跳过此位置但继续扫描 (idx={})",
+                                        "[backpack] The fast panel was unchanged and this page has no independent occupancy evidence yet; skipping this position but continuing (idx={})",
+                                        scanned_count
+                                    );
+                                    missed_count += 1;
+                                    scanned_count += 1;
+                                    page_item_idx += 1;
+                                    continue;
+                                },
+                                Err(e) => {
+                                    log_error!(
+                                        "[backpack] 空格子确认截图失败: {}",
+                                        "[backpack] empty-cell confirmation capture failed: {}",
+                                        e
+                                    );
+                                    missed_count += 1;
+                                    termination = ScanTermination::CaptureFailure;
+                                    stopped = true;
+                                    break 'page;
+                                },
+                            }
                         }
 
                         // Extra delay after panel ready
@@ -817,11 +1682,29 @@ impl<'a> BackpackScanner<'a> {
                                     "[backpack] capture failed: {}",
                                     e
                                 );
+                                missed_count += 1;
                                 scanned_count += 1;
                                 page_item_idx += 1;
                                 continue;
                             },
                         };
+
+                        if config.detect_empty_cells {
+                            if let Some(samples) = candidate_samples {
+                                if !confirmed_cells
+                                    .iter()
+                                    .any(|cell| visual_samples_similar(&cell.samples, samples))
+                                    && confirmed_cells.len() < 3
+                                {
+                                    confirmed_cells.push(ConfirmedGridCell {
+                                        row: cur_row,
+                                        col,
+                                        samples: samples.clone(),
+                                    });
+                                }
+                                remember_occupied_samples(&mut occupied_cell_samples, samples);
+                            }
+                        }
 
                         page_had_items = true;
                         let action = callback(
@@ -830,6 +1713,11 @@ impl<'a> BackpackScanner<'a> {
                                 idx: scanned_count,
                                 row: cur_row,
                                 col,
+                                layout: GridPageLayout {
+                                    page_start_idx,
+                                    page_items,
+                                    screen_start_row: start_row,
+                                },
                                 frame,
                             },
                         );
@@ -837,6 +1725,7 @@ impl<'a> BackpackScanner<'a> {
                             ScanAction::Continue => {},
                             ScanAction::Stop => {
                                 scanned_count += 1;
+                                termination = ScanTermination::CallbackStop;
                                 stopped = true;
                                 break 'page;
                             },
@@ -859,6 +1748,9 @@ impl<'a> BackpackScanner<'a> {
                     let action =
                         callback(&mut *self.ctrl, GridEvent::PageCompleted { page_start_idx });
                     if matches!(action, ScanAction::Stop) {
+                        if !stopped {
+                            termination = ScanTermination::CallbackStop;
+                        }
                         break 'outer;
                     }
                 }
@@ -871,47 +1763,73 @@ impl<'a> BackpackScanner<'a> {
             // Calculate how many rows remain and scroll
             let remain = total - scanned_count;
             if remain == 0 {
+                termination = ScanTermination::Exhausted;
                 break;
             }
             let remain_row = (remain + GRID_COLS - 1) / GRID_COLS;
             let scroll_row = remain_row.min(GRID_ROWS);
-            start_row = GRID_ROWS - scroll_row;
+            let mut page_advanced = false;
 
-            // Stuck-page detection: fingerprint a few grid cells before
-            // scrolling to compare against post-scroll capture.
-            let pre_scroll_fp = if config.detect_empty_cells {
-                self.ctrl.capture_game().ok().map(|img| {
-                    (
-                        cell_fingerprint(&img, &self.ctrl.scaler, 0, 0),
-                        cell_fingerprint(&img, &self.ctrl.scaler, 2, 4),
-                    )
-                })
+            if config.detect_empty_cells {
+                match self.scroll_rows_verified(scroll_row, config.delay_scroll) {
+                    Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows)) => {
+                        // At the physical bottom the game can expose fewer rows
+                        // than requested. Scan only those newly revealed rows;
+                        // the rows above still belong to the previous page.
+                        start_row = GRID_ROWS - advanced_rows;
+                        if advanced_rows < scroll_row {
+                            log_debug!(
+                                "[backpack] 到达列表末端，本次仅新增{}行（请求{}行）",
+                                "[backpack] Reached the list tail; only {} new rows appeared (requested {})",
+                                advanced_rows,
+                                scroll_row
+                            );
+                        }
+                        page_advanced = true;
+                    },
+                    Ok(VerifiedScrollOutcome::EndOfList) => {},
+                    Ok(VerifiedScrollOutcome::Cancelled) => {
+                        termination = ScanTermination::Cancelled;
+                        break 'outer;
+                    },
+                    Err(e) => {
+                        log_error!(
+                            "[backpack] 无法确认完整翻页距离: {}",
+                            "[backpack] Could not confirm the requested scroll distance: {}",
+                            e
+                        );
+                        missed_count += 1;
+                        termination = ScanTermination::CaptureFailure;
+                        break 'outer;
+                    },
+                }
             } else {
-                None
-            };
-
-            if !self.scroll_rows(scroll_row) {
-                break 'outer;
+                start_row = GRID_ROWS - scroll_row;
+                self.prepare_scroll_target(config.delay_scroll.max(100));
+                if !self.scroll_rows(scroll_row, config.delay_scroll) {
+                    termination = ScanTermination::Cancelled;
+                    break 'outer;
+                }
+                self.record_completed_scroll(scroll_row);
+                page_advanced = true;
             }
 
-            // After scroll: check if the page actually changed.
-            if let Some((fp1_pre, fp2_pre)) = pre_scroll_fp {
-                if let Ok(img) = self.ctrl.capture_game() {
-                    let fp1_post = cell_fingerprint(&img, &self.ctrl.scaler, 0, 0);
-                    let fp2_post = cell_fingerprint(&img, &self.ctrl.scaler, 2, 4);
-                    // Relative tolerance: < 1% difference means same page
-                    let same1 = (fp1_pre.abs_diff(fp1_post) as f64
-                        / fp1_pre.max(1u64) as f64) < 0.01;
-                    let same2 = (fp2_pre.abs_diff(fp2_post) as f64
-                        / fp2_pre.max(1u64) as f64) < 0.01;
-                    if same1 && same2 {
-                        log_warn!(
-                            "[backpack] 翻页后网格未变化，可能已到达最后一页，停止扫描",
-                            "[backpack] Grid unchanged after scroll, likely last page, stopping scan"
-                        );
-                        break 'outer;
-                    }
+            if !page_advanced {
+                if visual_end_is_authoritative(scanned_count, config.min_items_before_visual_end) {
+                    log_info!(
+                        "[backpack] 重新聚焦并重试后网格与滚动条仍未变化，已到达可见列表末尾",
+                        "[backpack] Grid and scrollbar remained unchanged after a focused retry; reached the end of the visible list"
+                    );
+                    termination = ScanTermination::UnchangedPage;
+                } else {
+                    log_error!(
+                        "[backpack] 在已读取数量之前，重新聚焦并重试后仍无法翻页；停止本次扫描以避免遗漏",
+                        "[backpack] The page still did not advance after a focused retry before the observed count; stopping this scan to avoid omissions"
+                    );
+                    missed_count += 1;
+                    termination = ScanTermination::CaptureFailure;
                 }
+                break 'outer;
             }
 
             // Reset fingerprint after scroll — new page means panel content changed.
@@ -923,8 +1841,479 @@ impl<'a> BackpackScanner<'a> {
 
             let action = callback(&mut *self.ctrl, GridEvent::PageScrolled);
             if matches!(action, ScanAction::Stop) {
+                termination = ScanTermination::CallbackStop;
                 break 'outer;
             }
         }
+
+        ScanGridOutcome {
+            termination,
+            scanned_count,
+            missed_count,
+            skipped_count,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use image::Rgb;
+
+    use super::*;
+
+    fn fill_grid_cell(
+        image: &mut RgbImage,
+        scaler: &CoordScaler,
+        row: usize,
+        col: usize,
+        color: Rgb<u8>,
+    ) {
+        let (x0, y0, x1, y1) = cell_sample_bounds(image, scaler, row, col);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                image.put_pixel(x, y, color);
+            }
+        }
+    }
+
+    fn paint_distinct_grid(
+        image: &mut RgbImage,
+        scaler: &CoordScaler,
+        mut cell_id: impl FnMut(usize, usize) -> u8,
+    ) {
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                let id = cell_id(row, col);
+                fill_grid_cell(
+                    image,
+                    scaler,
+                    row,
+                    col,
+                    Rgb([id, id.wrapping_mul(3), id.wrapping_mul(7)]),
+                );
+            }
+        }
+    }
+
+    fn shift_grid_up(first: &RgbImage, scaler: &CoordScaler, displacement_base: f64) -> RgbImage {
+        let mut shifted = RgbImage::from_pixel(first.width(), first.height(), Rgb([100, 100, 100]));
+        let (x0, y0, _, _) = cell_sample_bounds(first, scaler, 0, 0);
+        let (_, _, x1, y1) = cell_sample_bounds(first, scaler, GRID_ROWS - 1, GRID_COLS - 1);
+        let displacement = scaler.y(displacement_base).max(1) as u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if y + displacement < y1 {
+                    shifted.put_pixel(x, y, *first.get_pixel(x, y + displacement));
+                }
+            }
+        }
+        shifted
+    }
+
+    fn paint_repeated_row_texture(image: &mut RgbImage, scaler: &CoordScaler) {
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                let (x0, y0, x1, y1) = cell_sample_bounds(image, scaler, row, col);
+                for y in y0..y1 {
+                    let stripe = ((y - y0) % 53) as u8;
+                    for x in x0..x1 {
+                        image.put_pixel(
+                            x,
+                            y,
+                            Rgb([
+                                stripe.wrapping_add(col as u8 * 17),
+                                stripe.wrapping_mul(3),
+                                stripe.wrapping_mul(7),
+                            ]),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cell_sample_comparison_tolerates_noise_but_detects_layout_changes() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        let mut second = first.clone();
+        let noisy = RgbImage::from_pixel(1920, 1080, Rgb([106, 106, 106]));
+        let (x0, y0, x1, y1) = cell_sample_bounds(&first, &scaler, 0, 0);
+        let midpoint = x0 + (x1 - x0) / 2;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if x < midpoint {
+                    first.put_pixel(x, y, Rgb([180, 20, 20]));
+                    second.put_pixel(x, y, Rgb([20, 20, 180]));
+                } else {
+                    first.put_pixel(x, y, Rgb([20, 20, 180]));
+                    second.put_pixel(x, y, Rgb([180, 20, 20]));
+                }
+            }
+        }
+
+        assert!(visual_samples_similar(
+            &cell_samples(
+                &RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100])),
+                &scaler,
+                0,
+                0,
+            ),
+            &cell_samples(&noisy, &scaler, 0, 0)
+        ));
+        assert!(!visual_samples_similar(
+            &cell_samples(&first, &scaler, 0, 0),
+            &cell_samples(&second, &scaler, 0, 0)
+        ));
+    }
+
+    #[test]
+    fn grid_sample_comparison_tolerates_noise_but_detects_layout_changes() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        let noisy = RgbImage::from_pixel(1920, 1080, Rgb([106, 106, 106]));
+
+        let first_samples = visible_grid_samples(&first, &scaler);
+        assert!(visual_samples_similar(
+            &first_samples,
+            &visible_grid_samples(&first.clone(), &scaler)
+        ));
+        assert!(visual_samples_similar(
+            &first_samples,
+            &visible_grid_samples(&noisy, &scaler)
+        ));
+
+        // Swap two full cell interiors. Aggregate color is unchanged, but the
+        // page layout is materially different.
+        let mut layout_a = first.clone();
+        let mut layout_b = first;
+        let (x0, y0, x1, y1) = cell_sample_bounds(&layout_a, &scaler, 0, 0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                layout_a.put_pixel(x, y, Rgb([180, 20, 20]));
+                layout_b.put_pixel(x, y, Rgb([20, 20, 180]));
+            }
+        }
+        let (x0, y0, x1, y1) = cell_sample_bounds(&layout_a, &scaler, 0, 1);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                layout_a.put_pixel(x, y, Rgb([20, 20, 180]));
+                layout_b.put_pixel(x, y, Rgb([180, 20, 20]));
+            }
+        }
+        assert!(!visual_samples_similar(
+            &visible_grid_samples(&layout_a, &scaler),
+            &visible_grid_samples(&layout_b, &scaler)
+        ));
+    }
+
+    #[test]
+    fn small_scrollbar_movements_distinguish_repeated_pages_at_common_scales() {
+        for (width, height) in [(1920, 1080), (3840, 2160)] {
+            let scaler = CoordScaler::new(width, height);
+            let thumb_frame = |thumb_y: f64| {
+                let mut frame = RgbImage::from_pixel(width, height, Rgb([100, 100, 100]));
+                let x0 = scaler.x(1284.0).max(0) as u32;
+                let x1 = scaler.x(1296.0).max(0) as u32;
+                let y0 = scaler.y(thumb_y).max(0) as u32;
+                let y1 = scaler.y(thumb_y + 36.0).max(0) as u32;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        frame.put_pixel(x, y, Rgb([220, 220, 220]));
+                    }
+                }
+                frame
+            };
+
+            for base_y in [100.0, 500.0, 970.0] {
+                for shift in [4.0, 8.0, 16.0] {
+                    let first = scroll_visual_state(&thumb_frame(base_y), &scaler);
+                    let moved = scroll_visual_state(&thumb_frame(base_y + shift), &scaler);
+                    assert!(visual_samples_similar(&first.grid, &moved.grid));
+                    assert_eq!(
+                        scrollbar_band_moved(&first.scrollbar_band, &moved.scrollbar_band),
+                        Some(true),
+                        "{width}x{height}, y={base_y}, shift={shift}"
+                    );
+                    assert_eq!(
+                        classify_scroll_advance(&first, &moved, GRID_ROWS),
+                        Some(ScrollAdvance::PartialOrUncertain)
+                    );
+                    assert_eq!(
+                        classify_scroll_advance(&first, &moved, 1),
+                        Some(ScrollAdvance::PartialOrUncertain)
+                    );
+                    assert_eq!(scroll_states_similar(&first, &moved), Some(false));
+                }
+            }
+
+            let unchanged = scroll_visual_state(&thumb_frame(100.0), &scaler);
+            assert_eq!(
+                classify_scroll_advance(&unchanged, &unchanged, GRID_ROWS),
+                Some(ScrollAdvance::NoMovement)
+            );
+        }
+    }
+
+    #[test]
+    fn broad_detail_panel_change_is_not_a_scrollbar_thumb() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        let mut panel_changed = first.clone();
+        for y in 100..180 {
+            for x in 1340..1420 {
+                panel_changed.put_pixel(x, y, Rgb([220, 220, 220]));
+            }
+        }
+
+        let first_state = scroll_visual_state(&first, &scaler);
+        let changed_state = scroll_visual_state(&panel_changed, &scaler);
+        assert_eq!(
+            scrollbar_band_moved(&first_state.scrollbar_band, &changed_state.scrollbar_band),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn grid_movement_still_advances_when_scrollbar_pixels_repeat() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        let mut grid_moved = first.clone();
+        paint_distinct_grid(&mut first, &scaler, |row, col| {
+            (row * GRID_COLS + col) as u8
+        });
+        paint_distinct_grid(&mut grid_moved, &scaler, |row, col| {
+            100 + (row * GRID_COLS + col) as u8
+        });
+
+        let first_state = scroll_visual_state(&first, &scaler);
+        let moved_state = scroll_visual_state(&grid_moved, &scaler);
+        assert_eq!(
+            scrollbar_band_moved(&first_state.scrollbar_band, &moved_state.scrollbar_band),
+            Some(false)
+        );
+        assert_eq!(
+            classify_scroll_advance(&first_state, &moved_state, GRID_ROWS),
+            Some(ScrollAdvance::RequestedRows)
+        );
+    }
+
+    #[test]
+    fn partial_row_shifts_are_not_accepted_as_a_full_page() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        paint_distinct_grid(&mut first, &scaler, |row, col| {
+            20 + (row * GRID_COLS + col) as u8
+        });
+
+        for shift in 1..GRID_ROWS {
+            let mut partial_shift = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+            paint_distinct_grid(&mut partial_shift, &scaler, |row, col| {
+                if row + shift < GRID_ROWS {
+                    20 + ((row + shift) * GRID_COLS + col) as u8
+                } else {
+                    180 + ((row + shift - GRID_ROWS) * GRID_COLS + col) as u8
+                }
+            });
+
+            assert_eq!(
+                classify_scroll_advance(
+                    &scroll_visual_state(&first, &scaler),
+                    &scroll_visual_state(&partial_shift, &scaler),
+                    GRID_ROWS,
+                ),
+                Some(ScrollAdvance::PartialOrUncertain),
+                "shift={shift}"
+            );
+
+            if shift == 1 {
+                assert_eq!(
+                    classify_scroll_advance(
+                        &scroll_visual_state(&first, &scaler),
+                        &scroll_visual_state(&partial_shift, &scaler),
+                        1,
+                    ),
+                    Some(ScrollAdvance::RequestedRows)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_row_shift_is_not_accepted_as_one_row() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        paint_distinct_grid(&mut first, &scaler, |row, col| {
+            20 + (row * GRID_COLS + col) as u8
+        });
+        let fractional_shift = shift_grid_up(&first, &scaler, GRID_OFFSET_Y / 2.0);
+
+        assert_eq!(
+            classify_scroll_advance(
+                &scroll_visual_state(&first, &scaler),
+                &scroll_visual_state(&fractional_shift, &scaler),
+                1,
+            ),
+            Some(ScrollAdvance::PartialOrUncertain)
+        );
+    }
+
+    #[test]
+    fn one_row_overlap_tolerates_calibrated_tick_phase_residual() {
+        for (width, height) in [(1920, 1080), (2560, 1440), (3840, 2160)] {
+            let scaler = CoordScaler::new(width, height);
+            let mut first = RgbImage::from_pixel(width, height, Rgb([100, 100, 100]));
+            paint_distinct_grid(&mut first, &scaler, |row, col| {
+                20 + (row * GRID_COLS + col) as u8
+            });
+            let first_state = scroll_visual_state(&first, &scaler);
+
+            for residual in [-13.0, 5.0] {
+                let shifted = shift_grid_up(&first, &scaler, GRID_OFFSET_Y + residual);
+                assert_eq!(
+                    classify_scroll_advance(
+                        &first_state,
+                        &scroll_visual_state(&shifted, &scaler),
+                        1,
+                    ),
+                    Some(ScrollAdvance::RequestedRows),
+                    "resolution={width}x{height}, residual={residual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_rows_do_not_turn_fractional_movement_into_a_full_row() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        paint_repeated_row_texture(&mut first, &scaler);
+        let fractional_shift = shift_grid_up(&first, &scaler, 13.0);
+
+        assert_eq!(
+            classify_scroll_advance(
+                &scroll_visual_state(&first, &scaler),
+                &scroll_visual_state(&fractional_shift, &scaler),
+                1,
+            ),
+            Some(ScrollAdvance::PartialOrUncertain)
+        );
+    }
+
+    #[test]
+    fn two_row_movement_is_not_accepted_as_one_row() {
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
+        paint_distinct_grid(&mut first, &scaler, |row, col| {
+            20 + (row * GRID_COLS + col) as u8
+        });
+        let shifted = shift_grid_up(&first, &scaler, GRID_OFFSET_Y * 2.0);
+
+        assert_eq!(
+            classify_scroll_advance(
+                &scroll_visual_state(&first, &scaler),
+                &scroll_visual_state(&shifted, &scaler),
+                1,
+            ),
+            Some(ScrollAdvance::PartialOrUncertain)
+        );
+    }
+
+    #[test]
+    fn row_step_tick_schedule_preserves_page_calibration() {
+        let ticks: Vec<i32> = (0..GRID_ROWS)
+            .map(|step| scroll_ticks_for_row_step(step, false))
+            .collect();
+        assert_eq!(ticks, vec![10, 10, 9, 10, 10]);
+        assert_eq!(ticks.iter().sum::<i32>(), SCROLL_TICKS_PER_PAGE);
+
+        let corrected: i32 = (0..GRID_ROWS)
+            .map(|step| scroll_ticks_for_row_step(step, true))
+            .sum();
+        assert_eq!(corrected, SCROLL_TICKS_PER_PAGE - 1);
+    }
+
+    #[test]
+    fn incompatible_scroll_samples_are_uncertain() {
+        let state = ScrollVisualState {
+            image: RgbImage::new(1, 1),
+            scaler: CoordScaler::new(1, 1),
+            grid: vec![1, 2, 3],
+            grid_cells: vec![vec![1, 2, 3]; GRID_ROWS * GRID_COLS],
+            scrollbar_band: vec![vec![1, 2, 3], vec![4, 5, 6]],
+        };
+        let mismatched_grid = ScrollVisualState {
+            image: state.image.clone(),
+            scaler: state.scaler.clone(),
+            grid: vec![1, 2],
+            grid_cells: state.grid_cells.clone(),
+            scrollbar_band: state.scrollbar_band.clone(),
+        };
+        let mismatched_band = ScrollVisualState {
+            image: state.image.clone(),
+            scaler: state.scaler.clone(),
+            grid: vec![9, 8, 7],
+            grid_cells: state.grid_cells.clone(),
+            scrollbar_band: vec![vec![1, 2, 3]],
+        };
+        let empty_band_column = ScrollVisualState {
+            image: state.image.clone(),
+            scaler: state.scaler.clone(),
+            grid: state.grid.clone(),
+            grid_cells: state.grid_cells.clone(),
+            scrollbar_band: vec![vec![], vec![4, 5, 6]],
+        };
+        let mismatched_band_column = ScrollVisualState {
+            image: state.image.clone(),
+            scaler: state.scaler.clone(),
+            grid: state.grid.clone(),
+            grid_cells: state.grid_cells.clone(),
+            scrollbar_band: vec![vec![1, 2], vec![4, 5, 6]],
+        };
+
+        assert_eq!(
+            classify_scroll_advance(&state, &mismatched_grid, GRID_ROWS),
+            None
+        );
+        assert_eq!(scroll_states_similar(&state, &mismatched_grid), None);
+        assert_eq!(
+            classify_scroll_advance(&state, &mismatched_band, GRID_ROWS),
+            None
+        );
+        assert_eq!(scroll_states_similar(&state, &mismatched_band), None);
+        assert_eq!(
+            classify_scroll_advance(&state, &empty_band_column, GRID_ROWS),
+            None
+        );
+        assert_eq!(scroll_states_similar(&state, &empty_band_column), None);
+        assert_eq!(
+            classify_scroll_advance(&state, &mismatched_band_column, GRID_ROWS),
+            None
+        );
+        assert_eq!(scroll_states_similar(&state, &mismatched_band_column), None);
+    }
+
+    #[test]
+    fn seeded_first_cell_remains_preselected_without_a_successful_probe() {
+        assert!(seeded_first_cell_is_preselected(0, 0, false));
+        assert!(!seeded_first_cell_is_preselected(0, 0, true));
+        assert!(!seeded_first_cell_is_preselected(0, 1, false));
+        assert!(!seeded_first_cell_is_preselected(ITEMS_PER_PAGE, 0, false));
+    }
+
+    #[test]
+    fn item_count_parser_rejects_unreadable_or_invalid_headers() {
+        assert_eq!(parse_item_count_text("120 / 2100").unwrap(), (120, 2100));
+        assert_eq!(parse_item_count_text("0/2100").unwrap(), (0, 2100));
+        assert!(parse_item_count_text("not a count").is_err());
+        assert!(parse_item_count_text("0/0").is_err());
+        assert!(parse_item_count_text("2101/2100").is_err());
+    }
+
+    #[test]
+    fn visual_end_before_observed_count_requires_recovery() {
+        assert!(!visual_end_is_authoritative(199, 200));
+        assert!(visual_end_is_authoritative(200, 200));
+        assert!(visual_end_is_authoritative(0, 0));
     }
 }

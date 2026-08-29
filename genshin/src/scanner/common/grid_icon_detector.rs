@@ -124,6 +124,8 @@ pub struct GridPageDetection {
     page_start: usize,
     /// Number of items on this page.
     page_items: usize,
+    /// Physical screen row containing the first logical item on this page.
+    screen_start_row: usize,
     /// Icon slot layout mode.
     mode: GridMode,
     /// Cached grid calibration offset (base resolution).
@@ -143,10 +145,22 @@ impl GridPageDetection {
 
     /// Create a new detection accumulator for a page with explicit mode.
     pub fn with_mode(page_start: usize, page_items: usize, mode: GridMode) -> Self {
+        Self::with_layout(page_start, page_items, 0, mode)
+    }
+
+    /// Create a detection accumulator for logical items that begin below the
+    /// top screen row, as happens when the final scroll reveals a short tail.
+    pub fn with_layout(
+        page_start: usize,
+        page_items: usize,
+        screen_start_row: usize,
+        mode: GridMode,
+    ) -> Self {
         Self {
             votes: vec![(0, 0, 0, 0, 0, 0); page_items],
             page_start,
             page_items,
+            screen_start_row,
             mode,
             cached_offset: None,
             cached_cells: Vec::new(),
@@ -169,8 +183,15 @@ impl GridPageDetection {
             },
         };
 
-        let (results, cells) =
-            detect_page_icons(image, scaler, self.page_items, off_x, off_y, self.mode);
+        let (results, cells) = detect_page_icons(
+            image,
+            scaler,
+            self.page_items,
+            self.screen_start_row,
+            off_x,
+            off_y,
+            self.mode,
+        );
         // Cache cell geometry from first pass (positions don't change between passes)
         if self.cached_cells.is_empty() {
             self.cached_cells = cells;
@@ -403,6 +424,7 @@ fn detect_page_icons(
     image: &RgbImage,
     scaler: &CoordScaler,
     page_items: usize,
+    screen_start_row: usize,
     off_x: f64,
     off_y: f64,
     mode: GridMode,
@@ -416,8 +438,7 @@ fn detect_page_icons(
     let mut cells = Vec::with_capacity(page_items);
 
     for i in 0..page_items {
-        let row = i / COLS;
-        let col = i % COLS;
+        let (row, col) = page_cell_position(i, screen_start_row);
 
         // Cell center (1080p base coords) with calibration offset
         let cx = GRID_CX + col as f64 * GRID_OX + off_x;
@@ -493,6 +514,13 @@ fn detect_page_icons(
     }
 
     (results, cells)
+}
+
+fn page_cell_position(page_relative_index: usize, screen_start_row: usize) -> (usize, usize) {
+    (
+        screen_start_row + page_relative_index / COLS,
+        page_relative_index % COLS,
+    )
 }
 
 /// Mean color (R, G, B) of a small crop area around a base-resolution point.
@@ -589,5 +617,13 @@ mod tests {
             normalize_artifact_grid_y_offset(MAX_POSITIVE_ARTIFACT_GRID_OFF_Y),
             MAX_POSITIVE_ARTIFACT_GRID_OFF_Y
         );
+    }
+
+    #[test]
+    fn short_tail_indices_start_on_the_authoritative_screen_row() {
+        assert_eq!(page_cell_position(0, 3), (3, 0));
+        assert_eq!(page_cell_position(7, 3), (3, 7));
+        assert_eq!(page_cell_position(8, 3), (4, 0));
+        assert_eq!(page_cell_position(15, 3), (4, 7));
     }
 }

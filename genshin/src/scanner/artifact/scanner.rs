@@ -1728,6 +1728,7 @@ impl GoodArtifactScanner {
             probe_last_cell_per_page: false,
             detect_grid_duplicates: false,
             detect_empty_cells: false,
+            min_items_before_visual_end: 0,
         };
 
         // Per-page 3-pass voting state (shared across artifact / weapon / manager).

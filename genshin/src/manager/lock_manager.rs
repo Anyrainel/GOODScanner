@@ -10,6 +10,7 @@ use crate::scanner::artifact::GoodArtifactScanner;
 use crate::scanner::common::annotator;
 use crate::scanner::common::backpack_scanner::{
     self, BackpackScanConfig, BackpackScanner, GridEvent, PanelWaitMode, ScanAction,
+    ScanTermination,
 };
 use crate::scanner::common::capture_frame::CaptureFrame;
 use crate::scanner::common::constants::*;
@@ -66,6 +67,121 @@ struct PageLockAction {
 enum ConfirmedLockDecision {
     AlreadyCorrect,
     Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetFilterPlan {
+    /// Every requested set was selected; the filtered grid is safe to use.
+    UseFiltered,
+    /// No filter is active, so scan the complete inventory.
+    ScanAll,
+    /// A subset was selected. Clear it before scanning to avoid omitting the
+    /// targets whose sets were not found in the filter panel.
+    ClearAndScanAll,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InventoryScanBounds {
+    observed_count: usize,
+    scan_limit: usize,
+    count_confirmed: bool,
+    capacity_confirmed: bool,
+}
+
+/// Traversal budget, not a claimed game capacity. The scanner normally stops
+/// at independently confirmed empty/page-end evidence long before this limit.
+/// Keeping a generous floor prevents a clipped denominator OCR (for example,
+/// 210 instead of 2100) from truncating a real inventory.
+const MANAGER_SCAN_BUDGET: usize = 10_000;
+
+fn inventory_scan_bounds(readings: &[(i32, i32)]) -> InventoryScanBounds {
+    let observed_count = readings
+        .iter()
+        .map(|(count, _)| (*count).max(0) as usize)
+        .max()
+        .unwrap_or(0);
+    let valid_reading =
+        |(count, capacity): &(i32, i32)| *count >= 0 && *capacity > 0 && *count <= *capacity;
+    let max_capacity = readings
+        .iter()
+        .filter(|reading| valid_reading(reading))
+        .map(|(_, capacity)| *capacity as usize)
+        .max();
+    let scan_limit = if observed_count == 0 {
+        0
+    } else {
+        // Count/capacity OCR only provides a lower-bound clue. A fixed budget
+        // avoids both clipped early bounds and corrupt unbounded traversals.
+        MANAGER_SCAN_BUDGET
+    };
+    let capacity_consistent = readings.len() >= 2
+        && max_capacity.is_some()
+        && readings
+            .iter()
+            .all(|reading| valid_reading(reading) && Some(reading.1 as usize) == max_capacity);
+    let count_confirmed = readings.len() >= 2
+        && capacity_consistent
+        && readings
+            .iter()
+            .all(|(count, _)| (*count).max(0) as usize == observed_count);
+    let capacity_confirmed = observed_count > 0 && capacity_consistent;
+
+    InventoryScanBounds {
+        observed_count,
+        scan_limit,
+        count_confirmed,
+        capacity_confirmed,
+    }
+}
+
+fn set_filter_plan(requested_count: usize, selected_count: usize) -> SetFilterPlan {
+    if requested_count > 0 && selected_count == requested_count {
+        SetFilterPlan::UseFiltered
+    } else if selected_count == 0 {
+        SetFilterPlan::ScanAll
+    } else {
+        SetFilterPlan::ClearAndScanAll
+    }
+}
+
+fn should_stop_at_rarity_boundary(below_min_rarity: bool, level: i32) -> bool {
+    // scan_level_only uses -1 as its OCR-failure sentinel. Only a confirmed
+    // level 0 item proves that the sorted >=4-star section has ended.
+    below_min_rarity && level == 0
+}
+
+fn repeated_rarity_below_min(first: Option<i32>, second: Option<i32>, min_rarity: i32) -> bool {
+    first.is_some_and(|rarity| rarity < min_rarity)
+        && second.is_some_and(|rarity| rarity < min_rarity)
+}
+
+fn visual_end_floor(observed_count: usize, filter_applied: bool) -> usize {
+    // After a set filter is applied, the header continues to show the
+    // unfiltered inventory count. It is not a lower bound for the visible
+    // list; verified empty cells or a repeatedly immovable page are its end.
+    if filter_applied {
+        0
+    } else {
+        observed_count
+    }
+}
+
+fn scan_proves_absence(
+    termination: ScanTermination,
+    rarity_stopped: bool,
+    missed_count: usize,
+    skipped_count: usize,
+    identity_failure_count: usize,
+    scanned_count: usize,
+    observed_count: usize,
+    filtered_or_uncertain: bool,
+) -> bool {
+    let reached_observed_count = scanned_count >= observed_count;
+    missed_count == 0
+        && skipped_count == 0
+        && identity_failure_count == 0
+        && !filtered_or_uncertain
+        && (rarity_stopped || (reached_observed_count && termination == ScanTermination::EmptyCell))
 }
 
 fn decide_confirmed_lock_action(
@@ -226,7 +342,7 @@ impl LockManager {
         let mut matched: HashMap<usize, usize> = HashMap::new();
 
         // --- Open backpack to artifact tab (same as artifact scanner) ---
-        let total = match backpack_scanner::open_backpack_to_tab(
+        let first_count_reading = match backpack_scanner::open_backpack_to_tab(
             ctrl,
             "artifact",
             1200,
@@ -235,14 +351,7 @@ impl LockManager {
             false,
             dump_images,
         ) {
-            Ok((count, _max)) => {
-                log_debug!(
-                    "[lock_manager] 共 {} 个圣遗物",
-                    "[lock_manager] {} artifacts total",
-                    count
-                );
-                count as usize
-            },
+            Ok(reading) => reading,
             Err(e) => {
                 log_warn!(
                     "无法读取圣遗物数量: {}",
@@ -265,8 +374,73 @@ impl LockManager {
             },
         };
 
+        // A filter left active by an earlier equip/manage workflow must not
+        // hide artifacts from an ordinary full scan. The involved-set path
+        // clears the selector inside apply_backpack_multi_set_filter instead.
+        if !filter_involved_sets {
+            log_debug!(
+                "[lock_manager] 扫描完整背包前清除已有套装筛选",
+                "[lock_manager] Clearing any existing set filter before the full inventory scan"
+            );
+            let filter_ocr_guard = substat_pool.get();
+            if let Err(e) = ui_actions::clear_backpack_set_filter(
+                ctrl,
+                &self.mappings,
+                &filter_ocr_guard as &dyn yas::ocr::ImageToText<image::RgbImage>,
+            ) {
+                log_warn!(
+                    "[lock_manager] 无法确认已有套装筛选已清除: {}",
+                    "[lock_manager] Could not verify that the existing set filter was cleared: {}",
+                    e
+                );
+                return (
+                    make_error_results(
+                        targets,
+                        InstructionStatus::UiError,
+                        "无法确认套装筛选已清除，因此没有开始锁定扫描。请保持圣遗物背包打开后重试。",
+                        "The set filter could not be verified as cleared, so the lock scan was not started. Keep the artifact inventory open and retry.",
+                        Some(&e),
+                    ),
+                    scanned_artifacts,
+                    HashMap::new(),
+                    false,
+                    0,
+                );
+            }
+        }
+
+        // One clipped or transient OCR read must not become the traversal
+        // boundary. Re-read the header after filter normalization, then use a
+        // bounded internal traversal budget; empty-cell/page-end evidence
+        // determines the actual end in normal inventories.
+        yas::utils::sleep(100);
+        let mut count_readings = vec![first_count_reading];
+        {
+            let bp = BackpackScanner::new(ctrl);
+            match bp.read_item_count(&count_ocr_guard) {
+                Ok(reading) => count_readings.push(reading),
+                Err(e) => log_warn!(
+                    "[lock_manager] 第二次圣遗物数量读取失败，将使用保守扫描上限: {}",
+                    "[lock_manager] The second artifact-count read failed; using a conservative scan limit: {}",
+                    e
+                ),
+            }
+        }
+        let scan_bounds = inventory_scan_bounds(&count_readings);
+        let total = scan_bounds.scan_limit;
+        let progress_total = scan_bounds.observed_count.max(1);
+        log_debug!(
+            "[lock_manager] 圣遗物数量读数={:?}, 当前数量={}, 扫描上限={}, 容量已确认={}",
+            "[lock_manager] Artifact count readings={:?}, observed count={}, scan limit={}, capacity confirmed={}",
+            count_readings,
+            scan_bounds.observed_count,
+            total,
+            scan_bounds.capacity_confirmed
+        );
+
         let mut filter_applied = false;
-        if total > 0 && filter_involved_sets {
+        let mut filter_state_uncertain = false;
+        if scan_bounds.observed_count > 0 && filter_involved_sets {
             let mut involved_sets: Vec<&str> = Vec::new();
             for target in targets {
                 let set_key = target.artifact.set_key.as_str();
@@ -277,6 +451,7 @@ impl LockManager {
 
             if !involved_sets.is_empty() {
                 let filter_ocr_guard = substat_pool.get();
+                let requested_count = involved_sets.len();
                 match ui_actions::apply_backpack_multi_set_filter(
                     ctrl,
                     &involved_sets,
@@ -284,26 +459,63 @@ impl LockManager {
                     &filter_ocr_guard as &dyn yas::ocr::ImageToText<image::RgbImage>,
                     dump_images,
                 ) {
-                    Ok(selected_count) if selected_count > 0 => {
-                        filter_applied = true;
-                        // 筛选后游戏UI右上角仍显示总容量而非筛选后数量，
-                        // 无法通过 read_item_count 获取准确的筛选后数量。
-                        // 保留筛选前的 total（总容量），依赖 detect_empty_cells
-                        // 机制在扫描遇到空格子时自动停止。
-                        log_info!(
-                            "[lock_manager] 已筛选{}个相关套装（筛选后UI显示总容量，将依赖空格子检测停止扫描，total={}）",
-                            "[lock_manager] Filtered {} involved sets (UI shows total capacity after filter; will rely on empty-cell detection, total={})",
-                            selected_count,
-                            total
-                        );
-                    },
-                    Ok(_) => {
-                        log_warn!(
-                            "[lock_manager] 未能应用相关套装筛选，将继续扫描完整圣遗物列表",
-                            "[lock_manager] Could not apply involved set filter, scanning full artifact list"
-                        );
+                    Ok(selected_count) => match set_filter_plan(requested_count, selected_count) {
+                        SetFilterPlan::UseFiltered => {
+                            filter_applied = true;
+                            // 筛选后游戏UI右上角仍显示总容量而非筛选后数量，
+                            // 无法通过 read_item_count 获取准确的筛选后数量。
+                            // 保留筛选前的 total（总容量），依赖 detect_empty_cells
+                            // 机制在扫描遇到空格子时自动停止。
+                            log_info!(
+                                "[lock_manager] 已筛选全部{}个相关套装（筛选后UI显示总容量，将依赖空格子检测停止扫描，total={}）",
+                                "[lock_manager] Filtered all {} involved sets (UI shows total capacity after filter; will rely on empty-cell detection, total={})",
+                                selected_count,
+                                total
+                            );
+                        },
+                        SetFilterPlan::ScanAll => {
+                            filter_state_uncertain = true;
+                            log_warn!(
+                                "[lock_manager] 未能应用相关套装筛选，将继续扫描完整圣遗物列表",
+                                "[lock_manager] Could not apply involved set filter, scanning full artifact list"
+                            );
+                        },
+                        SetFilterPlan::ClearAndScanAll => {
+                            filter_state_uncertain = true;
+                            log_warn!(
+                                "[lock_manager] 仅筛选到{}/{}个相关套装；为避免遗漏目标，将清除部分筛选并扫描完整圣遗物列表",
+                                "[lock_manager] Only {}/{} involved sets were filtered; clearing the partial filter and scanning the full artifact list to avoid omitted targets",
+                                selected_count,
+                                requested_count
+                            );
+                            if let Err(e) = ui_actions::clear_backpack_set_filter(
+                                ctrl,
+                                &self.mappings,
+                                &filter_ocr_guard as &dyn yas::ocr::ImageToText<image::RgbImage>,
+                            ) {
+                                log_warn!(
+                                    "[lock_manager] 无法确认部分套装筛选已清除: {}",
+                                    "[lock_manager] Could not verify that the partial set filter was cleared: {}",
+                                    e
+                                );
+                                return (
+                                    make_error_results(
+                                        targets,
+                                        InstructionStatus::UiError,
+                                        "只应用了部分套装筛选，且无法确认这些筛选已清除，因此没有开始锁定扫描。请重试。",
+                                        "Only part of the set filter was applied, and it could not be verified as cleared, so the lock scan was not started. Retry the operation.",
+                                        Some(&e),
+                                    ),
+                                    scanned_artifacts,
+                                    HashMap::new(),
+                                    false,
+                                    0,
+                                );
+                            }
+                        },
                     },
                     Err(e) => {
+                        filter_state_uncertain = true;
                         log_warn!(
                             "[lock_manager] 套装筛选失败，将继续扫描完整圣遗物列表: {}",
                             "[lock_manager] Set filter failed, scanning full artifact list: {}",
@@ -314,24 +526,26 @@ impl LockManager {
             }
         }
 
-        if total == 0 {
+        if scan_bounds.observed_count == 0 {
             log_info!(
                 "[lock_manager] 背包中没有圣遗物，无法执行锁定操作",
                 "[lock_manager] No artifacts in backpack, cannot perform lock operations"
             );
+            let (status, hint_zh, hint_en) = if scan_bounds.count_confirmed {
+                (
+                    InstructionStatus::NotFound,
+                    "背包中没有可匹配的圣遗物，因此无法执行锁定变更。",
+                    "There are no matching artifacts in the inventory, so the lock change could not be made.",
+                )
+            } else {
+                (
+                    InstructionStatus::OcrError,
+                    "无法确认背包中的圣遗物数量，因此没有执行锁定变更。请保持圣遗物背包打开后重试。",
+                    "The artifact count could not be confirmed, so no lock changes were made. Keep the artifact inventory open and retry.",
+                )
+            };
             return (
-                targets
-                    .iter()
-                    .map(|t| {
-                        InstructionResult::failure(
-                            t.result_id.clone(),
-                            InstructionStatus::NotFound,
-                            "背包中没有可匹配的圣遗物，因此无法执行锁定变更。",
-                            "There are no matching artifacts in the inventory, so the lock change could not be made.",
-                            None,
-                        )
-                    })
-                    .collect(),
+                make_error_results(targets, status, hint_zh, hint_en, None),
                 scanned_artifacts,
                 HashMap::new(),
                 true, // empty backpack is a "complete" scan
@@ -383,8 +597,16 @@ impl LockManager {
             detail_panel_rect: None,
             grid_vote_schedule: GridVoteSchedule::for_page,
             probe_last_cell_per_page: max_target_level >= 0,
-            detect_grid_duplicates: false,
-            detect_empty_cells: filter_applied,
+            // The OCR count is only a hint; traverse up to the confirmed
+            // inventory capacity and use visual occupancy/page-end evidence to
+            // find the real boundary. This also handles filtered inventories,
+            // whose header keeps showing the unfiltered count.
+            detect_grid_duplicates: true,
+            detect_empty_cells: true,
+            min_items_before_visual_end: visual_end_floor(
+                scan_bounds.observed_count,
+                filter_applied,
+            ),
         };
 
         // Clones for closure capture.
@@ -393,14 +615,14 @@ impl LockManager {
         let mappings_cb = self.mappings.clone();
         let scaler_cb = scaler.clone();
 
-        // Fire an initial (0, total) tick so polling clients immediately see
-        // the real backpack size rather than the upfront target-count estimate.
+        // Report the observed inventory count to clients; the much larger
+        // traversal budget is an internal safeguard against clipped OCR.
         if let Some(pf) = progress_fn {
-            pf(0, total, "", "锁定变更 / Lock changes");
+            pf(0, progress_total, "", "锁定变更 / Lock changes");
         }
 
         let mut bp = BackpackScanner::new(ctrl);
-        bp.scan_grid(total, &scan_config, 0, |ctrl_cb, event| {
+        let scan_outcome = bp.scan_grid(total, &scan_config, 0, |ctrl_cb, event| {
             match event {
                 // ---------------- Page probe: level-based skip ----------------
                 GridEvent::PageStarted { page_start_idx, last_cell_image } => {
@@ -442,12 +664,23 @@ impl LockManager {
                 }
 
                 // ---------------- Per-item voting + OCR dispatch ----------------
-                GridEvent::Item { idx, row, col, frame } => {
+                GridEvent::Item {
+                    idx,
+                    row,
+                    col,
+                    layout,
+                    frame,
+                } => {
                     // Tick progress per item as we walk through the backpack.
                     // Reports (idx+1, backpack_total) so clients see a real
                     // moving number rather than 0/N until the very end.
                     if let Some(pf) = progress_fn {
-                        pf(idx + 1, total, "", "锁定变更 / Lock changes");
+                        pf(
+                            (idx + 1).min(progress_total),
+                            progress_total,
+                            "",
+                            "锁定变更 / Lock changes",
+                        );
                     }
 
                     // Dispatch helper: spawns a rayon OCR task for one ready item.
@@ -474,12 +707,49 @@ impl LockManager {
                     // Rarity early-stop: low-rarity lv0 artifact → stop after
                     // current page finishes (PageCompleted will drain and
                     // process toggles for whatever was dispatched so far).
-                    if pixel_utils::artifact_below_min_rarity(&frame, &scaler_cb, 4)
-                        && {
-                            let guard = ocr_pool_cb.get();
-                            GoodArtifactScanner::scan_level_only(&guard, &frame, &scaler_cb) <= 0
+                    let first_rarity = pixel_utils::detect_artifact_rarity_evidence(
+                        &frame,
+                        &scaler_cb,
+                    );
+                    let mut settled_frame = None;
+                    let below_min_rarity = if first_rarity.is_some_and(|rarity| rarity < 4) {
+                        // The star row is outside the fast panel fingerprint.
+                        // Confirm the same low-rarity geometry in a later full
+                        // capture so a partially rendered 4/5-star row cannot
+                        // become an authoritative inventory boundary.
+                        yas::utils::sleep(100);
+                        match ctrl_cb.capture_game() {
+                            Ok(image) => {
+                                let second_frame = CaptureFrame::full(image);
+                                let second_rarity = pixel_utils::detect_artifact_rarity_evidence(
+                                    &second_frame,
+                                    &scaler_cb,
+                                );
+                                let confirmed =
+                                    repeated_rarity_below_min(first_rarity, second_rarity, 4);
+                                settled_frame = Some(second_frame);
+                                confirmed
+                            },
+                            Err(e) => {
+                                log_warn!(
+                                    "[lock_manager] 无法复核低稀有度外观，将继续扫描: {}",
+                                    "[lock_manager] Could not confirm the low-rarity appearance; continuing the scan: {}",
+                                    e
+                                );
+                                false
+                            },
                         }
-                    {
+                    } else {
+                        false
+                    };
+                    let evidence_frame = settled_frame.as_ref().unwrap_or(&frame);
+                    let boundary_level = if below_min_rarity {
+                        let guard = ocr_pool_cb.get();
+                        GoodArtifactScanner::scan_level_only(&guard, evidence_frame, &scaler_cb)
+                    } else {
+                        -1
+                    };
+                    if should_stop_at_rarity_boundary(below_min_rarity, boundary_level) {
                         log_debug!(
                             "[lock_manager] 检测到低稀有度lv0圣遗物，当前页后停止",
                             "[lock_manager] Low rarity lv0 artifact detected, stopping after current page"
@@ -491,8 +761,23 @@ impl LockManager {
                         dispatch(ready, &mut dispatched);
                         return ScanAction::Stop;
                     }
+                    if below_min_rarity && boundary_level < 0 {
+                        log_warn!(
+                            "[lock_manager] 检测到低稀有度外观，但等级OCR失败；无法确认边界，将继续扫描",
+                            "[lock_manager] The item looked low-rarity but level OCR failed; the inventory boundary is unconfirmed, continuing the scan"
+                        );
+                    }
 
-                    let ready = voter.record(idx, frame, (row, col), &scaler_cb);
+                    let frame = settled_frame.unwrap_or(frame);
+                    let ready = voter.record_with_layout(
+                        idx,
+                        frame,
+                        (row, col),
+                        &scaler_cb,
+                        layout.page_start_idx,
+                        layout.page_items,
+                        layout.screen_start_row,
+                    );
                     dispatch(ready, &mut dispatched);
 
                     ScanAction::Continue
@@ -531,6 +816,15 @@ impl LockManager {
                         page_results.push(r);
                     }
                     page_results.sort_by_key(|(idx, _, _, _)| *idx);
+                    let missing_worker_results = dispatched.saturating_sub(page_results.len());
+                    if missing_worker_results > 0 {
+                        ocr_failures += missing_worker_results;
+                        log_warn!(
+                            "[lock_manager] {}个已派发的OCR任务未返回结果；本次扫描不能证明目标不存在",
+                            "[lock_manager] {} dispatched OCR tasks returned no result; this scan cannot prove target absence",
+                            missing_worker_results
+                        );
+                    }
                     dispatched = 0;
 
                     // Match against unmatched targets. Grid lock state is only
@@ -816,30 +1110,53 @@ impl LockManager {
                 }
             }
         });
+        drop(bp);
 
         if dump_images {
             annotator::flush();
         }
 
-        // Compute scan completeness. Rarity early-stop counts as a complete
-        // scan (we've visited every ≥4★ artifact). When stop_on_all_matched is
-        // enabled, pages may be skipped (level-based page-skip) and the scan
-        // stops early — the scanned data is always partial, so never produce
-        // a snapshot.
-        let scanned_all = scanned_artifacts
-            .last()
-            .map(|(idx, _)| *idx + 1 >= total)
-            .unwrap_or(false);
-        let scan_complete =
-            !stop_on_all_matched && (scanned_all || rarity_stopped) && !ctrl.is_cancelled();
+        let solver_failures = scanned_artifacts
+            .iter()
+            .filter(|(_, artifact)| artifact.total_rolls.is_none())
+            .count();
+        let identity_failures = ocr_failures + solver_failures;
 
-        // Mark unmatched targets.
+        log_debug!(
+            "[lock_manager] 扫描结束: {:?}, 已遍历位置={}, 未确认位置={}, 快速跳过位置={}, 识别失败={}",
+            "[lock_manager] Scan ended: {:?}, traversed positions={}, unconfirmed positions={}, shortcut-skipped positions={}, identity failures={}",
+            scan_outcome.termination,
+            scan_outcome.scanned_count,
+            scan_outcome.missed_count,
+            scan_outcome.skipped_count,
+            identity_failures
+        );
+
+        // Compute scan completeness from traversal, rather than the last OCR
+        // success. Rarity early-stop counts as complete because a confirmed
+        // low-rarity level-0 item is the logical end of the managed >=4★
+        // section. Fast mode remains partial because it may skip pages.
+        let absence_confirmed = scan_proves_absence(
+            scan_outcome.termination,
+            rarity_stopped,
+            scan_outcome.missed_count,
+            scan_outcome.skipped_count,
+            identity_failures,
+            scan_outcome.scanned_count,
+            scan_bounds.observed_count,
+            filter_applied || filter_state_uncertain,
+        );
+        let scan_complete = !stop_on_all_matched && absence_confirmed && !ctrl.is_cancelled();
+
+        // Mark unmatched targets. Heuristic filtered endings and callback
+        // interruptions cannot prove absence, so they must never be reported
+        // as NotFound.
         let was_cancelled = ctrl.is_cancelled();
         for target in targets {
             if !results.contains_key(&target.result_id) {
                 results.insert(
                     target.result_id.clone(),
-                    if was_cancelled {
+                    if was_cancelled || scan_outcome.termination == ScanTermination::Cancelled {
                         InstructionResult::failure(
                             target.result_id.clone(),
                             InstructionStatus::Aborted,
@@ -847,12 +1164,20 @@ impl LockManager {
                             "This lock operation was stopped by the user.",
                             None,
                         )
-                    } else {
+                    } else if absence_confirmed {
                         InstructionResult::failure(
                             target.result_id.clone(),
                             InstructionStatus::NotFound,
                             "未能在背包中找到匹配的圣遗物。请确认背包内容和目标数据仍然一致。",
                             "A matching artifact was not found in the inventory. Check that the inventory and target data are still in sync.",
+                            None,
+                        )
+                    } else {
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::Skipped,
+                            "扫描在确认所有相关背包位置前结束，因此没有把此圣遗物标记为不存在。请保持圣遗物背包打开后重试；若已启用套装筛选，请关闭后再试。",
+                            "The scan ended before every relevant inventory position was confirmed, so this artifact was not marked missing. Keep the artifact inventory open and retry; if set filtering is enabled, turn it off for the retry.",
                             None,
                         )
                     },
@@ -901,5 +1226,188 @@ mod tests {
 
         assert_eq!(decision, ConfirmedLockDecision::AlreadyCorrect);
         assert!(grid_disagrees);
+    }
+
+    #[test]
+    fn set_filter_must_be_all_or_nothing() {
+        assert_eq!(set_filter_plan(3, 3), SetFilterPlan::UseFiltered);
+        assert_eq!(set_filter_plan(3, 2), SetFilterPlan::ClearAndScanAll);
+        assert_eq!(set_filter_plan(3, 0), SetFilterPlan::ScanAll);
+        assert_eq!(set_filter_plan(0, 0), SetFilterPlan::ScanAll);
+    }
+
+    #[test]
+    fn scan_bound_uses_capacity_instead_of_a_possibly_clipped_count() {
+        let bounds = inventory_scan_bounds(&[(200, 2100), (200, 2100)]);
+        assert_eq!(bounds.observed_count, 200);
+        assert_eq!(bounds.scan_limit, MANAGER_SCAN_BUDGET);
+        assert!(bounds.count_confirmed);
+        assert!(bounds.capacity_confirmed);
+
+        let mismatched = inventory_scan_bounds(&[(1200, 2100), (200, 2100)]);
+        assert_eq!(mismatched.scan_limit, MANAGER_SCAN_BUDGET);
+        assert!(!mismatched.count_confirmed);
+        assert!(mismatched.capacity_confirmed);
+
+        let clipped_capacity = inventory_scan_bounds(&[(120, 210), (120, 210)]);
+        assert_eq!(clipped_capacity.scan_limit, MANAGER_SCAN_BUDGET);
+
+        let oversized = inventory_scan_bounds(&[(99_999, 99_999), (99_999, 99_999)]);
+        assert_eq!(oversized.scan_limit, MANAGER_SCAN_BUDGET);
+
+        let unreadable = inventory_scan_bounds(&[(0, 0), (0, 0)]);
+        assert_eq!(unreadable.scan_limit, 0);
+        assert!(!unreadable.count_confirmed);
+        assert!(!unreadable.capacity_confirmed);
+
+        let confirmed_empty = inventory_scan_bounds(&[(0, 2100), (0, 2100)]);
+        assert_eq!(confirmed_empty.scan_limit, 0);
+        assert!(confirmed_empty.count_confirmed);
+        assert!(!confirmed_empty.capacity_confirmed);
+    }
+
+    #[test]
+    fn filtered_header_count_is_not_a_visual_end_floor() {
+        assert_eq!(visual_end_floor(2497, true), 0);
+        assert_eq!(visual_end_floor(2497, false), 2497);
+    }
+
+    #[test]
+    fn rarity_boundary_requires_a_confirmed_level_zero() {
+        assert!(should_stop_at_rarity_boundary(true, 0));
+        assert!(!should_stop_at_rarity_boundary(true, -1));
+        assert!(!should_stop_at_rarity_boundary(true, 1));
+        assert!(!should_stop_at_rarity_boundary(false, 0));
+
+        assert!(repeated_rarity_below_min(Some(3), Some(3), 4));
+        assert!(!repeated_rarity_below_min(Some(3), Some(4), 4));
+        assert!(!repeated_rarity_below_min(Some(3), None, 4));
+    }
+
+    #[test]
+    fn only_complete_and_reliable_scan_evidence_proves_target_absence() {
+        // Reaching an OCR-derived traversal limit alone is never authoritative.
+        assert!(!scan_proves_absence(
+            ScanTermination::Exhausted,
+            false,
+            0,
+            0,
+            0,
+            10_000,
+            200,
+            false,
+        ));
+        assert!(scan_proves_absence(
+            ScanTermination::CallbackStop,
+            true,
+            0,
+            0,
+            0,
+            0,
+            200,
+            false,
+        ));
+        assert!(scan_proves_absence(
+            ScanTermination::EmptyCell,
+            false,
+            0,
+            0,
+            0,
+            200,
+            200,
+            false,
+        ));
+        // Even after a focused retry, an immovable page is not independent
+        // proof that unresolved targets do not exist.
+        assert!(!scan_proves_absence(
+            ScanTermination::UnchangedPage,
+            false,
+            0,
+            0,
+            0,
+            200,
+            200,
+            false,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::UnchangedPage,
+            false,
+            0,
+            0,
+            0,
+            200,
+            200,
+            true,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::EmptyCell,
+            false,
+            0,
+            0,
+            0,
+            199,
+            200,
+            false,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::UnchangedPage,
+            false,
+            0,
+            0,
+            0,
+            199,
+            200,
+            false,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::EmptyCell,
+            false,
+            1,
+            0,
+            0,
+            200,
+            200,
+            false,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::EmptyCell,
+            false,
+            0,
+            1,
+            0,
+            200,
+            200,
+            false,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::EmptyCell,
+            false,
+            0,
+            0,
+            1,
+            200,
+            200,
+            false,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::EmptyCell,
+            false,
+            0,
+            0,
+            0,
+            200,
+            200,
+            true,
+        ));
+        assert!(!scan_proves_absence(
+            ScanTermination::CaptureFailure,
+            false,
+            1,
+            0,
+            0,
+            200,
+            200,
+            false,
+        ));
     }
 }

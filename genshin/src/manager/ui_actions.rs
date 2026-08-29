@@ -18,7 +18,7 @@ use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::debug_dump::{next_filter_dump_index, DumpCollector};
 use crate::scanner::common::equip_parser;
 use crate::scanner::common::fuzzy_match::fuzzy_match_map;
-use crate::scanner::common::game_controller::GenshinGameController;
+use crate::scanner::common::game_controller::{panel_frames_similar, GenshinGameController};
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{GoodArtifact, GoodSubStat};
 use crate::scanner::common::roll_solver::{self, OcrCandidate, SolverInput};
@@ -875,8 +875,64 @@ fn open_backpack_set_filter_panel(ctrl: &mut GenshinGameController) {
 }
 
 fn clear_open_filter_panel(ctrl: &mut GenshinGameController) {
+    ctrl.move_to(FILTER_CLEAR_X, FILTER_CLEAR_Y);
+    yas::utils::sleep(d_cell());
     ctrl.click_at(FILTER_CLEAR_X, FILTER_CLEAR_Y);
     yas::utils::sleep(d_action() * 3 / 8);
+}
+
+fn clear_open_filter_panel_verified(ctrl: &mut GenshinGameController) -> Result<()> {
+    let mut previous: Option<RgbImage> = None;
+    for _ in 0..3 {
+        clear_open_filter_panel(ctrl);
+        let current = ctrl.capture_game()?;
+        if previous
+            .as_ref()
+            .is_some_and(|prior| panel_frames_similar(prior.as_raw(), current.as_raw()))
+        {
+            return Ok(());
+        }
+        previous = Some(current);
+    }
+    bail!(
+        "清除套装筛选后界面未进入稳定状态 / The set-filter panel did not reach a stable cleared state"
+    )
+}
+
+fn confirm_open_filter_panel(ctrl: &mut GenshinGameController) {
+    ctrl.move_to(FILTER_CONFIRM_X, FILTER_CONFIRM_Y);
+    yas::utils::sleep(d_cell());
+    ctrl.click_at(FILTER_CONFIRM_X, FILTER_CONFIRM_Y);
+    yas::utils::sleep(d_action());
+}
+
+fn confirm_and_close_backpack_filter(ctrl: &mut GenshinGameController) {
+    confirm_open_filter_panel(ctrl);
+    ctrl.key_press(enigo::Key::Escape);
+    yas::utils::sleep(d_action());
+}
+
+fn recognizable_filter_row_count(hits: &[FilterOcrHit]) -> usize {
+    hits.iter().filter(|hit| hit.matched_key.is_some()).count()
+}
+
+const MIN_RECOGNIZABLE_FILTER_ROWS: usize = 2;
+
+fn confirm_and_close_backpack_filter_verified(
+    ctrl: &mut GenshinGameController,
+    mappings: &MappingManager,
+    ocr: &dyn ImageToText<RgbImage>,
+) -> Result<()> {
+    for _ in 0..2 {
+        confirm_open_filter_panel(ctrl);
+        let hits = scan_visible_filter_rows(ctrl, ocr, mappings)?;
+        if recognizable_filter_row_count(&hits) < MIN_RECOGNIZABLE_FILTER_ROWS {
+            ctrl.key_press(enigo::Key::Escape);
+            yas::utils::sleep(d_action());
+            return Ok(());
+        }
+    }
+    bail!("确认后套装筛选面板仍然打开 / The set-filter panel remained open after confirmation")
 }
 
 /// Apply a set filter in the artifact selection view to narrow the grid.
@@ -991,14 +1047,45 @@ pub fn apply_backpack_multi_set_filter(
 ) -> Result<usize> {
     open_backpack_set_filter_panel(ctrl);
     clear_open_filter_panel(ctrl);
-    let found_count =
-        apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr, dump_images)?;
-    if found_count > 0 {
-        yas::utils::sleep(500);
-        ctrl.key_press(enigo::Key::Escape);
-        yas::utils::sleep(500);
+    match apply_multi_set_filter_in_open_panel(ctrl, set_keys, mappings, ocr, dump_images) {
+        Ok(found_count) => {
+            // The inner set selector was confirmed or closed by the helper.
+            // Escape closes the backpack's outer filter popover in either case.
+            yas::utils::sleep(500);
+            ctrl.key_press(enigo::Key::Escape);
+            yas::utils::sleep(500);
+            Ok(found_count)
+        },
+        Err(e) => {
+            // OCR can fail after some rows were already selected. Never leave
+            // that partial filter or the selector UI active for the scan.
+            clear_open_filter_panel(ctrl);
+            confirm_and_close_backpack_filter(ctrl);
+            Err(e)
+        },
     }
-    Ok(found_count)
+}
+
+/// Clear every set filter from the artifact backpack.
+///
+/// This uses the backpack-specific entry path, clears the shared set selector,
+/// confirms it, then closes the outer filter popover. Callers use this before
+/// falling back to a full scan when only part of a requested multi-set filter
+/// could be selected.
+pub fn clear_backpack_set_filter(
+    ctrl: &mut GenshinGameController,
+    mappings: &MappingManager,
+    ocr: &dyn ImageToText<RgbImage>,
+) -> Result<()> {
+    open_backpack_set_filter_panel(ctrl);
+    let hits = scan_visible_filter_rows(ctrl, ocr, mappings)?;
+    let recognizable_rows = recognizable_filter_row_count(&hits);
+    if recognizable_rows < MIN_RECOGNIZABLE_FILTER_ROWS {
+        bail!("未能确认套装筛选面板已打开 / Could not verify that the set-filter panel opened");
+    }
+    clear_open_filter_panel_verified(ctrl)?;
+    confirm_and_close_backpack_filter_verified(ctrl, mappings, ocr)?;
+    Ok(())
 }
 
 fn apply_multi_set_filter_in_open_panel(
@@ -1022,6 +1109,9 @@ fn apply_multi_set_filter_in_open_panel(
 
     if cn_targets.is_empty() {
         log_info!("[set_filter] 无有效套装映射", "no valid set mappings found");
+        // The panel was cleared before mapping resolution. Confirm that clear
+        // state instead of closing and potentially restoring an old filter.
+        confirm_open_filter_panel(ctrl);
         return Ok(0);
     }
 
@@ -1117,16 +1207,16 @@ fn apply_multi_set_filter_in_open_panel(
     }
 
     if found_count > 0 {
-        ctrl.click_at(FILTER_CONFIRM_X, FILTER_CONFIRM_Y);
-        yas::utils::sleep(d_action());
+        confirm_open_filter_panel(ctrl);
         log_info!(
             "[set_filter] 已应用{}个套装筛选",
             "applied {} set filters",
             found_count
         );
     } else {
-        ctrl.click_at(FILTER_CLOSE_X, FILTER_CLOSE_Y);
-        yas::utils::sleep(d_action() * 5 / 8);
+        // Apply the already-cleared state so callers that fall back to a full
+        // scan cannot inherit a stale user filter.
+        confirm_open_filter_panel(ctrl);
     }
 
     Ok(found_count)

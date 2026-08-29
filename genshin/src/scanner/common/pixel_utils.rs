@@ -290,8 +290,11 @@ pub fn detect_weapon_rarity(image: &RgbImage, scaler: &CoordScaler) -> i32 {
     rarity
 }
 
-/// Detect artifact rarity from star pixels (window coords via [`CaptureFrame`]).
-pub fn detect_artifact_rarity(frame: &CaptureFrame, scaler: &CoordScaler) -> i32 {
+/// Detect artifact rarity only when at least one star pixel is present.
+///
+/// This is used for scan-boundary decisions where a blank or unsettled frame
+/// must remain unknown instead of being treated as a three-star artifact.
+pub fn detect_artifact_rarity_evidence(frame: &CaptureFrame, scaler: &CoordScaler) -> Option<i32> {
     use super::constants::STAR_Y;
 
     let y_offsets: [f64; 3] = [-2.0, 0.0, 2.0];
@@ -312,19 +315,28 @@ pub fn detect_artifact_rarity(frame: &CaptureFrame, scaler: &CoordScaler) -> i32
         }
     }
 
-    let rarity = if rightmost_star_x > 1470.0 {
-        5
+    if rightmost_star_x > 1470.0 {
+        Some(5)
     } else if rightmost_star_x > 1430.0 {
-        4
-    } else if star_pixel_count > 0 {
-        3
+        Some(4)
+    } else if rightmost_star_x > 1400.0 && star_pixel_count >= 3 {
+        Some(3)
     } else if is_star_yellow_frame(frame, scaler, 1485.0, STAR_Y) {
-        5
+        Some(5)
     } else if is_star_yellow_frame(frame, scaler, 1450.0, STAR_Y) {
-        4
+        Some(4)
     } else {
-        3
-    };
+        None
+    }
+}
+
+/// Detect artifact rarity from star pixels (window coords via [`CaptureFrame`]).
+pub fn detect_artifact_rarity(frame: &CaptureFrame, scaler: &CoordScaler) -> i32 {
+    use super::constants::STAR_Y;
+
+    // Preserve the scanner's historical fallback for normal identification;
+    // boundary-sensitive callers use detect_artifact_rarity_evidence instead.
+    let rarity = detect_artifact_rarity_evidence(frame, scaler).unwrap_or(3);
 
     let star_pos = match rarity {
         5 => (1485.0, STAR_Y),
@@ -765,10 +777,30 @@ mod tests {
     fn test_artifact_rarity_blank_image() {
         let image = make_1080p_image();
         let scaler = make_1080p_scaler();
+        assert_eq!(
+            detect_artifact_rarity_evidence(&CaptureFrame::full(image.clone()), &scaler),
+            None
+        );
         // Blank image has no star pixels; fallback single-pixel checks also fail → returns 3
         assert_eq!(
             detect_artifact_rarity(&CaptureFrame::full(image), &scaler),
             3
+        );
+    }
+
+    #[test]
+    fn test_artifact_rarity_partial_star_row_is_not_boundary_evidence() {
+        let mut image = make_1080p_image();
+        let yellow = image::Rgb([200, 180, 50]);
+        for y in 370..=374 {
+            for x in (1350..=1398).step_by(2) {
+                image.put_pixel(x, y, yellow);
+            }
+        }
+        let scaler = make_1080p_scaler();
+        assert_eq!(
+            detect_artifact_rarity_evidence(&CaptureFrame::full(image), &scaler),
+            None
         );
     }
 

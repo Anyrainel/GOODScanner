@@ -57,7 +57,7 @@ const PANEL_FRAME_MAX_CHANGED_BYTE_RATIO: f64 = 0.01;
 /// Byte deltas above this are counted by the ratio guard.
 const PANEL_FRAME_CHANGED_BYTE_DIFF: u8 = 16;
 
-fn panel_frames_similar(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn panel_frames_similar(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

@@ -656,6 +656,7 @@ impl GoodWeaponScanner {
             probe_last_cell_per_page: false,
             detect_grid_duplicates: true,
             detect_empty_cells: false,
+            min_items_before_visual_end: 0,
         };
 
         let total = total_count as usize;
