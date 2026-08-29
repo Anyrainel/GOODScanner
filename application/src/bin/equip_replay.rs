@@ -9,6 +9,7 @@
 ///
 /// Right-click to cancel at any time.
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use log::info;
@@ -17,11 +18,13 @@ use yas::cancel::CancelToken;
 use yas::game_info::GameInfoBuilder;
 use yas::utils;
 
-use genshin_scanner::cli::load_config_or_default;
+use genshin_scanner::cli::{capture_method_for_hdr_mode, load_config_or_default};
 use genshin_scanner::manager::models::EquipRequest;
 use genshin_scanner::manager::orchestrator::ArtifactManager;
+use genshin_scanner::manager::ui_actions::{self, ManagerDelays};
 use genshin_scanner::scanner::common::game_controller::GenshinGameController;
 use genshin_scanner::scanner::common::mappings::MappingManager;
+use genshin_scanner::scanner::common::ocr_pool::SharedOcrPools;
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -55,6 +58,7 @@ fn main() -> Result<()> {
         info!("  {}: {} artifacts", name, count);
     }
 
+    let user_config = load_config_or_default();
     let game_info = GameInfoBuilder::new()
         .add_local_window_name("\u{539F}\u{795E}")
         .add_local_window_name("Genshin Impact")
@@ -67,16 +71,30 @@ fn main() -> Result<()> {
         game_info.window.height
     );
 
-    let mut ctrl = GenshinGameController::new(game_info, Default::default())?;
-    let user_config = load_config_or_default();
+    let capture_method = capture_method_for_hdr_mode(user_config.hdr_mode);
+    let mut ctrl = GenshinGameController::new(game_info, capture_method)?;
+    ui_actions::set_manager_delays(ManagerDelays {
+        transition: user_config.mgr_transition_delay,
+        action: user_config.mgr_action_delay,
+        cell: user_config.mgr_cell_delay,
+        scroll: user_config.mgr_scroll_delay,
+    });
     let overrides = user_config.to_overrides();
     let mappings = MappingManager::new(&overrides)?;
+    let pools = Arc::new(SharedOcrPools::new(
+        user_config.resolve_ocr_pool_config(),
+        "ppocrv4",
+        "ppocrv4",
+    )?);
 
     let manager = ArtifactManager::new(
-        std::sync::Arc::new(mappings),
-        "ppocrv4".to_string(),
-        "ppocrv4".to_string(),
+        Arc::new(mappings),
+        pools,
+        user_config.artifact_extra_delay,
         user_config.inv_scroll_delay,
+        user_config.artifact_panel_timeout,
+        user_config.artifact_initial_wait,
+        false,
         false,
         dump_images,
     );

@@ -14,6 +14,7 @@
 //! --reprocess mode: re-runs artifact scanner on dumped full.png images, outputs GOOD JSON.
 
 use anyhow::Result;
+use genshin_scanner::scanner::common::capture_frame::CaptureFrame;
 use genshin_scanner::scanner::common::equip_parser;
 use genshin_scanner::scanner::common::fuzzy_match::fuzzy_match_map;
 use genshin_scanner::scanner::common::mappings::{MappingManager, NameOverrides};
@@ -728,9 +729,10 @@ fn run_reprocess(images_dir: &str, output_path: Option<&str>) -> Result<()> {
     for (idx, path) in &entries {
         let img = image::open(path)?.to_rgb8();
         let scaler = CoordScaler::new(img.width(), img.height());
+        let frame = CaptureFrame::full(img);
 
         match GoodArtifactScanner::scan_single_artifact(
-            &*v5, &*v4, &img, &scaler, &regions, &mappings, &config, *idx, None,
+            &*v5, &*v4, &frame, &scaler, &regions, &mappings, &config, *idx, None,
         ) {
             Ok(ArtifactScanResult::Artifact(artifact)) => {
                 artifacts.push(artifact);

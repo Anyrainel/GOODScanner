@@ -15,7 +15,7 @@ use anyhow::Result;
 use image::RgbImage;
 use log::info;
 
-use yas::game_info::{GameInfo, GameInfoBuilder};
+use yas::game_info::GameInfoBuilder;
 use yas::utils;
 
 use genshin_scanner::scanner::common::game_controller::GenshinGameController;

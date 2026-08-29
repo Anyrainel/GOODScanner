@@ -175,8 +175,11 @@ fn main() -> Result<()> {
     for (i, artifact) in test_artifacts.iter().enumerate() {
         check_cancel!(ctrl);
 
-        // Clean grid debug dir before each attempt
-        clean_debug_dir(&grid_debug_dir);
+        // Clean grid debug dir before each attempt unless the caller wants to
+        // retain every diagnostic capture across iterations.
+        if !keep_images {
+            clean_debug_dir(&grid_debug_dir);
+        }
 
         info!(
             "--- [{}/{}] set={} slot={} lv={} main={} ---",
@@ -227,8 +230,10 @@ fn main() -> Result<()> {
                 artifact.level
             );
             passed += 1;
-            // Clean debug dir on success
-            clean_debug_dir(&grid_debug_dir);
+            // Clean debug dir on success unless diagnostics were requested.
+            if !keep_images {
+                clean_debug_dir(&grid_debug_dir);
+            }
         } else {
             // === FAILURE: save all debug images and OCR details, then exit ===
             error!(
