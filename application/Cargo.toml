@@ -10,6 +10,9 @@ test = false
 default = []
 dev-tools = []
 capture = ["genshin_scanner/capture", "dep:tokio"]
+# Internal test-only feature. build.rs honors this only for debug artifacts so
+# pure formatting tests can run without the application's elevation manifest.
+test-as-invoker = []
 
 [dependencies]
 anyhow = "1.0"
@@ -26,6 +29,7 @@ eframe = { version = "0.30", default-features = false, features = ["glow", "defa
 rfd = "0.15"
 tokio = { version = "1", features = ["sync"], optional = true }
 rand = "0.8"
+crossbeam-queue = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
 version = "0.59.0"
@@ -67,6 +71,11 @@ required-features = ["dev-tools"]
 name = "set_filter_test"
 path = "src/bin/set_filter_test.rs"
 required-features = ["dev-tools"]
+
+[[test]]
+name = "ui_error"
+path = "tests/ui_error.rs"
+required-features = ["test-as-invoker"]
 
 [[bin]]
 name = "equip_replay"

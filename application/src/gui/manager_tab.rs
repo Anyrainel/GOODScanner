@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use eframe::egui;
 
-use super::state::{AppState, RefreshState, TaskStatus, UiText};
+use super::state::{AppState, TaskStatus, UiError, UiText};
 use super::widgets;
 use super::worker::{self, TaskHandle};
 
@@ -11,13 +11,26 @@ pub fn show(
     state: &mut AppState,
     server_handle: &mut Option<TaskHandle>,
     scan_running: bool,
+    restart_required: bool,
 ) {
     let is_server_running = server_handle.as_ref().map_or(false, |h| !h.is_finished());
+    let native_failure = server_handle.as_ref().and_then(TaskHandle::native_failure);
     let l = state.lang;
 
     // === Action bar (always visible at top) ===
     ui.add_space(4.0);
-    action_bar(ui, state, server_handle, is_server_running, scan_running);
+    action_bar(
+        ui,
+        state,
+        server_handle,
+        is_server_running,
+        scan_running,
+        restart_required,
+        native_failure.as_ref(),
+    );
+    if restart_required {
+        return;
+    }
     ui.colored_label(
         egui::Color32::from_rgb(120, 120, 120),
         if is_server_running {
@@ -122,32 +135,16 @@ pub fn show(
                         });
 
                         ui.add_space(4.0);
-                        state.mappings_refresh.poll();
-                        ui.horizontal(|ui| {
-                            let busy = state.mappings_refresh.is_running();
-                            if ui.add_enabled(!busy, egui::Button::new(
-                                l.t("刷新游戏数据", "Refresh game data"),
-                            )).clicked() {
-                                state.mappings_refresh = RefreshState::Running(
-                                    std::thread::spawn(|| {
-                                        genshin_scanner::scanner::common::mappings::force_refresh()
-                                            .map_err(|e| UiText::from_bilingual(format!("{}", e)))
-                                    }),
-                                );
-                            }
-                            match &state.mappings_refresh {
-                                RefreshState::Ok => {
-                                    ui.colored_label(egui::Color32::GREEN, "OK");
-                                }
-                                RefreshState::Failed(msg) => {
-                                    ui.colored_label(egui::Color32::RED, msg.text(l));
-                                }
-                                RefreshState::Running(_) => {
-                                    ui.spinner();
-                                }
-                                RefreshState::Idle => {}
-                            }
-                        });
+                        widgets::game_data_refresh_control(
+                            ui,
+                            l,
+                            &mut state.mappings_refresh,
+                            UiText::new(
+                                "无法刷新管理器使用的游戏数据。请检查网络连接，然后重试。",
+                                "The manager's game data could not be refreshed. Check the network connection, then retry.",
+                            ),
+                            genshin_scanner::scanner::common::mappings::force_refresh,
+                        );
                     });
                 });
         });
@@ -160,15 +157,36 @@ fn action_bar(
     server_handle: &mut Option<TaskHandle>,
     is_server_running: bool,
     scan_running: bool,
+    restart_required: bool,
+    native_failure: Option<&UiError>,
 ) {
     let l = state.lang;
+
+    if restart_required {
+        if let Some(error) = native_failure {
+            widgets::error_card(ui, l, error);
+        } else {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 90, 90),
+                l.t(
+                    "另一个任务发生了底层崩溃。请先复制该任务中的完整错误，然后重启本程序。",
+                    "Another task had a low-level crash. Copy its full error, then restart this application.",
+                ),
+            );
+        }
+        ui.add_enabled(
+            false,
+            egui::Button::new(l.t("需重启程序", "Restart required")),
+        );
+        return;
+    }
 
     if scan_running && !is_server_running {
         ui.colored_label(
             egui::Color32::from_rgb(255, 200, 50),
             l.t(
-                "扫描正在进行，请等待完成",
-                "Scan is running. Please wait for it to finish.",
+                "另一个游戏数据任务正在运行，请等待完成",
+                "Another game-data task is running. Please wait for it to finish.",
             ),
         );
     }
@@ -195,8 +213,9 @@ fn action_bar(
                     h.stop();
                 }
             }
-            let status = state.server_status.lock().unwrap().clone();
-            if let TaskStatus::Running(ref phase) = status {
+            if let Some(TaskStatus::Running(ref phase)) =
+                worker::try_task_status(&state.server_status)
+            {
                 ui.spinner();
                 ui.label(phase.text(l));
             } else {
@@ -215,8 +234,15 @@ fn action_bar(
                 .clicked()
             {
                 if let Err(e) = super::privilege::ensure_admin_for_action() {
-                    *state.server_status.lock().unwrap() =
-                        TaskStatus::Failed(UiText::from_bilingual(format!("{}", e)));
+                    *state.server_status.lock().unwrap() = TaskStatus::Failed(
+                        UiError::from_anyhow(
+                            UiText::new(
+                                "管理器需要管理员权限才能控制游戏。请以管理员身份重新启动程序。",
+                                "The manager needs administrator access to control the game. Restart the application as administrator.",
+                            ),
+                            &e,
+                        ),
+                    );
                 } else {
                     state.server_enabled.store(true, Ordering::Relaxed);
                     // Force immediate save before starting server
@@ -229,12 +255,11 @@ fn action_bar(
 
     // Status from previous run
     if !is_server_running {
-        let status = state.server_status.lock().unwrap().clone();
-        match status {
-            TaskStatus::Failed(ref msg) => {
-                ui.colored_label(egui::Color32::from_rgb(255, 100, 100), msg.text(l));
+        match worker::try_task_status(&state.server_status) {
+            Some(TaskStatus::Failed(ref error)) => {
+                widgets::error_card(ui, l, error);
             },
-            TaskStatus::Completed(ref msg) => {
+            Some(TaskStatus::Completed(ref msg)) => {
                 ui.colored_label(egui::Color32::from_rgb(150, 150, 150), msg.text(l));
             },
             _ => {},

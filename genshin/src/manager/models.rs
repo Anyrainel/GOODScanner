@@ -90,6 +90,66 @@ pub struct ManageResult {
 pub struct InstructionResult {
     pub id: String,
     pub status: InstructionStatus,
+    /// Localized, user-readable failure explanation followed by the complete
+    /// technical diagnostic when one is available. Omitted for successful
+    /// outcomes so existing clients remain compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl InstructionResult {
+    /// Build a result that does not need an explanatory failure message.
+    pub fn outcome(id: impl Into<String>, status: InstructionStatus) -> Self {
+        Self {
+            id: id.into(),
+            status,
+            message: None,
+        }
+    }
+
+    /// Build a failed result with a localized plain-language hint first and
+    /// the complete anyhow source chain after it.
+    pub fn failure(
+        id: impl Into<String>,
+        status: InstructionStatus,
+        hint_zh: impl AsRef<str>,
+        hint_en: impl AsRef<str>,
+        source: Option<&anyhow::Error>,
+    ) -> Self {
+        Self::failure_for_language(id, status, hint_zh, hint_en, source, yas::lang::is_en())
+    }
+
+    fn failure_for_language(
+        id: impl Into<String>,
+        status: InstructionStatus,
+        hint_zh: impl AsRef<str>,
+        hint_en: impl AsRef<str>,
+        source: Option<&anyhow::Error>,
+        english: bool,
+    ) -> Self {
+        let mut message = if english {
+            hint_en.as_ref().to_owned()
+        } else {
+            hint_zh.as_ref().to_owned()
+        };
+        if let Some(source) = source {
+            let details_label = if english {
+                "Full error details:"
+            } else {
+                "完整错误详情:"
+            };
+            message.push_str("\n\n");
+            message.push_str(details_label);
+            message.push('\n');
+            message.push_str(&format!("{source:#}"));
+        }
+
+        Self {
+            id: id.into(),
+            status,
+            message: Some(message),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -144,6 +204,56 @@ impl ManageSummary {
             }
         }
         summary
+    }
+}
+
+#[cfg(test)]
+mod instruction_result_tests {
+    use anyhow::{anyhow, Context};
+
+    use super::*;
+
+    #[test]
+    fn failure_message_localizes_hint_and_preserves_full_inner_chain() {
+        let source = Err::<(), _>(anyhow!("inner diagnostic / STATUS_MARKER"))
+            .context("outer operation marker")
+            .unwrap_err();
+
+        let zh = InstructionResult::failure_for_language(
+            "lock:0",
+            InstructionStatus::UiError,
+            "无法更改这个圣遗物。",
+            "This artifact could not be changed.",
+            Some(&source),
+            false,
+        );
+        let zh_message = zh.message.unwrap();
+        assert!(zh_message.starts_with("无法更改这个圣遗物。\n\n完整错误详情:\n"));
+        assert!(zh_message.contains("outer operation marker: inner diagnostic / STATUS_MARKER"));
+
+        let en = InstructionResult::failure_for_language(
+            "lock:0",
+            InstructionStatus::UiError,
+            "无法更改这个圣遗物。",
+            "This artifact could not be changed.",
+            Some(&source),
+            true,
+        );
+        let en_message = en.message.unwrap();
+        assert!(
+            en_message.starts_with("This artifact could not be changed.\n\nFull error details:\n")
+        );
+        assert!(en_message.contains("outer operation marker: inner diagnostic / STATUS_MARKER"));
+    }
+
+    #[test]
+    fn successful_result_omits_optional_message_from_json() {
+        let result = InstructionResult::outcome("lock:0", InstructionStatus::Success);
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"id": "lock:0", "status": "success"})
+        );
     }
 }
 

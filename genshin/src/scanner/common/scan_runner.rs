@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use yas::{log_info, log_warn};
 
 use crate::cli::{GoodScannerApplication, GoodUserConfig, ScanCoreConfig};
@@ -22,13 +22,18 @@ use crate::scanner::weapon::GoodWeaponScanner;
 /// Result of a single scan phase.
 ///
 /// A phase is `Complete` only if the caller is allowed to publish/export its
-/// data. Any abort, error, or skipped start is represented explicitly so HTTP
-/// caches and GUI exports do not infer completeness from empty vectors.
+/// data. User cancellation, failure, and a skipped start are represented
+/// separately so HTTP results can explain a real error without presenting a
+/// deliberate stop as a technical failure.
 pub enum ScanPhaseResult<T> {
     /// Phase was not requested by the caller.
     NotAttempted,
-    /// Phase was requested but did not finish or should not be published.
+    /// Phase was requested but was stopped before it finished and should not
+    /// be published. This does not carry a technical error.
     Incomplete,
+    /// Phase failed. The anyhow error is retained so callers can render the
+    /// complete source chain with `{:#}` instead of losing it in a log entry.
+    Failed(Error),
     /// Phase finished with publishable data.
     Complete(Vec<T>),
 }
@@ -37,7 +42,7 @@ impl<T> ScanPhaseResult<T> {
     pub fn into_complete(self) -> Option<Vec<T>> {
         match self {
             Self::Complete(data) => Some(data),
-            Self::NotAttempted | Self::Incomplete => None,
+            Self::NotAttempted | Self::Incomplete | Self::Failed(_) => None,
         }
     }
 }
@@ -57,9 +62,57 @@ mod tests {
             ScanPhaseResult::NotAttempted
         ));
     }
+
+    #[test]
+    fn continue_on_error_retains_the_complete_failure_chain() {
+        let source = anyhow::anyhow!("inner scan marker / STATUS_MARKER")
+            .context("weapon scan phase failed");
+        let token = yas::cancel::CancelToken::new();
+
+        let phase = phase_result::<()>(
+            Err(source),
+            &token,
+            ScanRunOptions {
+                save_on_cancel: false,
+                accept_cancelled_success: false,
+                failure_policy: ScanFailurePolicy::ContinueOnError,
+            },
+            "weapon",
+        )
+        .unwrap();
+
+        let ScanPhaseResult::Failed(error) = phase else {
+            panic!("a real scanner error must remain a failed phase");
+        };
+        assert_eq!(
+            format!("{error:#}"),
+            "weapon scan phase failed: inner scan marker / STATUS_MARKER"
+        );
+    }
+
+    #[test]
+    fn user_cancelled_error_is_incomplete_without_a_failure_diagnostic() {
+        let token = yas::cancel::CancelToken::new();
+        token.cancel(yas::cancel::StopReason::UserAbort);
+
+        let phase = phase_result::<()>(
+            Err(anyhow::anyhow!("scanner noticed cancellation")),
+            &token,
+            ScanRunOptions {
+                save_on_cancel: false,
+                accept_cancelled_success: false,
+                failure_policy: ScanFailurePolicy::ContinueOnError,
+            },
+            "artifact",
+        )
+        .unwrap();
+
+        assert!(matches!(phase, ScanPhaseResult::Incomplete));
+    }
 }
 
-/// Result of a scan execution. Each category reports Complete/Incomplete/NotAttempted.
+/// Result of a scan execution. Each category reports
+/// Complete/Incomplete/Failed/NotAttempted.
 pub struct ScanRunResult {
     pub characters: ScanPhaseResult<GoodCharacter>,
     pub weapons: ScanPhaseResult<GoodWeapon>,
@@ -153,7 +206,8 @@ pub fn run_scan_phases(
                 Err(e) => Err(e),
             };
             let phase = phase_result(scan_result, &cancel_token, options, "character")?;
-            if matches!(phase, ScanPhaseResult::Complete(_)) && !scan_cancelled(&cancel_token, ctrl) {
+            if matches!(phase, ScanPhaseResult::Complete(_)) && !scan_cancelled(&cancel_token, ctrl)
+            {
                 ctrl.return_to_main_ui(4);
             }
             phase
@@ -217,9 +271,18 @@ fn phase_result<T>(
             Ok(ScanPhaseResult::Complete(data))
         },
         Ok(_) => Ok(ScanPhaseResult::Incomplete),
-        Err(e) if options.save_on_cancel && cancel_token.is_cancelled() => {
-            log_info!("阶段被用户中断: {}", "Phase aborted by user: {}", e);
-            Ok(ScanPhaseResult::Complete(Vec::new()))
+        Err(e)
+            if matches!(
+                cancel_token.reason(),
+                Some(yas::cancel::StopReason::UserAbort)
+            ) =>
+        {
+            log_info!("阶段被用户中断: {:#}", "Phase aborted by user: {:#}", e);
+            if options.save_on_cancel {
+                Ok(ScanPhaseResult::Complete(Vec::new()))
+            } else {
+                Ok(ScanPhaseResult::Incomplete)
+            }
         },
         Err(e) => {
             log_warn!(
@@ -230,7 +293,7 @@ fn phase_result<T>(
             );
             match options.failure_policy {
                 ScanFailurePolicy::StopOnError => Err(e),
-                ScanFailurePolicy::ContinueOnError => Ok(ScanPhaseResult::Incomplete),
+                ScanFailurePolicy::ContinueOnError => Ok(ScanPhaseResult::Failed(e)),
             }
         },
     }

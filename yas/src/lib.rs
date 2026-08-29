@@ -12,6 +12,7 @@ pub mod lang;
 pub mod capture;
 pub mod common;
 pub mod game_info;
+pub mod native_crash;
 pub mod ocr;
 pub mod positioning;
 pub mod system_control;

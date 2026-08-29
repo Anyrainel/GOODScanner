@@ -21,18 +21,19 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use auto_artifactarium::r#gen::protos::{AvatarInfo, Item, Unk};
 use auto_artifactarium::{GamePacket, GameSniffer};
 use base64::prelude::*;
 use protobuf::Message;
 use protobuf::UnknownValueRef;
 use tokio::sync::mpsc;
+use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use yas::{log_debug, log_error, log_info, log_warn};
 
 use super::data_cache::load_data_cache;
-use super::packet_capture::PacketCapture;
+use super::packet_capture::{CaptureError, PacketCapture};
 use super::player_data::{CaptureExportSettings, PlayerData};
 
 // --- Heuristic thresholds for field-number-agnostic packet matching ---
@@ -101,6 +102,7 @@ pub struct CaptureMonitor {
     sniffer: GameSniffer,
     state: Arc<Mutex<CaptureState>>,
     capture_cancel_token: Option<CancellationToken>,
+    capture_task: Option<JoinHandle<Result<()>>>,
     packet_tx: mpsc::UnboundedSender<Vec<u8>>,
     packet_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     dump_packets: bool,
@@ -125,7 +127,12 @@ impl CaptureMonitor {
 
         let dump_dir = crate::cli::exe_dir().join("debug_capture");
         if dump_packets {
-            std::fs::create_dir_all(&dump_dir).ok();
+            std::fs::create_dir_all(&dump_dir).with_context(|| {
+                format!(
+                    "packet dump directory could not be created: {}",
+                    dump_dir.display()
+                )
+            })?;
             log_info!(
                 "数据包转储已开启 → {}",
                 "Packet dump enabled → {}",
@@ -138,6 +145,7 @@ impl CaptureMonitor {
             sniffer,
             state,
             capture_cancel_token: None,
+            capture_task: None,
             packet_tx,
             packet_rx,
             dump_packets,
@@ -154,10 +162,18 @@ impl CaptureMonitor {
                 Some(packet) = self.packet_rx.recv() => {
                     self.handle_packet(packet);
                 }
-                Some(cmd) = cmd_rx.recv() => {
-                    if self.handle_command(cmd) {
-                        break;
+                command = cmd_rx.recv() => {
+                    match command {
+                        Some(cmd) => {
+                            if self.handle_command(cmd) {
+                                break;
+                            }
+                        },
+                        None => break,
                     }
+                }
+                result = wait_for_capture_task(&mut self.capture_task) => {
+                    self.handle_capture_task_result(result);
                 }
                 else => break,
             }
@@ -170,20 +186,23 @@ impl CaptureMonitor {
             CaptureCommand::StartCapture {
                 include_achievements,
             } => {
-                if self.capture_cancel_token.is_some() {
+                if self.capture_task.is_some() {
                     return false;
                 }
                 self.player_data.begin_capture();
                 self.require_achievements = include_achievements;
                 let cancel_token = CancellationToken::new();
-                tokio::spawn(capture_task(cancel_token.clone(), self.packet_tx.clone()));
-                self.capture_cancel_token = Some(cancel_token);
                 if let Ok(mut state) = self.state.lock() {
                     *state = CaptureState {
                         capturing: true,
                         ..CaptureState::default()
                     };
                 }
+                self.capture_task = Some(tokio::spawn(capture_task(
+                    cancel_token.clone(),
+                    self.packet_tx.clone(),
+                )));
+                self.capture_cancel_token = Some(cancel_token);
             },
             CaptureCommand::StopCapture => {
                 self.stop_capture();
@@ -197,12 +216,22 @@ impl CaptureMonitor {
     }
 
     fn stop_capture(&mut self) {
-        if let Some(token) = self.capture_cancel_token.take() {
+        if let Some(token) = &self.capture_cancel_token {
             token.cancel();
         }
         if let Ok(mut state) = self.state.lock() {
             state.capturing = false;
         }
+    }
+
+    fn handle_capture_task_result(&mut self, result: std::result::Result<Result<()>, JoinError>) {
+        let expected_stop = self
+            .capture_cancel_token
+            .as_ref()
+            .map_or(false, CancellationToken::is_cancelled);
+        self.capture_task = None;
+        self.capture_cancel_token = None;
+        update_state_from_capture_task(&self.state, result, expected_stop);
     }
 
     fn handle_packet(&mut self, packet: Vec<u8>) {
@@ -221,7 +250,12 @@ impl CaptureMonitor {
                     self.dump_counter, command.command_id
                 ));
                 if let Err(e) = std::fs::write(&path, &command.proto_data) {
-                    log_warn!("转储失败: {}", "Dump failed: {}", e);
+                    log_warn!(
+                        "无法将抓包调试数据写入 {}。请检查磁盘空间和文件夹权限。完整错误详情: {:#}",
+                        "Captured debug data could not be written to {}. Check disk space and folder permissions. Full error details: {:#}",
+                        path.display(),
+                        e,
+                    );
                 }
                 self.dump_counter += 1;
             }
@@ -287,6 +321,56 @@ impl CaptureMonitor {
             if let Ok(mut state) = self.state.lock() {
                 state.complete = true;
             }
+        }
+    }
+}
+
+async fn wait_for_capture_task(
+    task: &mut Option<JoinHandle<Result<()>>>,
+) -> std::result::Result<Result<()>, JoinError> {
+    match task {
+        Some(task) => task.await,
+        None => std::future::pending().await,
+    }
+}
+
+fn capture_task_failure(
+    result: std::result::Result<Result<()>, JoinError>,
+    expected_stop: bool,
+) -> Option<String> {
+    match result {
+        Ok(Ok(())) if expected_stop => None,
+        Ok(Ok(())) => Some("capture task exited unexpectedly without reporting an error".into()),
+        Ok(Err(error)) => Some(format!("{error:#}")),
+        Err(join_error) if join_error.is_panic() => {
+            let fallback = join_error.to_string();
+            let payload = join_error.into_panic();
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or(fallback);
+            Some(format!("capture task panicked: {message}"))
+        },
+        Err(join_error) => Some(format!(
+            "capture task was cancelled unexpectedly: {join_error}"
+        )),
+    }
+}
+
+fn update_state_from_capture_task(
+    state: &Arc<Mutex<CaptureState>>,
+    result: std::result::Result<Result<()>, JoinError>,
+    expected_stop: bool,
+) {
+    let error = capture_task_failure(result, expected_stop);
+    if let Some(error) = &error {
+        log_error!("抓包任务失败: {}", "Capture task failed: {}", error);
+    }
+    if let Ok(mut state) = state.lock() {
+        state.capturing = false;
+        if let Some(error) = error {
+            state.error = Some(error);
         }
     }
 }
@@ -605,8 +689,9 @@ async fn capture_task(
     cancel_token: CancellationToken,
     packet_tx: mpsc::UnboundedSender<Vec<u8>>,
 ) -> Result<()> {
-    let mut capture = PacketCapture::new()
-        .map_err(|e| anyhow!("创建抓包失败 / Error creating packet capture: {e}"))?;
+    let mut capture = PacketCapture::new().map_err(|error| {
+        capture_error_with_context(error, "创建抓包失败 / Error creating packet capture")
+    })?;
     log_info!("开始抓包", "Starting packet capture");
     loop {
         let packet = tokio::select!(
@@ -615,8 +700,8 @@ async fn capture_task(
         );
         let packet = match packet {
             Ok(packet) => packet,
-            Err(e) => {
-                log_error!("接收数据包出错: {}", "Error receiving packet: {}", e);
+            Err(error) => {
+                handle_capture_read_error(error)?;
                 continue;
             },
         };
@@ -626,6 +711,48 @@ async fn capture_task(
     }
     log_info!("抓包已停止", "Packet capture stopped");
     Ok(())
+}
+
+/// Add user-facing operation context without flattening the nested pktmon error.
+///
+/// `CaptureError` predates `std::error::Error` support, but its variants retain
+/// the original `anyhow::Error`. Destructuring it here keeps that source chain
+/// available to the GUI's alternate (`{:#}`) formatter.
+fn capture_error_with_context(error: CaptureError, operation: &'static str) -> anyhow::Error {
+    let error = match error {
+        CaptureError::Filter(source) => source.context("pktmon packet-filter setup failed"),
+        CaptureError::Capture {
+            has_captured,
+            error: source,
+        } => source.context(format!(
+            "pktmon capture failed (has_captured = {has_captured})"
+        )),
+        CaptureError::CaptureClosed => anyhow!("packet capture stream closed"),
+    };
+    error.context(operation)
+}
+
+/// Return permanent stream closure to the retained task so the monitor can
+/// publish it to `CaptureState::error`. Other receive failures remain retryable.
+fn handle_capture_read_error(error: CaptureError) -> Result<()> {
+    match error {
+        error @ CaptureError::CaptureClosed => Err(capture_error_with_context(
+            error,
+            "抓包数据流意外关闭 / Packet capture stream closed unexpectedly",
+        )),
+        error => {
+            let error = capture_error_with_context(
+                error,
+                "接收抓包数据失败 / Failed to receive captured packet",
+            );
+            log_error!(
+                "接收数据包时出现问题，将继续重试。完整错误详情: {:#}",
+                "A problem occurred while receiving a packet; capture will retry. Full error details: {:#}",
+                error
+            );
+            Ok(())
+        },
+    }
 }
 
 /// Load dispatch keys from external file first, then merge with embedded keys.
@@ -649,11 +776,19 @@ fn load_keys() -> Result<HashMap<u16, Vec<u8>>> {
             Ok(external) => {
                 let mut added = 0usize;
                 for (version, b64) in &external {
-                    if let Ok(decoded) = BASE64_STANDARD.decode(b64) {
-                        if !all_keys.contains_key(version) {
-                            added += 1;
-                        }
-                        all_keys.insert(*version, decoded);
+                    match BASE64_STANDARD.decode(b64) {
+                        Ok(decoded) => {
+                            if !all_keys.contains_key(version) {
+                                added += 1;
+                            }
+                            all_keys.insert(*version, decoded);
+                        },
+                        Err(error) => log_warn!(
+                            "外部密钥文件中的版本 {} 无法解码；该版本将使用内置密钥（如有）。完整错误详情: {:#}",
+                            "Version {} in the external key file could not be decoded; the embedded key will be used for that version when available. Full error details: {:#}",
+                            version,
+                            error,
+                        ),
                     }
                 }
                 log_info!(
@@ -663,13 +798,18 @@ fn load_keys() -> Result<HashMap<u16, Vec<u8>>> {
                     added,
                 );
             },
-            Err(e) => log_warn!(
-                "外部密钥文件格式错误: {}",
-                "External key file parse error: {}",
-                e
+            Err(error) => log_warn!(
+                "外部密钥文件格式错误；将改用内置密钥。完整错误详情: {:#}",
+                "The external key file has an invalid format; embedded keys will be used instead. Full error details: {:#}",
+                error,
             ),
         },
-        Err(_) => {}, // No external file — use embedded only
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => log_warn!(
+            "无法读取外部密钥文件；将改用内置密钥。完整错误详情: {:#}",
+            "The external key file could not be read; embedded keys will be used instead. Full error details: {:#}",
+            error,
+        ),
     }
 
     Ok(all_keys)
@@ -682,6 +822,94 @@ mod tests {
     const ITEMS_BIN: &[u8] = include_bytes!("testdata/items.bin");
     const AVATARS_BIN: &[u8] = include_bytes!("testdata/avatars.bin");
     const NOISE_BIN: &[u8] = include_bytes!("testdata/noise.bin");
+
+    #[test]
+    fn capture_creation_error_preserves_nested_source_chain() {
+        let source = anyhow!("windows error 5").context("pktmon session start failed");
+        let error = capture_error_with_context(
+            CaptureError::Capture {
+                has_captured: false,
+                error: source,
+            },
+            "创建抓包失败 / Error creating packet capture",
+        );
+
+        assert_eq!(
+            format!("{error:#}"),
+            "创建抓包失败 / Error creating packet capture: \
+             pktmon capture failed (has_captured = false): \
+             pktmon session start failed: windows error 5"
+        );
+    }
+
+    #[test]
+    fn closed_capture_stream_is_terminal_and_searchable() {
+        let error = handle_capture_read_error(CaptureError::CaptureClosed)
+            .expect_err("a closed capture stream must terminate the capture task");
+
+        assert_eq!(
+            format!("{error:#}"),
+            "抓包数据流意外关闭 / Packet capture stream closed unexpectedly: \
+             packet capture stream closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_task_error_updates_state_with_full_chain() {
+        let state = Arc::new(Mutex::new(CaptureState {
+            capturing: true,
+            ..CaptureState::default()
+        }));
+        let task = tokio::spawn(async {
+            Err::<(), _>(anyhow!("pktmon diagnostic").context("packet capture creation failed"))
+        });
+
+        update_state_from_capture_task(&state, task.await, false);
+
+        let state = state.lock().unwrap();
+        assert!(!state.capturing);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("packet capture creation failed: pktmon diagnostic")
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_task_panic_updates_state_with_payload() {
+        let state = Arc::new(Mutex::new(CaptureState {
+            capturing: true,
+            ..CaptureState::default()
+        }));
+        let task = tokio::spawn(async {
+            panic!("pktmon access violation 0xc0000005");
+            #[allow(unreachable_code)]
+            Ok::<(), anyhow::Error>(())
+        });
+
+        update_state_from_capture_task(&state, task.await, false);
+
+        let state = state.lock().unwrap();
+        assert!(!state.capturing);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("capture task panicked: pktmon access violation 0xc0000005")
+        );
+    }
+
+    #[tokio::test]
+    async fn expected_capture_task_stop_does_not_set_an_error() {
+        let state = Arc::new(Mutex::new(CaptureState {
+            capturing: true,
+            ..CaptureState::default()
+        }));
+        let task = tokio::spawn(async { Ok::<(), anyhow::Error>(()) });
+
+        update_state_from_capture_task(&state, task.await, true);
+
+        let state = state.lock().unwrap();
+        assert!(!state.capturing);
+        assert!(state.error.is_none());
+    }
 
     // --- try_match_items ---
 

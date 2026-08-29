@@ -116,6 +116,7 @@ fn spawn_identify_artifact_task(
     mappings: Arc<MappingManager>,
 ) {
     rayon::spawn(move || {
+        let _native_crash_context = yas::native_crash::inherit_current_task();
         annotator::begin_item("artifacts", idx, &scaler);
         annotator::add_image("panel", &frame.image);
         if let Some(ref ann) = grid_annotation {
@@ -191,16 +192,25 @@ impl LockManager {
         let mut scanned_artifacts: Vec<(usize, GoodArtifact)> = Vec::new();
         let mut ocr_failures: usize = 0;
 
-        let make_error_results =
-            |targets: &[LockTarget], status: InstructionStatus| -> Vec<InstructionResult> {
-                targets
-                    .iter()
-                    .map(|t| InstructionResult {
-                        id: t.result_id.clone(),
-                        status: status.clone(),
-                    })
-                    .collect()
-            };
+        let make_error_results = |targets: &[LockTarget],
+                                  status: InstructionStatus,
+                                  hint_zh: &str,
+                                  hint_en: &str,
+                                  source: Option<&anyhow::Error>|
+         -> Vec<InstructionResult> {
+            targets
+                .iter()
+                .map(|t| {
+                    InstructionResult::failure(
+                        t.result_id.clone(),
+                        status.clone(),
+                        hint_zh,
+                        hint_en,
+                        source,
+                    )
+                })
+                .collect()
+        };
 
         if targets.is_empty() {
             return (Vec::new(), scanned_artifacts, HashMap::new(), false, 0);
@@ -240,7 +250,13 @@ impl LockManager {
                     e
                 );
                 return (
-                    make_error_results(targets, InstructionStatus::OcrError),
+                    make_error_results(
+                        targets,
+                        InstructionStatus::OcrError,
+                        "无法读取背包中的圣遗物数量，因此没有执行锁定变更。请打开圣遗物背包后重试。",
+                        "The artifact count could not be read, so no lock changes were made. Open the artifact inventory and retry.",
+                        Some(&e),
+                    ),
                     scanned_artifacts,
                     HashMap::new(),
                     false,
@@ -306,9 +322,14 @@ impl LockManager {
             return (
                 targets
                     .iter()
-                    .map(|t| InstructionResult {
-                        id: t.result_id.clone(),
-                        status: InstructionStatus::NotFound,
+                    .map(|t| {
+                        InstructionResult::failure(
+                            t.result_id.clone(),
+                            InstructionStatus::NotFound,
+                            "背包中没有可匹配的圣遗物，因此无法执行锁定变更。",
+                            "There are no matching artifacts in the inventory, so the lock change could not be made.",
+                            None,
+                        )
                     })
                     .collect(),
                 scanned_artifacts,
@@ -553,10 +574,16 @@ impl LockManager {
                     // differs from the requested state.
                     for action in &page_actions {
                         if ctrl_cb.check_rmb() {
-                            results.insert(action.result_id.clone(), InstructionResult {
-                                id: action.result_id.clone(),
-                                status: InstructionStatus::Aborted,
-                            });
+                            results.insert(
+                                action.result_id.clone(),
+                                InstructionResult::failure(
+                                    action.result_id.clone(),
+                                    InstructionStatus::Aborted,
+                                    "用户已停止此锁定操作。",
+                                    "This lock operation was stopped by the user.",
+                                    None,
+                                ),
+                            );
                             continue;
                         }
 
@@ -572,10 +599,16 @@ impl LockManager {
                             Ok(img) => img,
                             Err(e) => {
                                 log_warn!("[lock_manager] 面板确认截图失败: {}", "[lock_manager] Panel confirmation capture failed: {}", e);
-                                results.insert(action.result_id.clone(), InstructionResult {
-                                    id: action.result_id.clone(),
-                                    status: InstructionStatus::UiError,
-                                });
+                                results.insert(
+                                    action.result_id.clone(),
+                                    InstructionResult::failure(
+                                        action.result_id.clone(),
+                                        InstructionStatus::UiError,
+                                        "无法读取目标圣遗物的详情画面，因此没有更改锁定状态。",
+                                        "The target artifact's detail panel could not be captured, so its lock state was not changed.",
+                                        Some(&e),
+                                    ),
+                                );
                                 continue;
                             }
                         };
@@ -589,10 +622,16 @@ impl LockManager {
                                 Ok(img) => img,
                                 Err(e) => {
                                     log_warn!("[lock_manager] 面板确认重试截图失败: {}", "[lock_manager] Panel confirmation retry capture failed: {}", e);
-                                    results.insert(action.result_id.clone(), InstructionResult {
-                                        id: action.result_id.clone(),
-                                        status: InstructionStatus::UiError,
-                                    });
+                                    results.insert(
+                                        action.result_id.clone(),
+                                        InstructionResult::failure(
+                                            action.result_id.clone(),
+                                            InstructionStatus::UiError,
+                                            "重试后仍无法读取目标圣遗物的详情画面，因此没有更改锁定状态。",
+                                            "The target artifact's detail panel still could not be captured after retrying, so its lock state was not changed.",
+                                            Some(&e),
+                                        ),
+                                    );
                                     continue;
                                 }
                             };
@@ -607,10 +646,16 @@ impl LockManager {
                                     action.row,
                                     action.col
                                 );
-                                results.insert(action.result_id.clone(), InstructionResult {
-                                    id: action.result_id.clone(),
-                                    status: InstructionStatus::UiError,
-                                });
+                                results.insert(
+                                    action.result_id.clone(),
+                                    InstructionResult::failure(
+                                        action.result_id.clone(),
+                                        InstructionStatus::UiError,
+                                        "无法可靠判断目标圣遗物当前是否已锁定，因此为避免误操作已跳过。",
+                                        "The target artifact's current lock state could not be determined reliably, so it was skipped to avoid a wrong change.",
+                                        None,
+                                    ),
+                                );
                                 continue;
                             }
                         }
@@ -654,19 +699,28 @@ impl LockManager {
                             );
                         }
                         if decision == ConfirmedLockDecision::AlreadyCorrect {
-                            results.insert(action.result_id.clone(), InstructionResult {
-                                id: action.result_id.clone(),
-                                status: InstructionStatus::AlreadyCorrect,
-                            });
+                            results.insert(
+                                action.result_id.clone(),
+                                InstructionResult::outcome(
+                                    action.result_id.clone(),
+                                    InstructionStatus::AlreadyCorrect,
+                                ),
+                            );
                             continue;
                         }
 
                         if let Err(e) = ui_actions::click_lock_button(ctrl_cb, action.y_shift) {
                             log_warn!("[lock_manager] 锁定切换失败: {}", "[lock_manager] Lock toggle failed: {}", e);
-                            results.insert(action.result_id.clone(), InstructionResult {
-                                id: action.result_id.clone(),
-                                status: InstructionStatus::UiError,
-                            });
+                            results.insert(
+                                action.result_id.clone(),
+                                InstructionResult::failure(
+                                    action.result_id.clone(),
+                                    InstructionStatus::UiError,
+                                    "无法点击游戏中的锁定按钮，因此锁定状态没有改变。",
+                                    "The in-game lock button could not be clicked, so the lock state was not changed.",
+                                    Some(&e),
+                                ),
+                            );
                             continue;
                         }
 
@@ -675,10 +729,16 @@ impl LockManager {
                             Ok(img) => img,
                             Err(e) => {
                                 log_warn!("[lock_manager] 截图失败: {}", "[lock_manager] Capture failed: {}", e);
-                                results.insert(action.result_id.clone(), InstructionResult {
-                                    id: action.result_id.clone(),
-                                    status: InstructionStatus::UiError,
-                                });
+                                results.insert(
+                                    action.result_id.clone(),
+                                    InstructionResult::failure(
+                                        action.result_id.clone(),
+                                        InstructionStatus::UiError,
+                                        "点击锁定按钮后无法读取游戏画面，因此无法确认更改是否成功。",
+                                        "The game screen could not be captured after clicking the lock button, so the change could not be confirmed.",
+                                        Some(&e),
+                                    ),
+                                );
                                 continue;
                             }
                         };
@@ -704,20 +764,35 @@ impl LockManager {
                             ctx.dump_pixel("lock_px", &image, ARTIFACT_LOCK_POS1, 5, &scaler_cb);
                         }
                         if new_lock == action.desired_lock {
-                            results.insert(action.result_id.clone(), InstructionResult {
-                                id: action.result_id.clone(),
-                                status: InstructionStatus::Success,
-                            });
+                            results.insert(
+                                action.result_id.clone(),
+                                InstructionResult::outcome(
+                                    action.result_id.clone(),
+                                    InstructionStatus::Success,
+                                ),
+                            );
                         } else {
                             log_warn!(
                                 "[lock_manager] 锁定验证失败 ({},{}): 期望={} 实际={}",
                                 "[lock_manager] Lock verify failed ({},{}): expected={} actual={}",
                                 action.row, action.col, action.desired_lock, new_lock
                             );
-                            results.insert(action.result_id.clone(), InstructionResult {
-                                id: action.result_id.clone(),
-                                status: InstructionStatus::UiError,
-                            });
+                            results.insert(
+                                action.result_id.clone(),
+                                InstructionResult::failure(
+                                    action.result_id.clone(),
+                                    InstructionStatus::UiError,
+                                    format!(
+                                        "游戏中的锁定状态没有变为请求的值（期望={}，实际={}）。",
+                                        action.desired_lock, new_lock
+                                    ),
+                                    format!(
+                                        "The in-game lock state did not change to the requested value (expected={}, actual={}).",
+                                        action.desired_lock, new_lock
+                                    ),
+                                    None,
+                                ),
+                            );
                         }
                     }
 
@@ -764,13 +839,22 @@ impl LockManager {
             if !results.contains_key(&target.result_id) {
                 results.insert(
                     target.result_id.clone(),
-                    InstructionResult {
-                        id: target.result_id.clone(),
-                        status: if was_cancelled {
-                            InstructionStatus::Aborted
-                        } else {
-                            InstructionStatus::NotFound
-                        },
+                    if was_cancelled {
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::Aborted,
+                            "用户已停止此锁定操作。",
+                            "This lock operation was stopped by the user.",
+                            None,
+                        )
+                    } else {
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::NotFound,
+                            "未能在背包中找到匹配的圣遗物。请确认背包内容和目标数据仍然一致。",
+                            "A matching artifact was not found in the inventory. Check that the inventory and target data are still in sync.",
+                            None,
+                        )
                     },
                 );
             }

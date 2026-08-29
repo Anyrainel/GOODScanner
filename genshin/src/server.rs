@@ -53,19 +53,28 @@ fn timestamp_string() -> String {
 /// Save a request body as a timestamped JSON file in the log/ directory.
 fn save_request(endpoint: &str, body: &str) {
     let log_dir = std::path::PathBuf::from("log");
-    if std::fs::create_dir_all(&log_dir).is_err() {
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        let zh_hint = format!(
+            "无法保存请求日志，因为无法创建日志文件夹 {}。",
+            log_dir.display()
+        );
+        let en_hint = format!(
+            "The request log could not be saved because its log directory could not be created: {}.",
+            log_dir.display()
+        );
+        log_error_with_diagnostic(&zh_hint, &en_hint, e);
         return;
     }
     let ts = timestamp_string();
     let filename = format!("{}_{}.json", endpoint, ts);
     let path = log_dir.join(&filename);
     if let Err(e) = std::fs::write(&path, body) {
-        log_error!(
-            "保存请求失败: {}: {}",
-            "Failed to save request {}: {}",
-            filename,
-            e
+        let zh_hint = format!("无法保存请求日志文件 {}。", path.display());
+        let en_hint = format!(
+            "The request log file could not be saved: {}.",
+            path.display()
         );
+        log_error_with_diagnostic(&zh_hint, &en_hint, e);
     }
 }
 
@@ -78,29 +87,45 @@ fn save_job_good_export(
     artifacts: Option<Vec<GoodArtifact>>,
 ) {
     let log_dir = std::path::PathBuf::from("log").join("job_data");
-    if std::fs::create_dir_all(&log_dir).is_err() {
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        let zh_hint = format!(
+            "任务 {} 的数据无法保存，因为无法创建数据日志文件夹 {}。",
+            job_id,
+            log_dir.display()
+        );
+        let en_hint = format!(
+            "Data for job {} could not be saved because its log directory could not be created: {}.",
+            job_id,
+            log_dir.display()
+        );
+        log_error_with_diagnostic(&zh_hint, &en_hint, e);
         return;
     }
 
     let export = GoodExport::new(characters, weapons, artifacts);
-    let Ok(json) = serde_json::to_string_pretty(&export) else {
-        log_error!(
-            "[job {}] 无法序列化任务数据",
-            "[job {}] Failed to serialize job data",
-            job_id
-        );
-        return;
+    let json = match serde_json::to_string_pretty(&export) {
+        Ok(json) => json,
+        Err(e) => {
+            let zh_hint = format!("任务 {} 的数据无法转换为 GOOD JSON，因此未能保存。", job_id);
+            let en_hint = format!(
+                "Data for job {} could not be converted to GOOD JSON, so it was not saved.",
+                job_id
+            );
+            log_error_with_diagnostic(&zh_hint, &en_hint, e);
+            return;
+        },
     };
 
     let filename = format!("{}_{}_{}.json", timestamp_string(), kind, job_id);
     let path = log_dir.join(&filename);
     if let Err(e) = std::fs::write(&path, json) {
-        log_error!(
-            "[job {}] 保存任务数据失败: {}",
-            "[job {}] Failed to save job data: {}",
+        let zh_hint = format!("任务 {} 的数据文件无法保存到 {}。", job_id, path.display());
+        let en_hint = format!(
+            "The data file for job {} could not be saved to {}.",
             job_id,
-            e
+            path.display()
         );
+        log_error_with_diagnostic(&zh_hint, &en_hint, e);
     } else {
         log_info!(
             "[job {}] 任务数据已保存: {}",
@@ -246,6 +271,110 @@ impl<T> ScanDataCache<T> {
         self.data = None;
         self.job_id = None;
         self.incomplete_job_id = None;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ScanCategory {
+    Characters,
+    Weapons,
+    Artifacts,
+}
+
+impl ScanCategory {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Characters => "characters",
+            Self::Weapons => "weapons",
+            Self::Artifacts => "artifacts",
+        }
+    }
+
+    fn failed_hints(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Characters => (
+                "角色扫描遇到错误，因此未能完成。下方包含可复制的完整错误。",
+                "The character scan encountered an error and could not finish. The complete copyable error is included below.",
+            ),
+            Self::Weapons => (
+                "武器扫描遇到错误，因此未能完成。下方包含可复制的完整错误。",
+                "The weapon scan encountered an error and could not finish. The complete copyable error is included below.",
+            ),
+            Self::Artifacts => (
+                "圣遗物扫描遇到错误，因此未能完成。下方包含可复制的完整错误。",
+                "The artifact scan encountered an error and could not finish. The complete copyable error is included below.",
+            ),
+        }
+    }
+
+    fn stopped_hints(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Characters => (
+                "角色扫描在完成前被停止，因此没有发布不完整的数据。",
+                "The character scan was stopped before it finished, so incomplete data was not published.",
+            ),
+            Self::Weapons => (
+                "武器扫描在完成前被停止，因此没有发布不完整的数据。",
+                "The weapon scan was stopped before it finished, so incomplete data was not published.",
+            ),
+            Self::Artifacts => (
+                "圣遗物扫描在完成前被停止，因此没有发布不完整的数据。",
+                "The artifact scan was stopped before it finished, so incomplete data was not published.",
+            ),
+        }
+    }
+}
+
+/// Finalize one scan category without duplicating cache, count, and message
+/// semantics across characters, weapons, and artifacts.
+fn finalize_scan_phase<T: Clone>(
+    phase: PhaseResult<T>,
+    category: ScanCategory,
+    cache: &Arc<Mutex<ScanDataCache<T>>>,
+    job_id: &str,
+    dump_job_data: bool,
+    results: &mut Vec<InstructionResult>,
+    phases_complete: &mut usize,
+    phases_incomplete: &mut usize,
+) -> Option<Vec<T>> {
+    match phase {
+        PhaseResult::Complete(data) => {
+            let dump_data = dump_job_data.then(|| data.clone());
+            cache.lock().unwrap().set(job_id.to_string(), data);
+            *phases_complete += 1;
+            results.push(InstructionResult::outcome(
+                category.id(),
+                InstructionStatus::Success,
+            ));
+            dump_data
+        },
+        PhaseResult::Failed(source) => {
+            cache.lock().unwrap().mark_incomplete(job_id.to_string());
+            *phases_incomplete += 1;
+            let (hint_zh, hint_en) = category.failed_hints();
+            results.push(InstructionResult::failure(
+                category.id(),
+                InstructionStatus::UiError,
+                hint_zh,
+                hint_en,
+                Some(&source),
+            ));
+            None
+        },
+        PhaseResult::Incomplete => {
+            cache.lock().unwrap().mark_incomplete(job_id.to_string());
+            *phases_incomplete += 1;
+            let (hint_zh, hint_en) = category.stopped_hints();
+            results.push(InstructionResult::failure(
+                category.id(),
+                InstructionStatus::Aborted,
+                hint_zh,
+                hint_en,
+                None,
+            ));
+            None
+        },
+        PhaseResult::NotAttempted => None,
     }
 }
 
@@ -404,6 +533,116 @@ fn respond_json(request: tiny_http::Request, status: u16, json: &str, origin: Op
     }
 }
 
+/// Select one already-authored message using the configured application language.
+///
+/// This intentionally does not use the legacy `"Chinese / English"` parser: an
+/// inner OS/library diagnostic may itself contain `" / "` and must remain exact.
+fn configured_text<'a>(zh: &'a str, en: &'a str) -> &'a str {
+    if yas::lang::is_en() {
+        en
+    } else {
+        zh
+    }
+}
+
+/// Serialize the stable HTTP error schema without interpolating into JSON text.
+fn error_json(message: &str) -> String {
+    serde_json::json!({ "error": message }).to_string()
+}
+
+fn respond_error_message(
+    request: tiny_http::Request,
+    status: u16,
+    message: &str,
+    origin: Option<&str>,
+) {
+    let json = error_json(message);
+    respond_json(request, status, &json, origin);
+}
+
+/// Send a localized error response with the stable `{ "error": string }` schema.
+fn respond_error(
+    request: tiny_http::Request,
+    status: u16,
+    zh_hint: &str,
+    en_hint: &str,
+    origin: Option<&str>,
+) {
+    respond_error_message(request, status, configured_text(zh_hint, en_hint), origin);
+}
+
+fn error_message_with_diagnostic(
+    zh_hint: &str,
+    en_hint: &str,
+    diagnostic: impl std::fmt::Display,
+) -> String {
+    let details_label = configured_text("完整错误详情", "Full error details");
+    format!(
+        "{}\n\n{}:\n{:#}",
+        configured_text(zh_hint, en_hint),
+        details_label,
+        diagnostic
+    )
+}
+
+fn log_error_with_diagnostic(zh_hint: &str, en_hint: &str, diagnostic: impl std::fmt::Display) {
+    let message = error_message_with_diagnostic(zh_hint, en_hint, diagnostic);
+    log::error!(target: concat!(module_path!(), "::localized"), "{}", message);
+}
+
+/// Send a localized readable hint followed by an untouched inner diagnostic.
+fn respond_error_with_diagnostic(
+    request: tiny_http::Request,
+    status: u16,
+    zh_hint: &str,
+    en_hint: &str,
+    diagnostic: impl std::fmt::Display,
+    origin: Option<&str>,
+) {
+    let message = error_message_with_diagnostic(zh_hint, en_hint, diagnostic);
+    respond_error_message(request, status, &message, origin);
+}
+
+/// Serialization failures are internal server errors at every endpoint. Keep
+/// the status in one helper so a successful-data route can never accidentally
+/// return an error body with HTTP 200.
+fn respond_serialization_error(
+    request: tiny_http::Request,
+    zh_hint: &str,
+    en_hint: &str,
+    diagnostic: impl std::fmt::Display,
+    origin: Option<&str>,
+) {
+    respond_error_with_diagnostic(request, 500, zh_hint, en_hint, diagnostic, origin);
+}
+
+fn contextualize_server_bind_error(
+    port: u16,
+    source: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> anyhow::Error {
+    let diagnostic = source.to_string();
+    let address_in_use = source
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse)
+        || diagnostic.contains("Address already in use")
+        || diagnostic.contains("address is already in use")
+        || diagnostic.contains("AddrInUse")
+        || diagnostic.contains("10048");
+    let hint = if address_in_use {
+        if yas::lang::is_en() {
+            format!("Port {port} is already in use. Choose a different port.")
+        } else {
+            format!("端口 {port} 已被占用。请选择其他端口。")
+        }
+    } else if yas::lang::is_en() {
+        format!("The HTTP server could not start on port {port}.")
+    } else {
+        format!("HTTP 服务器无法在端口 {port} 上启动。")
+    };
+
+    anyhow::Error::from_boxed(source).context(hint)
+}
+
 /// Run the artifact manager HTTP server with async job execution.
 ///
 /// This blocks the current thread (which becomes the execution thread).
@@ -423,27 +662,7 @@ where
     F: FnMut() -> anyhow::Result<Box<dyn ManageExecutor>>,
 {
     let addr = format!("127.0.0.1:{}", port);
-    let server = Server::http(&addr).map_err(|e| {
-        let msg = format!("{}", e);
-        if msg.contains("Address already in use")
-            || msg.contains("address is already in use")
-            || msg.contains("AddrInUse")
-            || msg.contains("10048")
-        {
-            anyhow!(
-                "端口 {} 已被占用，请更换端口 / Port {} is already in use. \
-                     Please choose a different port.",
-                port,
-                port
-            )
-        } else {
-            anyhow!(
-                "HTTP服务器启动失败 / HTTP server start failed on port {}: {}",
-                port,
-                msg
-            )
-        }
-    })?;
+    let server = Server::http(&addr).map_err(|e| contextualize_server_bind_error(port, e))?;
     let server = Arc::new(server);
 
     log_info!(
@@ -508,7 +727,13 @@ where
                 Some(o) if is_origin_allowed(o) => Some(o.trim_end_matches('/').to_string()),
                 Some(o) => {
                     log_warn!("拒绝非法来源: {}", "Rejected disallowed origin: {}", o);
-                    respond_json(request, 403, r#"{"error":"Origin not allowed"}"#, None);
+                    respond_error(
+                        request,
+                        403,
+                        "不允许该请求来源。",
+                        "The request origin is not allowed.",
+                        None,
+                    );
                     continue;
                 },
                 None => None,
@@ -566,10 +791,11 @@ where
 
                     match query_job_id {
                         None | Some("") => {
-                            respond_json(
+                            respond_error(
                                 request,
                                 400,
-                                r#"{"error":"missing required query parameter: jobId"}"#,
+                                "缺少必需的查询参数 jobId。",
+                                "Missing required query parameter: jobId.",
                                 cors_ref,
                             );
                         },
@@ -580,25 +806,37 @@ where
                                     let actual_id = state.job_id.as_deref().unwrap_or("");
                                     if actual_id != requested_id {
                                         drop(state);
-                                        respond_json(
+                                        respond_error(
                                             request,
                                             404,
-                                            r#"{"error":"job not found"}"#,
+                                            "找不到该任务。",
+                                            "Job not found.",
                                             cors_ref,
                                         );
                                     } else if let Some(ref result) = state.result {
-                                        let json =
-                                            serde_json::to_string(result).unwrap_or_else(|_| {
-                                                r#"{"error":"serialization failed"}"#.to_string()
-                                            });
-                                        drop(state);
-                                        respond_json(request, 200, &json, cors_ref);
+                                        match serde_json::to_string(result) {
+                                            Ok(json) => {
+                                                drop(state);
+                                                respond_json(request, 200, &json, cors_ref);
+                                            },
+                                            Err(e) => {
+                                                drop(state);
+                                                respond_serialization_error(
+                                                    request,
+                                                    "无法序列化任务结果。",
+                                                    "The job result could not be serialized.",
+                                                    e,
+                                                    cors_ref,
+                                                );
+                                            },
+                                        }
                                     } else {
                                         drop(state);
-                                        respond_json(
+                                        respond_error(
                                             request,
                                             500,
-                                            r#"{"error":"result data missing"}"#,
+                                            "任务已完成，但结果数据缺失。",
+                                            "The job completed, but its result data is missing.",
                                             cors_ref,
                                         );
                                     }
@@ -607,28 +845,31 @@ where
                                     let actual_id = state.job_id.as_deref().unwrap_or("");
                                     if actual_id != requested_id {
                                         drop(state);
-                                        respond_json(
+                                        respond_error(
                                             request,
                                             404,
-                                            r#"{"error":"job not found"}"#,
+                                            "找不到该任务。",
+                                            "Job not found.",
                                             cors_ref,
                                         );
                                     } else {
                                         drop(state);
-                                        respond_json(
+                                        respond_error(
                                             request,
                                             409,
-                                            r#"{"error":"job still running"}"#,
+                                            "任务仍在运行。请继续轮询 GET /status。",
+                                            "The job is still running. Continue polling GET /status.",
                                             cors_ref,
                                         );
                                     }
                                 },
                                 JobPhase::Idle => {
                                     drop(state);
-                                    respond_json(
+                                    respond_error(
                                         request,
                                         404,
-                                        r#"{"error":"job not found"}"#,
+                                        "找不到该任务。",
+                                        "Job not found.",
                                         cors_ref,
                                     );
                                 },
@@ -667,7 +908,13 @@ where
                 },
 
                 _ => {
-                    respond_json(request, 404, r#"{"error":"Not Found"}"#, cors_ref);
+                    respond_error(
+                        request,
+                        404,
+                        "找不到请求的端点。",
+                        "The requested endpoint was not found.",
+                        cors_ref,
+                    );
                 },
             }
         }
@@ -728,9 +975,14 @@ where
                         },
                     };
                     let err_results: Vec<_> = (0..total_count)
-                        .map(|idx| crate::manager::models::InstructionResult {
-                            id: format!("item_{}", idx),
-                            status: crate::manager::models::InstructionStatus::UiError,
+                        .map(|idx| {
+                            InstructionResult::failure(
+                                format!("item_{}", idx),
+                                InstructionStatus::UiError,
+                                "扫描器无法连接到游戏，因此此操作没有执行。请确认游戏已启动并停留在主界面，然后重试。",
+                                "The scanner could not connect to the game, so this operation was not performed. Make sure the game is running at its main screen, then retry.",
+                                Some(&e),
+                            )
                         })
                         .collect();
                     let summary = crate::manager::models::ManageSummary::from_results(&err_results);
@@ -849,8 +1101,8 @@ where
             Scan(anyhow::Result<ScanResult>),
         }
 
-        let outcome =
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
+        let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || match request {
                 JobRequest::Manage(manage_req) => {
                     let has_lock = !manage_req.lock.is_empty() || !manage_req.unlock.is_empty();
                     let (result, snapshot) =
@@ -875,38 +1127,37 @@ where
                     Some(&scan_progress_fn),
                     cancel_token,
                 )),
-            })) {
-                Ok(r) => r,
-                Err(panic_info) => {
-                    let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                        s.clone()
-                    } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else {
-                        "unknown panic".to_string()
-                    };
-                    log_error!(
-                        "[job {}] 执行时发生panic: {}",
-                        "[job {}] Panic during execution: {}",
-                        job_id,
-                        msg
-                    );
-                    let summary = ManageSummary {
-                        total: 0,
-                        success: 0,
-                        already_correct: 0,
-                        not_found: 0,
-                        errors: 1,
-                        aborted: 0,
-                    };
-                    let result = ManageResult {
-                        results: Vec::new(),
-                        summary,
-                    };
-                    *job_state.lock().unwrap() = JobState::completed(job_id.clone(), result);
-                    continue;
-                },
-            };
+            },
+        )) {
+            Ok(r) => r,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else {
+                    "unknown panic".to_string()
+                };
+                log_error!(
+                    "[job {}] 执行时发生panic: {}",
+                    "[job {}] Panic during execution: {}",
+                    job_id,
+                    msg
+                );
+                let source = anyhow!(msg);
+                let results = vec![InstructionResult::failure(
+                        "job",
+                        InstructionStatus::UiError,
+                        "任务因扫描器内部错误而停止。下方包含可复制的完整错误。",
+                        "The job stopped because of an internal scanner error. The complete copyable error is included below.",
+                        Some(&source),
+                    )];
+                let summary = ManageSummary::from_results(&results);
+                let result = ManageResult { results, summary };
+                *job_state.lock().unwrap() = JobState::completed(job_id.clone(), result);
+                continue;
+            },
+        };
 
         match outcome {
             JobOutcome::ManageEquip {
@@ -955,91 +1206,42 @@ where
             JobOutcome::Scan(scan_result) => {
                 match scan_result {
                     Ok(sr) => {
-                        // Per-phase: Complete populates the cache; Incomplete marks the
-                        // cache as incomplete-for-this-jobId (so /characters /weapons
-                        // /artifacts queries with this jobId return 503); NotAttempted
-                        // leaves the cache untouched.
+                        // Per-phase: Complete populates the cache; Failed/Incomplete
+                        // mark the cache as incomplete-for-this-jobId (so data queries
+                        // return 503); NotAttempted leaves the cache untouched.
                         let mut results = Vec::new();
                         let mut phases_complete = 0usize;
                         let mut phases_incomplete = 0usize;
-                        let mut dump_characters: Option<Vec<GoodCharacter>> = None;
-                        let mut dump_weapons: Option<Vec<GoodWeapon>> = None;
-                        let mut dump_artifacts: Option<Vec<GoodArtifact>> = None;
-
-                        match sr.characters {
-                            PhaseResult::Complete(data) => {
-                                if dump_job_data {
-                                    dump_characters = Some(data.clone());
-                                }
-                                character_cache.lock().unwrap().set(job_id.clone(), data);
-                                phases_complete += 1;
-                                results.push(InstructionResult {
-                                    id: "characters".to_string(),
-                                    status: InstructionStatus::Success,
-                                });
-                            },
-                            PhaseResult::Incomplete => {
-                                character_cache
-                                    .lock()
-                                    .unwrap()
-                                    .mark_incomplete(job_id.clone());
-                                phases_incomplete += 1;
-                                results.push(InstructionResult {
-                                    id: "characters".to_string(),
-                                    status: InstructionStatus::Aborted,
-                                });
-                            },
-                            PhaseResult::NotAttempted => {},
-                        }
-
-                        match sr.weapons {
-                            PhaseResult::Complete(data) => {
-                                if dump_job_data {
-                                    dump_weapons = Some(data.clone());
-                                }
-                                weapon_cache.lock().unwrap().set(job_id.clone(), data);
-                                phases_complete += 1;
-                                results.push(InstructionResult {
-                                    id: "weapons".to_string(),
-                                    status: InstructionStatus::Success,
-                                });
-                            },
-                            PhaseResult::Incomplete => {
-                                weapon_cache.lock().unwrap().mark_incomplete(job_id.clone());
-                                phases_incomplete += 1;
-                                results.push(InstructionResult {
-                                    id: "weapons".to_string(),
-                                    status: InstructionStatus::Aborted,
-                                });
-                            },
-                            PhaseResult::NotAttempted => {},
-                        }
-
-                        match sr.artifacts {
-                            PhaseResult::Complete(data) => {
-                                if dump_job_data {
-                                    dump_artifacts = Some(data.clone());
-                                }
-                                artifact_cache.lock().unwrap().set(job_id.clone(), data);
-                                phases_complete += 1;
-                                results.push(InstructionResult {
-                                    id: "artifacts".to_string(),
-                                    status: InstructionStatus::Success,
-                                });
-                            },
-                            PhaseResult::Incomplete => {
-                                artifact_cache
-                                    .lock()
-                                    .unwrap()
-                                    .mark_incomplete(job_id.clone());
-                                phases_incomplete += 1;
-                                results.push(InstructionResult {
-                                    id: "artifacts".to_string(),
-                                    status: InstructionStatus::Aborted,
-                                });
-                            },
-                            PhaseResult::NotAttempted => {},
-                        }
+                        let dump_characters = finalize_scan_phase(
+                            sr.characters,
+                            ScanCategory::Characters,
+                            &character_cache,
+                            &job_id,
+                            dump_job_data,
+                            &mut results,
+                            &mut phases_complete,
+                            &mut phases_incomplete,
+                        );
+                        let dump_weapons = finalize_scan_phase(
+                            sr.weapons,
+                            ScanCategory::Weapons,
+                            &weapon_cache,
+                            &job_id,
+                            dump_job_data,
+                            &mut results,
+                            &mut phases_complete,
+                            &mut phases_incomplete,
+                        );
+                        let dump_artifacts = finalize_scan_phase(
+                            sr.artifacts,
+                            ScanCategory::Artifacts,
+                            &artifact_cache,
+                            &job_id,
+                            dump_job_data,
+                            &mut results,
+                            &mut phases_complete,
+                            &mut phases_incomplete,
+                        );
 
                         if dump_job_data
                             && (dump_characters.is_some()
@@ -1074,18 +1276,15 @@ where
                             job_id,
                             e
                         );
-                        let summary = ManageSummary {
-                            total: 0,
-                            success: 0,
-                            already_correct: 0,
-                            not_found: 0,
-                            errors: 1,
-                            aborted: 0,
-                        };
-                        let result = ManageResult {
-                            results: Vec::new(),
-                            summary,
-                        };
+                        let results = vec![InstructionResult::failure(
+                            "scan",
+                            InstructionStatus::UiError,
+                            "扫描任务遇到错误，因此无法继续。下方包含可复制的完整错误。",
+                            "The scan job encountered an error and could not continue. The complete copyable error is included below.",
+                            Some(&e),
+                        )];
+                        let summary = ManageSummary::from_results(&results);
+                        let result = ManageResult { results, summary };
                         let mut state = job_state.lock().unwrap();
                         *state = JobState::completed(job_id.clone(), result);
                     },
@@ -1113,19 +1312,29 @@ where
 /// Validate a single artifact entry. Returns `Some(message)` on failure.
 fn validate_artifact(artifact: &crate::scanner::common::models::GoodArtifact) -> Option<String> {
     if artifact.set_key.trim().is_empty() {
-        return Some("empty setKey".to_string());
+        return Some(configured_text("setKey 不能为空", "setKey must not be empty").to_string());
     }
     if artifact.slot_key.trim().is_empty() {
-        return Some("empty slotKey".to_string());
+        return Some(configured_text("slotKey 不能为空", "slotKey must not be empty").to_string());
     }
     if artifact.main_stat_key.trim().is_empty() {
-        return Some("empty mainStatKey".to_string());
+        return Some(
+            configured_text("mainStatKey 不能为空", "mainStatKey must not be empty").to_string(),
+        );
     }
     if artifact.rarity < 4 || artifact.rarity > 5 {
-        return Some(format!("invalid rarity: {} (must be 4-5)", artifact.rarity));
+        return Some(if yas::lang::is_en() {
+            format!("invalid rarity: {} (must be 4-5)", artifact.rarity)
+        } else {
+            format!("无效稀有度: {}（必须为 4-5）", artifact.rarity)
+        });
     }
     if artifact.level < 0 || artifact.level > 20 {
-        return Some(format!("invalid level: {} (must be 0-20)", artifact.level));
+        return Some(if yas::lang::is_en() {
+            format!("invalid level: {} (must be 0-20)", artifact.level)
+        } else {
+            format!("无效等级: {}（必须为 0-20）", artifact.level)
+        });
     }
     None
 }
@@ -1137,6 +1346,15 @@ fn parse_job_id(url: &str) -> Option<&str> {
         .and_then(|qs| qs.split('&').find(|p| p.starts_with("jobId=")))
         .map(|p| &p[6..])
         .filter(|s| !s.is_empty())
+}
+
+fn cache_data_names(label: &str) -> (&str, &str) {
+    match label {
+        "characters" => ("角色", "character"),
+        "weapons" => ("武器", "weapon"),
+        "artifacts" => ("圣遗物", "artifact"),
+        _ => (label, label),
+    }
 }
 
 /// Serve a typed data cache endpoint (GET /characters, /weapons, /artifacts).
@@ -1156,10 +1374,11 @@ fn serve_cache<T: serde::Serialize>(
     let query_job_id = parse_job_id(url);
     match query_job_id {
         None => {
-            respond_json(
+            respond_error(
                 request,
                 400,
-                r#"{"error":"missing required query parameter: jobId"}"#,
+                "缺少必需的查询参数 jobId。",
+                "Missing required query parameter: jobId.",
                 cors_origin,
             );
         },
@@ -1167,30 +1386,47 @@ fn serve_cache<T: serde::Serialize>(
             let c = cache.lock().unwrap();
             if let (Some(cached_id), Some(data)) = (&c.job_id, &c.data) {
                 if cached_id == requested_id {
-                    let json = serde_json::to_string(data)
-                        .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
-                    drop(c);
-                    respond_json(request, 200, &json, cors_origin);
+                    match serde_json::to_string(data) {
+                        Ok(json) => {
+                            drop(c);
+                            respond_json(request, 200, &json, cors_origin);
+                        },
+                        Err(e) => {
+                            let (zh_name, en_name) = cache_data_names(label);
+                            let zh_hint = format!("无法序列化{}数据。", zh_name);
+                            let en_hint = format!("The {} data could not be serialized.", en_name);
+                            drop(c);
+                            respond_serialization_error(
+                                request,
+                                &zh_hint,
+                                &en_hint,
+                                e,
+                                cors_origin,
+                            );
+                        },
+                    }
                     return;
                 }
             }
             if c.incomplete_job_id.as_deref() == Some(requested_id) {
+                let (zh_name, en_name) = cache_data_names(label);
+                let message = if yas::lang::is_en() {
+                    format!("The {} scan did not complete for this jobId.", en_name)
+                } else {
+                    format!("{}扫描未完成，因此此 jobId 没有可用数据。", zh_name)
+                };
                 drop(c);
-                respond_json(
-                    request,
-                    503,
-                    &format!(r#"{{"error":"{} scan incomplete for this jobId"}}"#, label),
-                    cors_origin,
-                );
+                respond_error_message(request, 503, &message, cors_origin);
                 return;
             }
+            let (zh_name, en_name) = cache_data_names(label);
+            let message = if yas::lang::is_en() {
+                format!("No {} data is available for this jobId.", en_name)
+            } else {
+                format!("此 jobId 没有可用的{}数据。", zh_name)
+            };
             drop(c);
-            respond_json(
-                request,
-                404,
-                &format!(r#"{{"error":"no {} data for this jobId"}}"#, label),
-                cors_origin,
-            );
+            respond_error_message(request, 404, &message, cors_origin);
         },
     }
 }
@@ -1212,33 +1448,44 @@ fn serve_artifact_cache(
     if let (Some(cached_id), Some(data)) = (&c.job_id, &c.data) {
         // If jobId provided, it must match; otherwise serve the latest.
         if query_job_id.map_or(true, |q| q == cached_id) {
-            let json = serde_json::to_string(data)
-                .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
-            drop(c);
-            respond_json(request, 200, &json, cors_origin);
+            match serde_json::to_string(data) {
+                Ok(json) => {
+                    drop(c);
+                    respond_json(request, 200, &json, cors_origin);
+                },
+                Err(e) => {
+                    drop(c);
+                    respond_serialization_error(
+                        request,
+                        "无法序列化圣遗物数据。",
+                        "The artifact data could not be serialized.",
+                        e,
+                        cors_origin,
+                    );
+                },
+            }
             return;
         }
     }
     if let Some(requested_id) = query_job_id {
         if c.incomplete_job_id.as_deref() == Some(requested_id) {
             drop(c);
-            respond_json(
+            respond_error(
                 request,
                 503,
-                r#"{"error":"artifacts scan incomplete for this jobId"}"#,
+                "圣遗物扫描未完成，因此此 jobId 没有可用数据。",
+                "The artifact scan did not complete for this jobId.",
                 cors_origin,
             );
             return;
         }
     }
     drop(c);
-    respond_json(
+    respond_error(
         request,
         404,
-        &format!(
-            r#"{{"error":"{}"}}"#,
-            yas::lang::localize("没有可用的圣遗物数据 / No artifact data available")
-        ),
+        "没有可用的圣遗物数据。",
+        "No artifact data is available.",
         cors_origin,
     );
 }
@@ -1257,15 +1504,11 @@ fn handle_manage(
             "管理器已暂停，拒绝请求",
             "Manager paused, rejecting request"
         );
-        respond_json(
+        respond_error(
             request,
             503,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(
-                    "管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests."
-                )
-            ),
+            "管理器已暂停。请在界面中启用后再发送请求。",
+            "The manager is paused. Enable it in the GUI before sending requests.",
             cors_origin,
         );
         return;
@@ -1275,10 +1518,11 @@ fn handle_manage(
     {
         let s = state.lock().unwrap();
         if s.state == JobPhase::Running {
-            respond_json(
+            respond_error(
                 request,
                 409,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("正在执行其他任务 / Another job is already running. Poll GET /status for progress.")),
+                "另一个任务正在运行。请轮询 GET /status 查看进度。",
+                "Another job is already running. Poll GET /status for progress.",
                 cors_origin,
             );
             return;
@@ -1288,15 +1532,15 @@ fn handle_manage(
     // Enforce body size limit (Content-Length header)
     if let Some(len) = request.body_length() {
         if len > MAX_BODY_SIZE {
-            respond_json(
-                request,
-                413,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!(
-                    "请求体过大（{} 字节，上限 {} 字节）/ Request body too large: {} bytes (max {})",
-                    len, MAX_BODY_SIZE, len, MAX_BODY_SIZE
-                ))),
-                cors_origin,
-            );
+            let message = if yas::lang::is_en() {
+                format!(
+                    "Request body too large: {} bytes (max {}).",
+                    len, MAX_BODY_SIZE
+                )
+            } else {
+                format!("请求体过大（{} 字节，上限 {} 字节）。", len, MAX_BODY_SIZE)
+            };
+            respond_error_message(request, 413, &message, cors_origin);
             return;
         }
     }
@@ -1304,16 +1548,12 @@ fn handle_manage(
     // Read body
     let mut body = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        respond_json(
+        respond_error_with_diagnostic(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(&format!(
-                    "读取请求体失败: {} / Failed to read body: {}",
-                    e, e
-                ))
-            ),
+            "无法读取请求体。",
+            "The request body could not be read.",
+            e,
             cors_origin,
         );
         return;
@@ -1324,18 +1564,20 @@ fn handle_manage(
 
     // Enforce size limit for chunked transfers (no Content-Length)
     if body.len() > MAX_BODY_SIZE {
-        respond_json(
-            request,
-            413,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(&format!(
-                "请求体过大（{} 字节，上限 {} 字节）/ Request body too large: {} bytes (max {})",
-                body.len(), MAX_BODY_SIZE, body.len(), MAX_BODY_SIZE
-            ))
-            ),
-            cors_origin,
-        );
+        let message = if yas::lang::is_en() {
+            format!(
+                "Request body too large: {} bytes (max {}).",
+                body.len(),
+                MAX_BODY_SIZE
+            )
+        } else {
+            format!(
+                "请求体过大（{} 字节，上限 {} 字节）。",
+                body.len(),
+                MAX_BODY_SIZE
+            )
+        };
+        respond_error_message(request, 413, &message, cors_origin);
         return;
     }
 
@@ -1343,13 +1585,12 @@ fn handle_manage(
     let manage_request: LockManageRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
-            respond_json(
+            respond_error_with_diagnostic(
                 request,
                 400,
-                &format!(
-                    r#"{{"error":"{}"}}"#,
-                    yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))
-                ),
+                "请求体不是有效的 JSON。",
+                "The request body is not valid JSON.",
+                e,
                 cors_origin,
             );
             return;
@@ -1357,15 +1598,11 @@ fn handle_manage(
     };
 
     if manage_request.lock.is_empty() && manage_request.unlock.is_empty() {
-        respond_json(
+        respond_error(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(
-                    "lock 和 unlock 列表均为空 / Both lock and unlock lists are empty"
-                )
-            ),
+            "lock 和 unlock 列表均为空。",
+            "Both the lock and unlock lists are empty.",
             cors_origin,
         );
         return;
@@ -1378,12 +1615,12 @@ fn handle_manage(
     ] {
         for (idx, artifact) in artifacts.iter().enumerate() {
             if let Some(err) = validate_artifact(artifact) {
-                respond_json(
-                    request,
-                    400,
-                    &format!(r#"{{"error":"{}[{}]: {}"}}"#, list_name, idx, err),
-                    cors_origin,
-                );
+                let message = if yas::lang::is_en() {
+                    format!("{}[{}] is invalid: {}", list_name, idx, err)
+                } else {
+                    format!("{}[{}] 无效: {}", list_name, idx, err)
+                };
+                respond_error_message(request, 400, &message, cors_origin);
                 return;
             }
         }
@@ -1408,19 +1645,15 @@ fn handle_manage(
     }
 
     // Send to execution thread
-    if job_tx
-        .send((job_id.clone(), JobRequest::Manage(manage_request)))
-        .is_err()
-    {
+    if let Err(e) = job_tx.send((job_id.clone(), JobRequest::Manage(manage_request))) {
         let mut s = state.lock().unwrap();
         *s = JobState::idle();
-        respond_json(
+        respond_error_with_diagnostic(
             request,
             500,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize("执行线程不可用 / Execution thread unavailable")
-            ),
+            "无法提交任务，因为执行线程不可用。",
+            "The job could not be submitted because the execution thread is unavailable.",
+            e,
             cors_origin,
         );
         return;
@@ -1444,15 +1677,11 @@ fn handle_equip(
             "管理器已暂停，拒绝请求",
             "Manager paused, rejecting request"
         );
-        respond_json(
+        respond_error(
             request,
             503,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(
-                    "管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests."
-                )
-            ),
+            "管理器已暂停。请在界面中启用后再发送请求。",
+            "The manager is paused. Enable it in the GUI before sending requests.",
             cors_origin,
         );
         return;
@@ -1461,10 +1690,11 @@ fn handle_equip(
     {
         let s = state.lock().unwrap();
         if s.state == JobPhase::Running {
-            respond_json(
+            respond_error(
                 request,
                 409,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("正在执行其他任务 / Another job is already running. Poll GET /status for progress.")),
+                "另一个任务正在运行。请轮询 GET /status 查看进度。",
+                "Another job is already running. Poll GET /status for progress.",
                 cors_origin,
             );
             return;
@@ -1473,31 +1703,27 @@ fn handle_equip(
 
     if let Some(len) = request.body_length() {
         if len > MAX_BODY_SIZE {
-            respond_json(
-                request,
-                413,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize(&format!(
-                    "请求体过大（{} 字节，上限 {} 字节）/ Request body too large: {} bytes (max {})",
-                    len, MAX_BODY_SIZE, len, MAX_BODY_SIZE
-                ))),
-                cors_origin,
-            );
+            let message = if yas::lang::is_en() {
+                format!(
+                    "Request body too large: {} bytes (max {}).",
+                    len, MAX_BODY_SIZE
+                )
+            } else {
+                format!("请求体过大（{} 字节，上限 {} 字节）。", len, MAX_BODY_SIZE)
+            };
+            respond_error_message(request, 413, &message, cors_origin);
             return;
         }
     }
 
     let mut body = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        respond_json(
+        respond_error_with_diagnostic(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(&format!(
-                    "读取请求体失败: {} / Failed to read body: {}",
-                    e, e
-                ))
-            ),
+            "无法读取请求体。",
+            "The request body could not be read.",
+            e,
             cors_origin,
         );
         return;
@@ -1507,31 +1733,32 @@ fn handle_equip(
     save_request("equip", &body);
 
     if body.len() > MAX_BODY_SIZE {
-        respond_json(
-            request,
-            413,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(&format!(
-                "请求体过大（{} 字节，上限 {} 字节）/ Request body too large: {} bytes (max {})",
-                body.len(), MAX_BODY_SIZE, body.len(), MAX_BODY_SIZE
-            ))
-            ),
-            cors_origin,
-        );
+        let message = if yas::lang::is_en() {
+            format!(
+                "Request body too large: {} bytes (max {}).",
+                body.len(),
+                MAX_BODY_SIZE
+            )
+        } else {
+            format!(
+                "请求体过大（{} 字节，上限 {} 字节）。",
+                body.len(),
+                MAX_BODY_SIZE
+            )
+        };
+        respond_error_message(request, 413, &message, cors_origin);
         return;
     }
 
     let equip_request: EquipRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
-            respond_json(
+            respond_error_with_diagnostic(
                 request,
                 400,
-                &format!(
-                    r#"{{"error":"{}"}}"#,
-                    yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))
-                ),
+                "请求体不是有效的 JSON。",
+                "The request body is not valid JSON.",
+                e,
                 cors_origin,
             );
             return;
@@ -1539,13 +1766,11 @@ fn handle_equip(
     };
 
     if equip_request.equip.is_empty() {
-        respond_json(
+        respond_error(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize("equip 列表为空 / Equip list is empty")
-            ),
+            "equip 列表为空。",
+            "The equip list is empty.",
             cors_origin,
         );
         return;
@@ -1554,12 +1779,12 @@ fn handle_equip(
     // Validate all artifact entries
     for (idx, instr) in equip_request.equip.iter().enumerate() {
         if let Some(err) = validate_artifact(&instr.artifact) {
-            respond_json(
-                request,
-                400,
-                &format!(r#"{{"error":"equip[{}]: {}"}}"#, idx, err),
-                cors_origin,
-            );
+            let message = if yas::lang::is_en() {
+                format!("equip[{}] is invalid: {}", idx, err)
+            } else {
+                format!("equip[{}] 无效: {}", idx, err)
+            };
+            respond_error_message(request, 400, &message, cors_origin);
             return;
         }
     }
@@ -1579,19 +1804,15 @@ fn handle_equip(
         *s = JobState::running(job_id.clone(), total);
     }
 
-    if job_tx
-        .send((job_id.clone(), JobRequest::Equip(equip_request)))
-        .is_err()
-    {
+    if let Err(e) = job_tx.send((job_id.clone(), JobRequest::Equip(equip_request))) {
         let mut s = state.lock().unwrap();
         *s = JobState::idle();
-        respond_json(
+        respond_error_with_diagnostic(
             request,
             500,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize("执行线程不可用 / Execution thread unavailable")
-            ),
+            "无法提交任务，因为执行线程不可用。",
+            "The job could not be submitted because the execution thread is unavailable.",
+            e,
             cors_origin,
         );
         return;
@@ -1614,15 +1835,11 @@ fn handle_scan(
             "管理器已暂停，拒绝请求",
             "Manager paused, rejecting request"
         );
-        respond_json(
+        respond_error(
             request,
             503,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(
-                    "管理器已暂停 / Manager is paused. Enable it in the GUI to accept requests."
-                )
-            ),
+            "管理器已暂停。请在界面中启用后再发送请求。",
+            "The manager is paused. Enable it in the GUI before sending requests.",
             cors_origin,
         );
         return;
@@ -1631,10 +1848,11 @@ fn handle_scan(
     {
         let s = state.lock().unwrap();
         if s.state == JobPhase::Running {
-            respond_json(
+            respond_error(
                 request,
                 409,
-                &format!(r#"{{"error":"{}"}}"#, yas::lang::localize("正在执行其他任务 / Another job is already running. Poll GET /status for progress.")),
+                "另一个任务正在运行。请轮询 GET /status 查看进度。",
+                "Another job is already running. Poll GET /status for progress.",
                 cors_origin,
             );
             return;
@@ -1643,16 +1861,12 @@ fn handle_scan(
 
     let mut body = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        respond_json(
+        respond_error_with_diagnostic(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(&format!(
-                    "读取请求体失败: {} / Failed to read body: {}",
-                    e, e
-                ))
-            ),
+            "无法读取请求体。",
+            "The request body could not be read.",
+            e,
             cors_origin,
         );
         return;
@@ -1663,13 +1877,12 @@ fn handle_scan(
     let scan_request: ScanRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
-            respond_json(
+            respond_error_with_diagnostic(
                 request,
                 400,
-                &format!(
-                    r#"{{"error":"{}"}}"#,
-                    yas::lang::localize(&format!("JSON解析失败: {} / JSON parse error: {}", e, e))
-                ),
+                "请求体不是有效的 JSON。",
+                "The request body is not valid JSON.",
+                e,
                 cors_origin,
             );
             return;
@@ -1677,28 +1890,22 @@ fn handle_scan(
     };
 
     if !scan_request.characters && !scan_request.weapons && !scan_request.artifacts {
-        respond_json(
+        respond_error(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize("至少需要一个扫描目标 / At least one scan target must be true")
-            ),
+            "至少需要启用一个扫描目标。",
+            "At least one scan target must be true.",
             cors_origin,
         );
         return;
     }
 
     if scan_request.artifact_mode == ArtifactScanMode::Recent && !scan_request.artifacts {
-        respond_json(
+        respond_error(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(
-                    "artifactMode=recent 需要 artifacts=true / artifactMode=recent requires artifacts=true"
-                )
-            ),
+            "artifactMode=recent 需要 artifacts=true。",
+            "artifactMode=recent requires artifacts=true.",
             cors_origin,
         );
         return;
@@ -1707,15 +1914,11 @@ fn handle_scan(
     if scan_request.artifact_mode == ArtifactScanMode::Recent
         && scan_request.artifact_limit.is_none()
     {
-        respond_json(
+        respond_error(
             request,
             400,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize(
-                    "最近圣遗物扫描需要 artifactLimit / recent artifact scans require artifactLimit"
-                )
-            ),
+            "最近圣遗物扫描需要 artifactLimit。",
+            "Recent artifact scans require artifactLimit.",
             cors_origin,
         );
         return;
@@ -1723,30 +1926,22 @@ fn handle_scan(
 
     if let Some(limit) = scan_request.artifact_limit {
         if limit == 0 {
-            respond_json(
+            respond_error(
                 request,
                 400,
-                &format!(
-                    r#"{{"error":"{}"}}"#,
-                    yas::lang::localize(
-                        "artifactLimit 必须大于 0 / artifactLimit must be greater than 0"
-                    )
-                ),
+                "artifactLimit 必须大于 0。",
+                "artifactLimit must be greater than 0.",
                 cors_origin,
             );
             return;
         }
 
         if limit > 1000 {
-            respond_json(
+            respond_error(
                 request,
                 400,
-                &format!(
-                    r#"{{"error":"{}"}}"#,
-                    yas::lang::localize(
-                        "artifactLimit 不能超过 1000 / artifactLimit cannot exceed 1000"
-                    )
-                ),
+                "artifactLimit 不能超过 1000。",
+                "artifactLimit cannot exceed 1000.",
                 cors_origin,
             );
             return;
@@ -1776,19 +1971,15 @@ fn handle_scan(
         *s = JobState::running_scan(job_id.clone(), scan_chars, scan_wpns, scan_arts);
     }
 
-    if job_tx
-        .send((job_id.clone(), JobRequest::Scan(scan_request)))
-        .is_err()
-    {
+    if let Err(e) = job_tx.send((job_id.clone(), JobRequest::Scan(scan_request))) {
         let mut s = state.lock().unwrap();
         *s = JobState::idle();
-        respond_json(
+        respond_error_with_diagnostic(
             request,
             500,
-            &format!(
-                r#"{{"error":"{}"}}"#,
-                yas::lang::localize("执行线程不可用 / Execution thread unavailable")
-            ),
+            "无法提交任务，因为执行线程不可用。",
+            "The job could not be submitted because the execution thread is unavailable.",
+            e,
             cors_origin,
         );
         return;
@@ -1823,6 +2014,38 @@ mod tests {
     // which causes STATUS_HEAP_CORRUPTION on Windows.
     static SERVER_LOCK: Mutex<()> = Mutex::new(());
 
+    struct TestLanguageGuard {
+        previous: &'static str,
+    }
+
+    impl TestLanguageGuard {
+        fn set(lang: &str) -> Self {
+            let previous = yas::lang::get_lang();
+            yas::lang::set_lang(lang);
+            Self { previous }
+        }
+    }
+
+    impl Drop for TestLanguageGuard {
+        fn drop(&mut self) {
+            yas::lang::set_lang(self.previous);
+        }
+    }
+
+    fn assert_error_response(resp: reqwest::blocking::Response, expected_status: u16) -> String {
+        assert_eq!(resp.status().as_u16(), expected_status);
+        let body: serde_json::Value = resp.json().expect("error response must be valid JSON");
+        let object = body
+            .as_object()
+            .expect("error response must be a JSON object");
+        assert_eq!(object.len(), 1, "error response schema must remain stable");
+        object
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .expect("error response must contain one string error field")
+            .to_string()
+    }
+
     #[test]
     fn test_origin_allowlist_accepts_loopback_hosts() {
         assert!(is_origin_allowed("https://ggartifact.com"));
@@ -1846,6 +2069,131 @@ mod tests {
         assert!(!is_origin_allowed("http://[::2]:5173"));
         assert!(!is_origin_allowed("ftp://ggartifact.com"));
         assert!(!is_origin_allowed("ftp://127.0.0.1"));
+    }
+
+    #[test]
+    fn test_error_json_localizes_hint_and_preserves_exact_diagnostic() {
+        let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("zh");
+        let diagnostic = "send failed / device \"adapter\"\nsecond line";
+
+        let zh_message = error_message_with_diagnostic(
+            "无法提交任务。",
+            "The job could not be submitted.",
+            diagnostic,
+        );
+        let zh_json = error_json(&zh_message);
+        let zh_body: serde_json::Value = serde_json::from_str(&zh_json).unwrap();
+        assert_eq!(
+            zh_body["error"],
+            format!("无法提交任务。\n\n完整错误详情:\n{}", diagnostic)
+        );
+        assert!(zh_json.contains("\\\"adapter\\\""));
+        assert!(zh_json.contains("\\nsecond line"));
+
+        yas::lang::set_lang("en");
+        let en_message = error_message_with_diagnostic(
+            "无法提交任务。",
+            "The job could not be submitted.",
+            diagnostic,
+        );
+        let en_json = error_json(&en_message);
+        let en_body: serde_json::Value = serde_json::from_str(&en_json).unwrap();
+        assert_eq!(
+            en_body["error"],
+            format!(
+                "The job could not be submitted.\n\nFull error details:\n{}",
+                diagnostic
+            )
+        );
+    }
+
+    #[test]
+    fn test_server_bind_error_keeps_hint_and_original_io_diagnostic() {
+        let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("en");
+        let source: Box<dyn std::error::Error + Send + Sync> = Box::new(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "bind marker / STATUS_MARKER",
+        ));
+
+        let error = contextualize_server_bind_error(19123, source);
+        assert_eq!(
+            format!("{error:#}"),
+            "Port 19123 is already in use. Choose a different port.: bind marker / STATUS_MARKER"
+        );
+    }
+
+    #[test]
+    fn test_serialization_error_response_uses_http_500() {
+        let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("en");
+        let port = next_port();
+        let server = Server::http(format!("127.0.0.1:{port}"))
+            .expect("serialization response test server should bind");
+        let response_thread = std::thread::spawn(move || {
+            let request = server
+                .recv()
+                .expect("serialization response test should receive one request");
+            respond_serialization_error(
+                request,
+                "无法序列化测试数据。",
+                "The test data could not be serialized.",
+                "serializer marker / STATUS_MARKER",
+                None,
+            );
+        });
+
+        let response = reqwest::blocking::get(format!("http://127.0.0.1:{port}/data")).unwrap();
+        let error = assert_error_response(response, 500);
+        assert_eq!(
+            error,
+            "The test data could not be serialized.\n\nFull error details:\nserializer marker / STATUS_MARKER"
+        );
+        response_thread.join().unwrap();
+    }
+
+    #[test]
+    fn test_job_panic_surfaces_localized_hint_and_exact_payload() {
+        let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("en");
+        // An empty fake response queue deliberately panics with this stable
+        // payload when the accepted manage job begins execution.
+        let panic_payload = "FakeExecutor: no more responses queued";
+        let (port, shutdown, handle) = start_test_server(VecDeque::new(), 0);
+        let client = reqwest::blocking::Client::new();
+        let base = format!("http://127.0.0.1:{port}");
+
+        let response = client
+            .post(format!("{base}/manage"))
+            .header("Content-Type", "application/json")
+            .body(make_manage_body(&["panic-target"]))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 202);
+        let job_id = response.json::<serde_json::Value>().unwrap()["jobId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        poll_until_completed(port);
+
+        let result: serde_json::Value = client
+            .get(format!("{base}/result?jobId={job_id}"))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        assert_eq!(result["summary"]["errors"], 1);
+        assert_eq!(result["results"][0]["id"], "job");
+        assert_eq!(result["results"][0]["status"], "ui_error");
+        assert_eq!(
+            result["results"][0]["message"],
+            format!(
+                "The job stopped because of an internal scanner error. The complete copyable error is included below.\n\nFull error details:\n{panic_payload}"
+            )
+        );
+
+        stop_server(&shutdown, handle);
     }
 
     struct FakeExecutor {
@@ -1964,10 +2312,7 @@ mod tests {
     fn make_result(statuses: &[(&str, InstructionStatus)]) -> ManageResult {
         let results: Vec<InstructionResult> = statuses
             .iter()
-            .map(|(id, status)| InstructionResult {
-                id: id.to_string(),
-                status: status.clone(),
-            })
+            .map(|(id, status)| InstructionResult::outcome(*id, status.clone()))
             .collect();
         let summary = ManageSummary::from_results(&results);
         ManageResult { results, summary }
@@ -2100,6 +2445,107 @@ mod tests {
         panic!("Job did not complete within timeout");
     }
 
+    #[test]
+    fn test_http_error_language_status_and_schema_contract() {
+        let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("en");
+
+        let mut responses = VecDeque::new();
+        responses.push_back((make_result(&[("busy", InstructionStatus::Success)]), None));
+        let enabled = Arc::new(AtomicBool::new(true));
+        let (port, shutdown, handle) =
+            start_test_server_with_enabled(responses, 1_000, enabled.clone());
+        let client = reqwest::blocking::Client::new();
+        let base = format!("http://127.0.0.1:{}", port);
+
+        let error =
+            assert_error_response(client.get(format!("{}/result", base)).send().unwrap(), 400);
+        assert_eq!(error, "Missing required query parameter: jobId.");
+
+        let error = assert_error_response(
+            client
+                .get(format!("{}/not-an-endpoint", base))
+                .send()
+                .unwrap(),
+            404,
+        );
+        assert_eq!(error, "The requested endpoint was not found.");
+
+        let error = assert_error_response(
+            client
+                .get(format!("{}/health", base))
+                .header("Origin", "https://evil.example")
+                .send()
+                .unwrap(),
+            403,
+        );
+        assert_eq!(error, "The request origin is not allowed.");
+
+        yas::lang::set_lang("zh");
+        let error = assert_error_response(
+            client
+                .post(format!("{}/scan", base))
+                .header("Content-Type", "application/json")
+                .body("{\n  \"characters\": true,\n  \"broken\": \"unterminated\n}")
+                .send()
+                .unwrap(),
+            400,
+        );
+        assert!(error.starts_with("请求体不是有效的 JSON。\n\n完整错误详情:\n"));
+        assert!(error.contains("line"));
+
+        let error = assert_error_response(
+            client
+                .post(format!("{}/manage", base))
+                .header("Content-Type", "application/json")
+                .body(vec![b' '; MAX_BODY_SIZE + 1])
+                .send()
+                .unwrap(),
+            413,
+        );
+        assert!(error.starts_with("请求体过大"));
+
+        yas::lang::set_lang("en");
+        let accepted = client
+            .post(format!("{}/manage", base))
+            .header("Content-Type", "application/json")
+            .body(make_manage_body(&["busy"]))
+            .send()
+            .unwrap();
+        assert_eq!(accepted.status().as_u16(), 202);
+
+        let error = assert_error_response(
+            client
+                .post(format!("{}/scan", base))
+                .header("Content-Type", "application/json")
+                .body(r#"{"characters":true}"#)
+                .send()
+                .unwrap(),
+            409,
+        );
+        assert_eq!(
+            error,
+            "Another job is already running. Poll GET /status for progress."
+        );
+
+        enabled.store(false, Ordering::Relaxed);
+        let error = assert_error_response(
+            client
+                .post(format!("{}/manage", base))
+                .header("Content-Type", "application/json")
+                .body(r#"{"lock":[],"unlock":[]}"#)
+                .send()
+                .unwrap(),
+            503,
+        );
+        assert_eq!(
+            error,
+            "The manager is paused. Enable it in the GUI before sending requests."
+        );
+
+        stop_server(&shutdown, handle);
+    }
+
     // -----------------------------------------------------------------------
     // Tests: consolidated from 13 → 5 to minimize server instances.
     // All tests acquire SERVER_LOCK to run sequentially.
@@ -2205,8 +2651,11 @@ mod tests {
             .send()
             .unwrap();
         assert_eq!(resp.status().as_u16(), 403);
-        let body = resp.text().unwrap();
-        assert!(body.contains("Origin not allowed"));
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(
+            body["error"],
+            configured_text("不允许该请求来源。", "The request origin is not allowed.")
+        );
 
         // CORS: preflight OPTIONS
         let resp = client
@@ -2703,6 +3152,7 @@ mod tests {
     #[test]
     fn test_game_init_failure_produces_ui_error_results() {
         let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("en");
 
         let port = next_port();
         let enabled = Arc::new(AtomicBool::new(true));
@@ -2711,7 +3161,8 @@ mod tests {
 
         let handle = std::thread::spawn(move || {
             let init = move || -> anyhow::Result<Box<dyn ManageExecutor>> {
-                Err(anyhow::anyhow!("Game window not found"))
+                Err(anyhow::anyhow!("Game window not found")
+                    .context("initializing scanner controller"))
             };
             let _ = run_server(port, init, enabled, shutdown_clone, false, None);
         });
@@ -2747,6 +3198,14 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["status"], "ui_error");
         assert_eq!(results[1]["status"], "ui_error");
+        for result in results {
+            let message = result["message"].as_str().unwrap();
+            assert!(message.starts_with(
+                "The scanner could not connect to the game, so this operation was not performed."
+            ));
+            assert!(message.contains("\n\nFull error details:\n"));
+            assert!(message.contains("initializing scanner controller: Game window not found"));
+        }
 
         stop_server(&shutdown, handle);
     }
@@ -2783,6 +3242,7 @@ mod tests {
     #[test]
     fn test_scan_api_flow() {
         let _guard = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lang = TestLanguageGuard::set("en");
 
         let manage_responses = VecDeque::new();
         let mut scan_responses: VecDeque<anyhow::Result<ScanResult>> = VecDeque::new();
@@ -2810,12 +3270,18 @@ mod tests {
         }));
 
         // Scan 3: scan error
-        scan_responses.push_back(Err(anyhow::anyhow!("Game window not found")));
+        scan_responses.push_back(Err(anyhow::anyhow!(
+            "Game window not found / WINDOW_MARKER"
+        )
+        .context("initializing scan runtime")));
 
-        // Scan 4: characters complete, weapons aborted, artifacts never reached
+        // Scan 4: characters complete, weapons fail, artifacts are stopped.
         scan_responses.push_back(Ok(ScanResult {
             characters: PhaseResult::Complete(vec![make_character("Furina", 90)]),
-            weapons: PhaseResult::Incomplete,
+            weapons: PhaseResult::Failed(
+                anyhow::anyhow!("inner scan marker / STATUS_MARKER")
+                    .context("weapon scan phase failed"),
+            ),
             artifacts: PhaseResult::Incomplete,
         }));
 
@@ -3053,6 +3519,13 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["summary"]["errors"], 1);
+        assert_eq!(body["results"][0]["id"], "scan");
+        assert_eq!(body["results"][0]["status"], "ui_error");
+        let message = body["results"][0]["message"].as_str().unwrap();
+        assert!(message.starts_with("The scan job encountered an error"));
+        assert!(message.contains(
+            "Full error details:\ninitializing scan runtime: Game window not found / WINDOW_MARKER"
+        ));
 
         // Previous scan data still intact (error didn't wipe caches)
         let resp = client
@@ -3066,7 +3539,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 200);
 
-        // === Scan 4: characters complete, weapons + artifacts aborted ===
+        // === Scan 4: characters complete, weapon failed, artifacts stopped ===
 
         let resp = client
             .post(format!("{}/scan", base))
@@ -3080,7 +3553,7 @@ mod tests {
 
         poll_until_completed(port);
 
-        // /result: 1 success (characters) + 2 aborted (weapons, artifacts)
+        // /result: one success, one technical error, and one clean stop.
         let resp = client
             .get(format!("{}/result?jobId={}", base, scan4_id))
             .send()
@@ -3088,7 +3561,31 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["summary"]["success"], 1);
-        assert_eq!(body["summary"]["aborted"], 2);
+        assert_eq!(body["summary"]["errors"], 1);
+        assert_eq!(body["summary"]["aborted"], 1);
+        let results = body["results"].as_array().unwrap();
+        assert!(results[0].get("message").is_none());
+        let weapon_result = results
+            .iter()
+            .find(|result| result["id"] == "weapons")
+            .unwrap();
+        assert_eq!(weapon_result["status"], "ui_error");
+        let weapon_message = weapon_result["message"].as_str().unwrap();
+        assert!(weapon_message.starts_with("The weapon scan encountered an error"));
+        assert!(weapon_message.contains(
+            "Full error details:\nweapon scan phase failed: inner scan marker / STATUS_MARKER"
+        ));
+        let artifact_result = results
+            .iter()
+            .find(|result| result["id"] == "artifacts")
+            .unwrap();
+        assert_eq!(artifact_result["status"], "aborted");
+        let artifact_message = artifact_result["message"].as_str().unwrap();
+        assert_eq!(
+            artifact_message,
+            "The artifact scan was stopped before it finished, so incomplete data was not published."
+        );
+        assert!(!artifact_message.contains("Full error details:"));
 
         // Completed phase: /characters returns 200 for scan4
         let resp = client

@@ -17,10 +17,13 @@ use worker::TaskHandle;
 
 /// Launch the GUI application.
 pub fn run_gui() {
-    // Clean up leftover .old exe from a previous update
-    genshin_scanner::updater::cleanup_old_exe();
+    #[cfg(feature = "capture")]
+    const PRODUCT_NAME: &str = "GOODCapture Scanner";
+    #[cfg(not(feature = "capture"))]
+    const PRODUCT_NAME: &str = "GOOD Scanner";
 
-    // Install global SEH handler early — protects ALL threads including main.
+    // Register the process-wide SEH handler early. Worker threads explicitly
+    // enroll in it when they start; unregistered threads are left alone.
     #[cfg(target_os = "windows")]
     worker::install_seh_handler();
 
@@ -35,12 +38,26 @@ pub fn run_gui() {
         state.manager_log_lines.clone(),
         2000,
     );
-    logger.init(state.verbose);
+    if let Err(error) = logger.init(state.verbose) {
+        let failure = state::UiError::from_message(
+            state::UiText::new(
+                "程序无法启动错误记录功能。请复制完整错误并报告此问题。",
+                "The application could not start its error logging. Copy the full error and report this problem.",
+            ),
+            error.to_string(),
+        );
+        show_startup_error(PRODUCT_NAME, state.lang, &failure);
+        return;
+    }
 
     // Install a panic hook that writes to the log file (the default hook
     // writes to stderr, which GUI users never see).  This covers panics on
     // ALL threads — worker, update, refresh, and GUI main.
     install_panic_hook();
+
+    // Clean up the previous update only after logging is ready, so even this
+    // non-fatal startup failure retains its readable hint and inner error.
+    genshin_scanner::updater::cleanup_old_exe();
 
     // Kick off background update check for the executable that is running.
     #[cfg(feature = "capture")]
@@ -49,57 +66,104 @@ pub fn run_gui() {
     const UPDATE_ASSET: &str = genshin_scanner::updater::ASSET_SCANNER;
     update_banner::spawn_check(UPDATE_ASSET, &state.update_state);
 
-    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon_64.png"))
-        .expect("Failed to load window icon");
-
-    #[cfg(feature = "capture")]
-    const PRODUCT_NAME: &str = "GOODCapture Scanner";
-    #[cfg(not(feature = "capture"))]
-    const PRODUCT_NAME: &str = "GOOD Scanner";
     let window_title = genshin_scanner::updater::window_title(PRODUCT_NAME);
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(window_title)
+        .with_inner_size([720.0, 660.0])
+        .with_min_inner_size([600.0, 400.0]);
+    match eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon_64.png")) {
+        Ok(icon) => viewport = viewport.with_icon(std::sync::Arc::new(icon)),
+        Err(error) => {
+            let failure = state::UiError::from_error(
+                state::UiText::new(
+                    "窗口图标无法加载，但程序仍可继续使用。",
+                    "The window icon could not be loaded, but the application can continue.",
+                ),
+                error,
+            );
+            log::error!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", failure.copy_text(state.lang));
+        },
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(window_title)
-            .with_inner_size([720.0, 660.0])
-            .with_min_inner_size([600.0, 400.0])
-            .with_icon(std::sync::Arc::new(icon)),
+        viewport,
         ..Default::default()
     };
 
-    eframe::run_native(
+    if let Err(error) = eframe::run_native(
         PRODUCT_NAME,
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
             Ok(Box::new(GuiApp::new(state)))
         }),
-    )
-    .unwrap();
+    ) {
+        let lang = if yas::lang::is_en() {
+            Lang::En
+        } else {
+            Lang::Zh
+        };
+        let failure = state::UiError::from_error(
+            state::UiText::new(
+                "程序窗口无法启动或意外关闭。请复制下方完整错误以搜索或寻求帮助。",
+                "The application window could not start or closed unexpectedly. Copy the full error below to search or ask for help.",
+            ),
+            error,
+        );
+        log::error!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", failure.copy_text(lang));
+        show_startup_error(PRODUCT_NAME, lang, &failure);
+    }
+}
+
+fn show_startup_error(product_name: &str, lang: Lang, failure: &state::UiError) {
+    let full_error = failure.copy_text(lang);
+    let mut description = full_error.clone();
+    match state::persist_error_report("startup_error.txt", &full_error) {
+        Ok(path) => {
+            description.push_str("\n\n");
+            description.push_str(lang.t(
+                "完整错误也已保存到以下文件，可打开后复制：\n",
+                "The full error was also saved here so it can be opened and copied:\n",
+            ));
+            description.push_str(&path.display().to_string());
+        },
+        Err(error) => {
+            description.push_str("\n\n");
+            description.push_str(lang.t(
+                "程序还无法保存错误报告。请拍摄此窗口，或复制其中可选择的文字。完整错误详情：\n",
+                "The application also could not save the error report. Take a screenshot of this window, or copy any selectable text. Full error details:\n",
+            ));
+            description.push_str(&format!("{error:#}"));
+        },
+    }
+
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(format!("{} — {}", product_name, lang.t("错误", "Error")))
+        .set_description(description)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
 
 /// Replace the default panic hook so panics on ANY thread are written
 /// to the `log::error!` logger (visible in the GUI log panel + log file).
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
-            (*s).to_string()
-        } else if let Some(s) = info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "unknown".to_string()
-        };
-        let location = info
-            .location()
-            .map(|l| format!(" at {}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_default();
-        log::error!(
-            "{}",
-            yas::lang::localize(&format!(
-                "程序崩溃: {}{} / Program panicked: {}{}",
-                payload, location, payload, location,
-            ))
+        let technical_details = state::record_panic_details(info);
+        let failure = state::UiError::from_message(
+            state::UiText::new(
+                "程序中的任务遇到意外内部错误，当前操作可能已停止。请复制完整错误以搜索或寻求帮助。",
+                "An application task encountered an unexpected internal error and may have stopped. Copy the full error to search or ask for help.",
+            ),
+            technical_details,
         );
+        let lang = if yas::lang::is_en() {
+            Lang::En
+        } else {
+            Lang::Zh
+        };
+        log::error!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", failure.copy_text(lang));
     }));
 }
 
@@ -228,6 +292,19 @@ impl eframe::App for GuiApp {
             .server_handle
             .as_ref()
             .map_or(false, |h| !h.is_finished());
+        // A native worker crash exits the thread without running Rust/native
+        // cleanup. Block every game-facing task until the whole application
+        // is restarted; retrying in the same process is not safe.
+        let restart_required = self
+            .scan_handle
+            .as_ref()
+            .map_or(false, TaskHandle::requires_restart)
+            || self
+                .server_handle
+                .as_ref()
+                .map_or(false, TaskHandle::requires_restart);
+        #[cfg(feature = "capture")]
+        let restart_required = restart_required || self.capture_tab.requires_restart();
         #[cfg(feature = "capture")]
         let is_capture_busy = self.capture_tab.is_busy();
         #[cfg(not(feature = "capture"))]
@@ -240,7 +317,8 @@ impl eframe::App for GuiApp {
                     ui,
                     &mut self.state,
                     &mut self.scan_handle,
-                    is_server_running,
+                    is_server_running || is_capture_busy,
+                    restart_required,
                 );
             },
             ActiveTab::Manager => {
@@ -248,7 +326,8 @@ impl eframe::App for GuiApp {
                     ui,
                     &mut self.state,
                     &mut self.server_handle,
-                    is_scan_running,
+                    is_scan_running || is_capture_busy,
+                    restart_required,
                 );
             },
             #[cfg(feature = "capture")]
@@ -258,6 +337,7 @@ impl eframe::App for GuiApp {
                     self.state.lang,
                     &mut self.capture_tab,
                     is_scan_running || is_server_running,
+                    restart_required,
                 );
             },
             ActiveTab::Credits => {

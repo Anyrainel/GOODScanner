@@ -153,13 +153,22 @@ impl ArtifactManager {
         let was_cancelled = cancel_token.is_cancelled();
         for target in &targets {
             if !processed_ids.contains(&target.result_id) {
-                all_results.push(InstructionResult {
-                    id: target.result_id.clone(),
-                    status: if was_cancelled {
-                        InstructionStatus::Aborted
-                    } else {
-                        InstructionStatus::Skipped
-                    },
+                all_results.push(if was_cancelled {
+                    InstructionResult::failure(
+                        target.result_id.clone(),
+                        InstructionStatus::Aborted,
+                        "用户已停止此锁定操作。",
+                        "This lock operation was stopped by the user.",
+                        None,
+                    )
+                } else {
+                    InstructionResult::failure(
+                        target.result_id.clone(),
+                        InstructionStatus::Skipped,
+                        "未执行此锁定操作，因为之前的扫描步骤未能完成。",
+                        "This lock operation was not performed because an earlier scan step did not finish.",
+                        None,
+                    )
                 });
             }
         }

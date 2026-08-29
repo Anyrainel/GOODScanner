@@ -850,6 +850,7 @@ impl GoodCharacterScanner {
 
         let (auto_res, (skill_res, burst_res)) = rayon::join(
             || {
+                let _native_crash_context = yas::native_crash::inherit_current_task();
                 let ocr = ocr_pool.get();
                 Self::ocr_image_region(&ocr, image, CHAR_TALENT_OVERVIEW_AUTO, scaler)
                     .map(|t| {
@@ -859,8 +860,10 @@ impl GoodCharacterScanner {
                     .unwrap_or((0, String::new()))
             },
             || {
+                let _native_crash_context = yas::native_crash::inherit_current_task();
                 rayon::join(
                     || {
+                        let _native_crash_context = yas::native_crash::inherit_current_task();
                         let ocr = ocr_pool.get();
                         Self::ocr_image_region(&ocr, image, CHAR_TALENT_OVERVIEW_SKILL, scaler)
                             .map(|t| {
@@ -870,6 +873,7 @@ impl GoodCharacterScanner {
                             .unwrap_or((0, String::new()))
                     },
                     || {
+                        let _native_crash_context = yas::native_crash::inherit_current_task();
                         let ocr = ocr_pool.get();
                         Self::ocr_image_region(&ocr, image, burst_rect, scaler)
                             .map(|t| {
@@ -1441,7 +1445,7 @@ impl GoodCharacterScanner {
                 "[character] 3次尝试后仍无法打开角色界面",
                 "[character] failed to open character screen after 3 attempts"
             );
-            log_info!("{}", "{}", DELAY_TIP);
+            log_info!("{}", "{}", yas::lang::localize(DELAY_TIP));
         }
 
         // Jump to the specified character index
@@ -1467,6 +1471,7 @@ impl GoodCharacterScanner {
         let worker_config = self.config.clone();
 
         let worker_handle = std::thread::spawn(move || {
+            let _native_crash_context = yas::native_crash::inherit_current_task();
             // Build a temporary scanner for processing (needs mappings for adjust_talents).
             let scanner = GoodCharacterScanner {
                 config: worker_config,
@@ -1575,7 +1580,7 @@ impl GoodCharacterScanner {
                             "[character] cannot identify: \u{300C}{}\u{300D}, skipping",
                             raw_text
                         );
-                        log_info!("{}", "{}", DELAY_TIP);
+                        log_info!("{}", "{}", yas::lang::localize(DELAY_TIP));
                         consecutive_failures += 1;
                         viewed_count += 1;
                         // On name failure, return to attrs tab before navigating
@@ -1605,7 +1610,7 @@ impl GoodCharacterScanner {
                                 "[character] {} consecutive failures, stopping scan",
                                 consecutive_failures
                             );
-                            log_info!("{}", "{}", DELAY_TIP);
+                            log_info!("{}", "{}", yas::lang::localize(DELAY_TIP));
                             break;
                         }
                         continue;
@@ -1728,7 +1733,7 @@ impl GoodCharacterScanner {
                     "[character] {} consecutive failures, stopping scan",
                     consecutive_failures
                 );
-                log_info!("{}", "{}", DELAY_TIP);
+                log_info!("{}", "{}", yas::lang::localize(DELAY_TIP));
                 break;
             }
         }
@@ -1862,7 +1867,7 @@ impl GoodCharacterScanner {
             }
         }
         if had_impossible_level {
-            log_info!("{}", "{}", DELAY_TIP);
+            log_info!("{}", "{}", yas::lang::localize(DELAY_TIP));
         }
 
         let elapsed = now.elapsed().unwrap_or_default().as_secs_f64();

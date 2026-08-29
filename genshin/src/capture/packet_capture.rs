@@ -69,8 +69,13 @@ impl PacketCapture {
             .add_filter(filter2)
             .map_err(|e| CaptureError::Filter(e.into()))?;
 
+        let stream = capture.stream().map_err(|error| CaptureError::Capture {
+            has_captured: false,
+            error: Error::from(error).context("pktmon packet stream could not be started"),
+        })?;
+
         Ok(Self {
-            stream: Box::new(capture.stream().unwrap().boxed().fuse()),
+            stream: Box::new(stream.boxed().fuse()),
         })
     }
 

@@ -36,6 +36,7 @@ impl StreamingCapturer {
         let is_cancelled = self.is_cancelled.clone();
 
         let handle = thread::spawn(move || -> Result<()> {
+            let _native_crash_context = crate::native_crash::inherit_current_task();
             loop {
                 if self.is_cancelled.load(atomic::Ordering::Relaxed) {
                     break;

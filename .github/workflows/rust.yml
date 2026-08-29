@@ -40,6 +40,9 @@ jobs:
       - name: Setup Toolchain
         run: rustup default stable-msvc
 
+      - name: Test user-facing error diagnostics
+        run: cargo test -p good_tools_app --features test-as-invoker --test ui_error
+
       - name: Set version in Cargo.toml
         run: |
           $files = @(

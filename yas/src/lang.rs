@@ -22,6 +22,13 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 static LANG: AtomicU8 = AtomicU8::new(0); // 0 = zh, 1 = en
 
+/// Log target used by the bilingual macros after they have already selected
+/// the active language. Log sinks must not run legacy delimiter parsing on
+/// records with this target, because an inner technical error may itself
+/// contain `" / "`.
+pub const LOCALIZED_LOG_TARGET: &str = "yas::localized";
+const LOCALIZED_LOG_TARGET_SUFFIX: &str = "::localized";
+
 /// Set the global language. Call once at startup.
 /// Accepts `"en"` for English; anything else defaults to Chinese.
 pub fn set_lang(lang: &str) {
@@ -61,6 +68,19 @@ pub fn localize(msg: &str) -> String {
     }
 }
 
+/// Localize a log record exactly once.
+///
+/// The bilingual macros mark their records as already localized. Legacy raw
+/// log calls may still use the `"中文 / English"` convention and are parsed at
+/// the sink for backwards compatibility.
+pub fn localize_log_message(target: &str, msg: &str) -> String {
+    if target == LOCALIZED_LOG_TARGET || target.ends_with(LOCALIZED_LOG_TARGET_SUFFIX) {
+        msg.to_string()
+    } else {
+        localize(msg)
+    }
+}
+
 // ── Bilingual log macros ────────────────────────────────────────────
 //
 // Each macro requires **two** string literals (zh, en) plus optional
@@ -75,9 +95,9 @@ pub fn localize(msg: &str) -> String {
 macro_rules! log_info {
     ($zh:literal, $en:literal $(, $($arg:tt)*)?) => {
         if $crate::lang::is_en() {
-            ::log::info!($en $(, $($arg)*)?)
+            ::log::info!(target: concat!(module_path!(), "::localized"), $en $(, $($arg)*)?)
         } else {
-            ::log::info!($zh $(, $($arg)*)?)
+            ::log::info!(target: concat!(module_path!(), "::localized"), $zh $(, $($arg)*)?)
         }
     };
 }
@@ -87,9 +107,9 @@ macro_rules! log_info {
 macro_rules! log_warn {
     ($zh:literal, $en:literal $(, $($arg:tt)*)?) => {
         if $crate::lang::is_en() {
-            ::log::warn!($en $(, $($arg)*)?)
+            ::log::warn!(target: concat!(module_path!(), "::localized"), $en $(, $($arg)*)?)
         } else {
-            ::log::warn!($zh $(, $($arg)*)?)
+            ::log::warn!(target: concat!(module_path!(), "::localized"), $zh $(, $($arg)*)?)
         }
     };
 }
@@ -99,9 +119,9 @@ macro_rules! log_warn {
 macro_rules! log_error {
     ($zh:literal, $en:literal $(, $($arg:tt)*)?) => {
         if $crate::lang::is_en() {
-            ::log::error!($en $(, $($arg)*)?)
+            ::log::error!(target: concat!(module_path!(), "::localized"), $en $(, $($arg)*)?)
         } else {
-            ::log::error!($zh $(, $($arg)*)?)
+            ::log::error!(target: concat!(module_path!(), "::localized"), $zh $(, $($arg)*)?)
         }
     };
 }
@@ -111,9 +131,24 @@ macro_rules! log_error {
 macro_rules! log_debug {
     ($zh:literal, $en:literal $(, $($arg:tt)*)?) => {
         if $crate::lang::is_en() {
-            ::log::debug!($en $(, $($arg)*)?)
+            ::log::debug!(target: concat!(module_path!(), "::localized"), $en $(, $($arg)*)?)
         } else {
-            ::log::debug!($zh $(, $($arg)*)?)
+            ::log::debug!(target: concat!(module_path!(), "::localized"), $zh $(, $($arg)*)?)
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn already_localized_log_preserves_slashes_in_inner_error() {
+        let message = "Readable hint\n\nFull details:\ndriver failed / STATUS_DEVICE_REMOVED";
+        assert_eq!(localize_log_message(LOCALIZED_LOG_TARGET, message), message);
+        assert_eq!(
+            localize_log_message("genshin_scanner::server::localized", message),
+            message
+        );
+    }
 }

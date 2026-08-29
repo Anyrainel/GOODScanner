@@ -290,7 +290,11 @@ pub fn cleanup_old_exe() {
                     if attempt < 4 {
                         std::thread::sleep(Duration::from_millis(500));
                     } else {
-                        log_debug!("清理旧版本失败: {}", "Failed to clean up old exe: {}", e);
+                        log_warn!(
+                            "无法清理上次更新留下的旧程序文件；当前版本仍可继续使用。完整错误详情: {}",
+                            "The old application file left by the previous update could not be removed; the current version can still be used. Full error details: {}",
+                            e
+                        );
                     }
                 },
             }
@@ -347,7 +351,7 @@ pub fn download_and_replace(download_url: &str) -> Result<PathBuf> {
                     // Must be a PE executable of plausible size
                     if bytes.get(..2) != Some(b"MZ") {
                         last_error = "下载文件不是有效的exe / Not a valid PE executable".into();
-                        log_warn!("{}", "{}", last_error);
+                        log_warn!("{}", "{}", yas::lang::localize(&last_error));
                         continue;
                     }
                     if bytes.len() < MIN_EXE_SIZE {
@@ -358,7 +362,7 @@ pub fn download_and_replace(download_url: &str) -> Result<PathBuf> {
                             bytes.len(),
                             MIN_EXE_SIZE,
                         );
-                        log_warn!("{}", "{}", last_error);
+                        log_warn!("{}", "{}", yas::lang::localize(&last_error));
                         continue;
                     }
 

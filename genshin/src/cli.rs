@@ -142,10 +142,24 @@ pub fn check_onnxruntime() -> bool {
                 meta.len()
             );
             // Remove the bad file so download_onnxruntime_inner can write fresh
-            let _ = std::fs::remove_file(&dll_path);
+            if let Err(error) = std::fs::remove_file(&dll_path) {
+                log_warn!(
+                    "无法删除损坏的 OCR 运行库文件；重新下载可能失败。完整错误详情: {:#}",
+                    "The damaged OCR runtime file could not be removed; the replacement download may fail. Full error details: {:#}",
+                    error,
+                );
+            }
             false
         },
-        Err(_) => false, // File doesn't exist
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            log_warn!(
+                "无法检查 OCR 运行库文件；程序将尝试重新下载。完整错误详情: {:#}",
+                "The OCR runtime file could not be inspected; the application will try to download it again. Full error details: {:#}",
+                error,
+            );
+            false
+        },
     }
 }
 
@@ -164,15 +178,25 @@ fn download_onnxruntime_inner(dll_path: &std::path::Path) -> Result<()> {
         .connect_timeout(Duration::from_secs(15))
         .build()?;
 
-    let mut last_error = String::new();
+    let mut last_error: Option<anyhow::Error> = None;
     for (i, url) in ORT_DOWNLOAD_URLS.iter().enumerate() {
         log_info!("尝试源 {}: {}", "Trying source {}:  {}", i + 1, url);
 
         match client.get(*url).send() {
             Ok(response) => {
                 if !response.status().is_success() {
-                    last_error = format!("HTTP {}", response.status());
-                    log_warn!("源 {} 失败: {}", "Source {} failed: {}", i + 1, last_error);
+                    let error = anyhow!(
+                        "download source {} returned HTTP {}",
+                        url,
+                        response.status()
+                    );
+                    log_warn!(
+                        "下载源 {} 无法提供 OCR 运行库。完整错误详情: {:#}",
+                        "Download source {} could not provide the OCR runtime. Full error details: {:#}",
+                        i + 1,
+                        error,
+                    );
+                    last_error = Some(error);
                     continue;
                 }
                 match response.bytes() {
@@ -192,41 +216,65 @@ fn download_onnxruntime_inner(dll_path: &std::path::Path) -> Result<()> {
                                 std::env::set_var("ORT_DYLIB_PATH", dll_path);
                                 return Ok(());
                             },
-                            Err(e) => {
-                                last_error = format!("{}", e);
-                                log_warn!("解压失败: {}", "Extract failed: {}", last_error);
-                                if let Err(e) = std::fs::remove_file(dll_path) {
+                            Err(error) => {
+                                let error = error.context(format!(
+                                    "OCR runtime downloaded from source {} could not be extracted",
+                                    i + 1
+                                ));
+                                log_warn!(
+                                    "下载的 OCR 运行库无法解压。完整错误详情: {:#}",
+                                    "The downloaded OCR runtime could not be extracted. Full error details: {:#}",
+                                    error,
+                                );
+                                last_error = Some(error);
+                                if let Err(error) = std::fs::remove_file(dll_path) {
                                     log_warn!(
-                                        "清理失败的下载文件失败: {}",
-                                        "Failed to clean up partial download: {}",
-                                        e
+                                        "无法清理未完成的 OCR 运行库文件。完整错误详情: {:#}",
+                                        "The incomplete OCR runtime file could not be removed. Full error details: {:#}",
+                                        error,
                                     );
                                 }
                                 continue;
                             },
                         }
                     },
-                    Err(e) => {
-                        last_error = format!("{}", e);
-                        log_warn!("下载失败: {}", "Download failed: {}", last_error);
+                    Err(error) => {
+                        let error = anyhow::Error::from(error).context(format!(
+                            "response body from OCR runtime source {} could not be read",
+                            i + 1
+                        ));
+                        log_warn!(
+                            "OCR 运行库下载内容无法读取。完整错误详情: {:#}",
+                            "The OCR runtime download could not be read. Full error details: {:#}",
+                            error,
+                        );
+                        last_error = Some(error);
                         continue;
                     },
                 }
             },
-            Err(e) => {
-                last_error = format!("{}", e);
-                log_warn!("连接失败: {}", "Connection failed: {}", last_error);
+            Err(error) => {
+                let error = anyhow::Error::from(error)
+                    .context(format!("could not connect to OCR runtime source {}", i + 1));
+                log_warn!(
+                    "无法连接 OCR 运行库下载源。完整错误详情: {:#}",
+                    "The OCR runtime download source could not be reached. Full error details: {:#}",
+                    error,
+                );
+                last_error = Some(error);
                 continue;
             },
         }
     }
 
-    Err(anyhow!(
-        "所有下载源均失败 / All download sources failed: {}\n\
-         手动下载地址 / Manual download: {}",
-        last_error,
+    let summary = format!(
+        "all OCR runtime download sources failed; manual download: {}",
         ORT_DOWNLOAD_URLS.last().unwrap()
-    ))
+    );
+    match last_error {
+        Some(error) => Err(error).context(summary),
+        None => Err(anyhow!(summary)),
+    }
 }
 
 /// Ensure onnxruntime.dll is available next to the exe; if not, offer to download it.

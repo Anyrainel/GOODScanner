@@ -9,7 +9,17 @@ fn main() {
             res.set_windres_path("x86_64-w64-mingw32-windres");
         }
         res.set_icon("../assets/icon.ico");
-        res.set_manifest_file("../assets/manifest.xml");
+
+        // The shipped application must request elevation for input simulation.
+        // Pure Rust test executables do not perform those actions, and Windows
+        // otherwise refuses to launch them in an unelevated development shell.
+        // Keep the opt-out debug-only and explicit so release artifacts can
+        // never accidentally lose the administrator manifest.
+        let test_as_invoker = std::env::var("PROFILE").as_deref() == Ok("debug")
+            && std::env::var_os("CARGO_FEATURE_TEST_AS_INVOKER").is_some();
+        if !test_as_invoker {
+            res.set_manifest_file("../assets/manifest.xml");
+        }
 
         // VS_VERSION_INFO — legitimate apps carry version metadata; its absence
         // is a negative signal for AV heuristics.

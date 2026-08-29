@@ -2,7 +2,95 @@
 
 use eframe::egui;
 
-use super::state::{AppState, Lang};
+use super::state::{AppState, Lang, RefreshState, UiError, UiText};
+
+/// Render every user-visible failure with the same information hierarchy:
+/// a localized plain-language hint first, followed by the exact technical
+/// error in a selectable block and a one-click copy action.
+pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {
+    let hint = error.hint_text(l);
+    let technical_details = error.technical_details(l);
+    let copy_text = error.copy_text(l);
+
+    ui.group(|ui| {
+        ui.set_width(ui.available_width());
+        ui.colored_label(
+            egui::Color32::from_rgb(255, 100, 100),
+            egui::RichText::new(hint).strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.strong(l.t("完整错误详情", "Full error details"));
+            if ui
+                .small_button(l.t("复制完整错误", "Copy full error"))
+                .clicked()
+            {
+                ui.ctx().copy_text(copy_text.clone());
+            }
+        });
+        ui.add(
+            egui::TextEdit::multiline(&mut technical_details.as_str())
+                .font(egui::TextStyle::Monospace)
+                .desired_width(f32::INFINITY)
+                .desired_rows(technical_details.lines().count().clamp(2, 6)),
+        );
+    });
+}
+
+/// Shared game-data refresh control used by scanner, manager, and capture.
+/// The operation supplies its own localized hint while the original error
+/// chain is retained verbatim in `UiError`.
+pub fn game_data_refresh_control<F>(
+    ui: &mut egui::Ui,
+    l: Lang,
+    state: &mut RefreshState,
+    error_hint: UiText,
+    refresh: F,
+) where
+    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
+{
+    state.poll();
+    ui.horizontal(|ui| {
+        let busy = state.is_running();
+        if ui
+            .add_enabled(
+                !busy,
+                egui::Button::new(l.t("刷新游戏数据", "Refresh game data")),
+            )
+            .clicked()
+        {
+            let thread_start_hint = error_hint.clone();
+            *state = match std::thread::Builder::new()
+                .name("game-data-refresh".to_owned())
+                .spawn(move || {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(refresh)) {
+                        Ok(result) => {
+                            result.map_err(|error| UiError::from_anyhow(error_hint, &error))
+                        },
+                        Err(panic_info) => {
+                            Err(UiError::from_panic(error_hint, panic_info.as_ref()))
+                        },
+                    }
+                }) {
+                Ok(handle) => RefreshState::Running(handle),
+                Err(error) => RefreshState::Failed(UiError::from_error(thread_start_hint, error)),
+            };
+        }
+        match state {
+            RefreshState::Ok => {
+                ui.colored_label(egui::Color32::GREEN, "OK");
+            },
+            RefreshState::Running(_) => {
+                ui.spinner();
+            },
+            RefreshState::Idle | RefreshState::Failed(_) => {},
+        }
+    });
+
+    if let RefreshState::Failed(error) = state {
+        error_card(ui, l, error);
+    }
+}
 
 /// Numeric input for u64 values (clamped to 5000).
 pub fn num_input_u64(ui: &mut egui::Ui, value: &mut u64, _width: f32) {

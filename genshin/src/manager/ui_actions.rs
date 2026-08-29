@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use image::RgbImage;
 use yas::{log_debug, log_info, log_warn};
 
@@ -815,7 +815,8 @@ pub fn find_set_in_filter_panel_debug(
         let (found, hits) = detect_set_in_visible_rows_debug(ctrl, ocr, set_key, mappings)?;
         annotate_filter_screenshot(&mut img, &hits, &ctrl.scaler, set_key);
         let path = format!("{}_{}.png", prefix, idx);
-        let _ = img.save(&path);
+        img.save(&path)
+            .with_context(|| format!("filter-panel debug image could not be saved: {path}"))?;
         Ok(found)
     };
 
@@ -1325,6 +1326,7 @@ fn find_artifact_in_grid_inner(
             std::thread::scope(|s| {
                 // OCR thread
                 s.spawn(move || {
+                    let _native_crash_context = yas::native_crash::inherit_current_task();
                     // Track full OCR fingerprint per cell for empty detection.
                     // Empty cells show the same panel as the previous click, so
                     // ALL OCR fields are identical (not just level).
@@ -2097,7 +2099,11 @@ fn click_equip_button_safe_at(
     if let Ok(full) = ctrl.capture_game() {
         let _ = full.save(dir.join(format!("btn_full_{}.png", suffix)));
     }
-    bail!("button OCR failed: '{}', debug images saved", btn_clean)
+    bail!(
+        "button OCR failed: '{}'; debug-image capture was attempted under {} (see logs for any save failures)",
+        btn_clean,
+        dir.display(),
+    )
 }
 
 /// Filenames use `p{page}_r{row}_c{col}_{field}.png` to correlate with

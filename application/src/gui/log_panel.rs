@@ -1,14 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use eframe::egui;
 
-use super::state::{Lang, LogEntry};
+use super::state::{Lang, LogStore};
 
 /// Show the log panel with explicit parameters.
-pub fn show_with(ui: &mut egui::Ui, l: Lang, log_lines: &Arc<Mutex<Vec<LogEntry>>>) {
+pub fn show_with(ui: &mut egui::Ui, l: Lang, log_lines: &Arc<LogStore>) {
     // Build the full text once — shared between the Copy button and the TextEdit.
+    let lines = log_lines.snapshot();
     let (count, full_text) = {
-        let lines = log_lines.lock().unwrap();
         let mut s = String::new();
         for entry in lines.iter() {
             if !s.is_empty() {
@@ -30,7 +30,7 @@ pub fn show_with(ui: &mut egui::Ui, l: Lang, log_lines: &Arc<Mutex<Vec<LogEntry>
                 ui.ctx().copy_text(full_text.clone());
             }
             if ui.small_button(l.t("清除", "Clear")).clicked() {
-                log_lines.lock().unwrap().clear();
+                log_lines.clear();
             }
         }
     });

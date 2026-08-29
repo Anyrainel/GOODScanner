@@ -108,6 +108,7 @@ where
     let should_stop_clone = should_stop.clone();
 
     let handle = std::thread::spawn(move || {
+        let _native_crash_context = yas::native_crash::inherit_current_task();
         let process_fn = Arc::new(process_fn);
 
         // Result channel: rayon tasks send completed items here. The dispatch
@@ -118,6 +119,7 @@ where
         // Dispatch: receive items and spawn rayon tasks
         let dispatch_result_tx = result_tx.clone();
         let dispatch_handle = std::thread::spawn(move || {
+            let _native_crash_context = yas::native_crash::inherit_current_task();
             let mut total = 0;
             for item in item_rx {
                 total += 1;
@@ -125,6 +127,7 @@ where
                 let tx = dispatch_result_tx.clone();
                 let index = item.index;
                 rayon::spawn(move || {
+                    let _native_crash_context = yas::native_crash::inherit_current_task();
                     let result = process_fn(item);
                     let _ = tx.send(WorkerEvent::ItemProcessed(index, result));
                 });

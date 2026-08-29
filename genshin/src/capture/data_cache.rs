@@ -36,27 +36,51 @@ fn now_secs() -> u64 {
 }
 
 fn load_meta() -> CacheMeta {
-    if let Ok(content) = fs::read_to_string(DATA_CACHE_META_PATH) {
-        if let Ok(meta) = serde_json::from_str::<CacheMeta>(&content) {
-            return meta;
-        }
+    let content = match fs::read_to_string(DATA_CACHE_META_PATH) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return CacheMeta::default(),
+        Err(error) => {
+            log_warn!(
+                "无法读取抓包缓存状态；将重新检查远程数据。完整错误详情: {:#}",
+                "Capture cache metadata could not be read; remote data will be checked again. Full error details: {:#}",
+                error,
+            );
+            return CacheMeta::default();
+        },
+    };
+    match serde_json::from_str::<CacheMeta>(&content) {
+        Ok(meta) => meta,
+        Err(error) => {
+            log_warn!(
+                "抓包缓存状态文件已损坏；将重新检查远程数据。完整错误详情: {:#}",
+                "Capture cache metadata is invalid; remote data will be checked again. Full error details: {:#}",
+                error,
+            );
+            CacheMeta::default()
+        },
     }
-    CacheMeta::default()
 }
 
-fn write_meta(meta: &CacheMeta) {
+fn write_meta(meta: &CacheMeta) -> Result<()> {
     if let Some(parent) = Path::new(DATA_CACHE_META_PATH).parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "capture cache directory could not be created: {}",
+                parent.display()
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string(meta) {
-        let _ = fs::write(DATA_CACHE_META_PATH, json);
-    }
+    let json =
+        serde_json::to_string(meta).context("capture cache metadata serialization failed")?;
+    fs::write(DATA_CACHE_META_PATH, json).with_context(|| {
+        format!("capture cache metadata could not be written: {DATA_CACHE_META_PATH}")
+    })
 }
 
 /// Delete cached files and re-download immediately.
 pub fn force_refresh() -> Result<()> {
-    let _ = fs::remove_file(DATA_CACHE_META_PATH);
-    let _ = fs::remove_file(DATA_CACHE_PATH);
+    crate::fs_utils::remove_file_if_exists(DATA_CACHE_META_PATH)?;
+    crate::fs_utils::remove_file_if_exists(DATA_CACHE_PATH)?;
     load_data_cache().map(|_| ())
 }
 
@@ -67,7 +91,7 @@ fn is_cache_fresh(last_fetch_time: u64, ttl_secs: u64) -> bool {
 /// Fetch `data_cache.json` from remote if cache is stale, otherwise load from cache.
 /// Returns the parsed `DataCache`.
 pub fn load_data_cache() -> Result<DataCache> {
-    fs::create_dir_all("data").ok();
+    fs::create_dir_all("data").context("capture data-cache directory could not be created")?;
 
     let cache_path = Path::new(DATA_CACHE_PATH);
     let meta = load_meta();
@@ -85,17 +109,22 @@ pub fn load_data_cache() -> Result<DataCache> {
                 let mut data_cache: DataCache = serde_json::from_str(&data)
                     .context("Failed to parse fetched data_cache.json")?;
                 ensure_artifact_catalog(&mut data_cache)?;
-                fs::write(cache_path, serde_json::to_vec(&data_cache)?)?;
+                fs::write(cache_path, serde_json::to_vec(&data_cache)?).with_context(|| {
+                    format!(
+                        "capture data cache could not be written: {}",
+                        cache_path.display()
+                    )
+                })?;
                 write_meta(&CacheMeta {
                     last_fetch_time: now_secs(),
-                });
+                })?;
                 log_info!("抓包数据缓存已更新", "Capture data cache updated");
             },
             Err(e) => {
                 if cache_path.exists() {
                     log_warn!(
-                        "下载抓包数据缓存失败（{}），使用本地缓存",
-                        "Failed to fetch data cache ({}), using stale cache",
+                        "无法下载最新抓包数据；将使用本地缓存。完整错误详情: {:#}",
+                        "The latest capture data could not be downloaded; the local cache will be used. Full error details: {:#}",
                         e
                     );
                 } else {
@@ -112,7 +141,12 @@ pub fn load_data_cache() -> Result<DataCache> {
     let mut data_cache: DataCache =
         serde_json::from_str(&content).context("Failed to parse data_cache.json")?;
     if ensure_artifact_catalog(&mut data_cache)? {
-        fs::write(cache_path, serde_json::to_vec(&data_cache)?)?;
+        fs::write(cache_path, serde_json::to_vec(&data_cache)?).with_context(|| {
+            format!(
+                "repaired capture data cache could not be written: {}",
+                cache_path.display()
+            )
+        })?;
     }
     Ok(data_cache)
 }

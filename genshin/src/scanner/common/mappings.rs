@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use yas::{log_debug, log_info, log_warn};
 
@@ -26,48 +26,53 @@ fn now_secs() -> u64 {
 }
 
 fn load_meta() -> MappingsMeta {
-    if let Ok(content) = fs::read_to_string(MAPPINGS_META_PATH) {
-        if let Ok(meta) = serde_json::from_str::<MappingsMeta>(&content) {
-            return meta;
-        }
+    let content = match fs::read_to_string(MAPPINGS_META_PATH) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return MappingsMeta::default()
+        },
+        Err(error) => {
+            log_warn!(
+                "无法读取游戏数据缓存状态；将重新检查远程数据。完整错误详情: {:#}",
+                "Game-data cache metadata could not be read; remote data will be checked again. Full error details: {:#}",
+                error,
+            );
+            return MappingsMeta::default();
+        },
+    };
+    match serde_json::from_str::<MappingsMeta>(&content) {
+        Ok(meta) => meta,
+        Err(error) => {
+            log_warn!(
+                "游戏数据缓存状态文件已损坏；将重新检查远程数据。完整错误详情: {:#}",
+                "Game-data cache metadata is invalid; remote data will be checked again. Full error details: {:#}",
+                error,
+            );
+            MappingsMeta::default()
+        },
     }
-    MappingsMeta::default()
 }
 
-fn save_meta(meta: &MappingsMeta) {
+fn save_meta(meta: &MappingsMeta) -> Result<()> {
     if let Some(parent) = Path::new(MAPPINGS_META_PATH).parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            log_warn!(
-                "无法创建缓存目录: {}",
-                "Cannot create cache directory: {}",
-                e
-            );
-        }
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "game-data cache directory could not be created: {}",
+                parent.display()
+            )
+        })?;
     }
-    match serde_json::to_string(meta) {
-        Ok(json) => {
-            if let Err(e) = fs::write(MAPPINGS_META_PATH, json) {
-                log_warn!(
-                    "无法保存映射缓存信息: {}",
-                    "Cannot save mapping cache metadata: {}",
-                    e
-                );
-            }
-        },
-        Err(e) => {
-            log_warn!(
-                "无法序列化缓存信息: {}",
-                "Cannot serialize cache metadata: {}",
-                e
-            );
-        },
-    }
+    let json =
+        serde_json::to_string(meta).context("game-data cache metadata serialization failed")?;
+    fs::write(MAPPINGS_META_PATH, json).with_context(|| {
+        format!("game-data cache metadata could not be written: {MAPPINGS_META_PATH}")
+    })
 }
 
 /// Delete cached files and re-download immediately.
 pub fn force_refresh() -> Result<()> {
-    let _ = fs::remove_file(MAPPINGS_META_PATH);
-    let _ = fs::remove_file(MAPPINGS_CACHE_PATH);
+    crate::fs_utils::remove_file_if_exists(MAPPINGS_META_PATH)?;
+    crate::fs_utils::remove_file_if_exists(MAPPINGS_CACHE_PATH)?;
     fetch_if_needed()
 }
 
@@ -178,19 +183,29 @@ fn fetch_if_needed() -> Result<()> {
 
     // Ensure data directory exists
     if let Some(parent) = Path::new(MAPPINGS_CACHE_PATH).parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "game-data cache directory could not be created: {}",
+                parent.display()
+            )
+        })?;
     }
 
     match reqwest::blocking::get(MAPPINGS_URL) {
         Ok(response) => {
             if response.status().is_success() {
-                let body = response.text()?;
+                let body = response
+                    .text()
+                    .context("game-data mapping response body could not be read")?;
                 // Validate JSON
-                let _: serde_json::Value = serde_json::from_str(&body)?;
-                std::fs::write(MAPPINGS_CACHE_PATH, &body)?;
+                let _: serde_json::Value = serde_json::from_str(&body)
+                    .context("downloaded game-data mapping JSON is invalid")?;
+                std::fs::write(MAPPINGS_CACHE_PATH, &body).with_context(|| {
+                    format!("game-data mapping cache could not be written: {MAPPINGS_CACHE_PATH}")
+                })?;
                 save_meta(&MappingsMeta {
                     last_fetch_time: now_secs(),
-                });
+                })?;
                 log_debug!("游戏数据映射已更新", "Game data mappings updated");
             } else {
                 if cache_exists {
@@ -211,20 +226,14 @@ fn fetch_if_needed() -> Result<()> {
         Err(e) => {
             if cache_exists {
                 log_warn!(
-                    "获取数据失败 ({})，使用本地缓存",
-                    "Fetch failed ({}), using local cache",
+                    "无法下载最新游戏数据；将使用本地缓存。完整错误详情: {:#}",
+                    "The latest game data could not be downloaded; the local cache will be used. Full error details: {:#}",
                     e
                 );
             } else {
-                bail!(
-                    "获取游戏数据失败且无本地缓存。请检查网络连接，或手动下载 {} 到 data/ 目录。\n\
-                     / Failed to fetch game data (no local cache). Check your network connection, \
-                     or manually download {} to the data/ folder.\n\
-                     错误 / Error: {}",
-                    MAPPINGS_URL,
-                    MAPPINGS_URL,
-                    e
-                );
+                return Err(e).context(format!(
+                    "game data could not be downloaded and no local cache exists; source: {MAPPINGS_URL}"
+                ));
             }
         },
     }

@@ -92,10 +92,13 @@ impl EquipManager {
             if ctrl.check_rmb() {
                 results.insert(
                     target.result_id.clone(),
-                    InstructionResult {
-                        id: target.result_id.clone(),
-                        status: InstructionStatus::Aborted,
-                    },
+                    InstructionResult::failure(
+                        target.result_id.clone(),
+                        InstructionStatus::Aborted,
+                        "用户已停止此装备操作。",
+                        "This equip operation was stopped by the user.",
+                        None,
+                    ),
                 );
                 report(results.len(), &target.result_id);
                 continue;
@@ -125,9 +128,14 @@ impl EquipManager {
         targets
             .iter()
             .map(|t| {
-                results.remove(&t.result_id).unwrap_or(InstructionResult {
-                    id: t.result_id.clone(),
-                    status: InstructionStatus::Skipped,
+                results.remove(&t.result_id).unwrap_or_else(|| {
+                    InstructionResult::failure(
+                        t.result_id.clone(),
+                        InstructionStatus::Skipped,
+                        "未执行此装备操作，因为之前的步骤未能完成。",
+                        "This equip operation was not performed because an earlier step did not finish.",
+                        None,
+                    )
                 })
             })
             .collect()
@@ -164,10 +172,13 @@ impl EquipManager {
                 for target in targets {
                     results.insert(
                         target.result_id.clone(),
-                        InstructionResult {
-                            id: target.result_id.clone(),
-                            status: InstructionStatus::UiError,
-                        },
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::UiError,
+                            "无法打开角色界面，因此未能装备圣遗物。请返回游戏主界面后重试。",
+                            "The character screen could not be opened, so the artifact was not equipped. Return to the main game screen and retry.",
+                            Some(&e),
+                        ),
                     );
                 }
             }
@@ -263,10 +274,13 @@ impl EquipManager {
                 if !results.contains_key(&target.result_id) {
                     results.insert(
                         target.result_id.clone(),
-                        InstructionResult {
-                            id: target.result_id.clone(),
-                            status: InstructionStatus::NotFound,
-                        },
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::NotFound,
+                            "未能在角色列表中找到目标角色。请确认目标角色名称和当前账号。",
+                            "The target character was not found in the character list. Check the target character name and the current account.",
+                            None,
+                        ),
                     );
                 }
             }
@@ -380,10 +394,13 @@ impl EquipManager {
             if ctrl.check_rmb() {
                 results.insert(
                     target.result_id.clone(),
-                    InstructionResult {
-                        id: target.result_id.clone(),
-                        status: InstructionStatus::Aborted,
-                    },
+                    InstructionResult::failure(
+                        target.result_id.clone(),
+                        InstructionStatus::Aborted,
+                        "用户已停止此装备操作。",
+                        "This equip operation was stopped by the user.",
+                        None,
+                    ),
                 );
                 continue;
             }
@@ -428,10 +445,13 @@ impl EquipManager {
                 );
                 results.insert(
                     target.result_id.clone(),
-                    InstructionResult {
-                        id: target.result_id.clone(),
-                        status: InstructionStatus::UiError,
-                    },
+                    InstructionResult::failure(
+                        target.result_id.clone(),
+                        InstructionStatus::UiError,
+                        "无法打开目标圣遗物栏位，因此未能完成装备操作。",
+                        "The target artifact slot could not be opened, so the equip operation did not finish.",
+                        Some(&e),
+                    ),
                 );
                 continue;
             }
@@ -465,10 +485,10 @@ impl EquipManager {
                         );
                         results.insert(
                             target.result_id.clone(),
-                            InstructionResult {
-                                id: target.result_id.clone(),
-                                status: InstructionStatus::AlreadyCorrect,
-                            },
+                            InstructionResult::outcome(
+                                target.result_id.clone(),
+                                InstructionStatus::AlreadyCorrect,
+                            ),
                         );
                         continue;
                     }
@@ -483,19 +503,19 @@ impl EquipManager {
                         Ok(true) => {
                             results.insert(
                                 target.result_id.clone(),
-                                InstructionResult {
-                                    id: target.result_id.clone(),
-                                    status: InstructionStatus::Success,
-                                },
+                                InstructionResult::outcome(
+                                    target.result_id.clone(),
+                                    InstructionStatus::Success,
+                                ),
                             );
                         },
                         Ok(false) => {
                             results.insert(
                                 target.result_id.clone(),
-                                InstructionResult {
-                                    id: target.result_id.clone(),
-                                    status: InstructionStatus::AlreadyCorrect,
-                                },
+                                InstructionResult::outcome(
+                                    target.result_id.clone(),
+                                    InstructionStatus::AlreadyCorrect,
+                                ),
                             );
                         },
                         Err(e) => {
@@ -506,10 +526,13 @@ impl EquipManager {
                             );
                             results.insert(
                                 target.result_id.clone(),
-                                InstructionResult {
-                                    id: target.result_id.clone(),
-                                    status: InstructionStatus::UiError,
-                                },
+                                InstructionResult::failure(
+                                    target.result_id.clone(),
+                                    InstructionStatus::UiError,
+                                    "找到了目标圣遗物，但游戏中的装备操作失败。",
+                                    "The target artifact was found, but the in-game equip action failed.",
+                                    Some(&e),
+                                ),
                             );
                         },
                     }
@@ -542,10 +565,10 @@ impl EquipManager {
                     );
                     results.insert(
                         target.result_id.clone(),
-                        InstructionResult {
-                            id: target.result_id.clone(),
-                            status: InstructionStatus::Success,
-                        },
+                        InstructionResult::outcome(
+                            target.result_id.clone(),
+                            InstructionStatus::Success,
+                        ),
                     );
                 },
                 Ok(false) => {
@@ -556,10 +579,13 @@ impl EquipManager {
                     );
                     results.insert(
                         target.result_id.clone(),
-                        InstructionResult {
-                            id: target.result_id.clone(),
-                            status: InstructionStatus::NotFound,
-                        },
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::NotFound,
+                            "未能在圣遗物列表中找到匹配的圣遗物。请确认背包内容和目标数据仍然一致。",
+                            "A matching artifact was not found in the artifact list. Check that the inventory and target data are still in sync.",
+                            None,
+                        ),
                     );
                 },
                 Err(e) => {
@@ -570,10 +596,13 @@ impl EquipManager {
                     );
                     results.insert(
                         target.result_id.clone(),
-                        InstructionResult {
-                            id: target.result_id.clone(),
-                            status: InstructionStatus::UiError,
-                        },
+                        InstructionResult::failure(
+                            target.result_id.clone(),
+                            InstructionStatus::UiError,
+                            "搜索或装备目标圣遗物时发生问题，因此操作未完成。",
+                            "A problem occurred while finding or equipping the target artifact, so the operation did not finish.",
+                            Some(&e),
+                        ),
                     );
                 },
             }
@@ -598,10 +627,13 @@ impl EquipManager {
                 "[equip_manager] open character screen failed: {}",
                 e
             );
-            return InstructionResult {
-                id: target.result_id.clone(),
-                status: InstructionStatus::UiError,
-            };
+            return InstructionResult::failure(
+                target.result_id.clone(),
+                InstructionStatus::UiError,
+                "无法打开当前装备者的角色界面，因此未能卸下圣遗物。",
+                "The current owner's character screen could not be opened, so the artifact was not unequipped.",
+                Some(&e),
+            );
         }
 
         if let Err(e) = ui_actions::click_equipment_slot(ctrl, &target.artifact.slot_key) {
@@ -610,10 +642,13 @@ impl EquipManager {
                 "[equip_manager] click equipment slot failed: {}",
                 e
             );
-            return InstructionResult {
-                id: target.result_id.clone(),
-                status: InstructionStatus::UiError,
-            };
+            return InstructionResult::failure(
+                target.result_id.clone(),
+                InstructionStatus::UiError,
+                "无法打开目标圣遗物栏位，因此未能卸下圣遗物。",
+                "The target artifact slot could not be opened, so the artifact was not unequipped.",
+                Some(&e),
+            );
         }
 
         if let Err(e) = ui_actions::click_unequip_button(ctrl) {
@@ -622,10 +657,13 @@ impl EquipManager {
                 "[equip_manager] unequip failed: {}",
                 e
             );
-            return InstructionResult {
-                id: target.result_id.clone(),
-                status: InstructionStatus::UiError,
-            };
+            return InstructionResult::failure(
+                target.result_id.clone(),
+                InstructionStatus::UiError,
+                "游戏中的卸下操作失败。请确认角色界面没有被其他弹窗遮挡。",
+                "The in-game unequip action failed. Check that no other dialog is covering the character screen.",
+                Some(&e),
+            );
         }
 
         log_info!(
@@ -634,10 +672,7 @@ impl EquipManager {
             target.result_id,
             current_owner
         );
-        InstructionResult {
-            id: target.result_id.clone(),
-            status: InstructionStatus::Success,
-        }
+        InstructionResult::outcome(target.result_id.clone(), InstructionStatus::Success)
     }
 }
 

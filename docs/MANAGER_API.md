@@ -26,6 +26,30 @@ The server binds to `127.0.0.1` only (not `0.0.0.0`), so it is not reachable fro
 
 Request body size limit: 5 MB.
 
+## Error responses
+
+Every response with an error body keeps the same schema:
+
+```json
+{"error":"<message>"}
+```
+
+`message` uses the language currently configured in GOODScanner (`zh` or `en`).
+It contains one language only; clients should not split it on `" / "`.
+
+When the server has a lower-level I/O, JSON parsing, serialization, or job-channel
+error, the localized readable hint comes first and the original diagnostic is
+retained afterward. For example, in English:
+
+```json
+{"error":"The request body is not valid JSON.\n\nFull error details:\nEOF while parsing a string at line 2 column 17"}
+```
+
+Quotes, newlines, and other characters in the diagnostic are JSON-escaped. After
+JSON decoding, the diagnostic text is unchanged, including any `" / "` text it
+contains. HTTP statuses and the single-string `error` schema are the same in both
+languages.
+
 ## Endpoints
 
 ### `GET /health`
@@ -146,9 +170,10 @@ Since artifacts don't carry client-assigned IDs, results use positional IDs:
 |------|------|------|
 | 202 | Job accepted | `{"jobId": "<uuid>", "total": N}` — `N` is the lock+unlock **target count**. Once execution starts, `GET /status` progress switches to backpack item counts (see below). |
 | 400 | Bad JSON, both lists empty, or any entry invalid (empty keys, rarity outside 4–5, level outside 0–20) | `{"error": "..."}` |
-| 403 | Disallowed origin | `{"error": "Origin not allowed"}` |
+| 403 | Disallowed origin | `{"error": "<localized message>"}` |
 | 409 | Another job running | `{"error": "..."}` |
 | 413 | Body too large (>5 MB) | `{"error": "..."}` |
+| 500 | Execution thread unavailable | `{"error": "<localized hint + full diagnostic>"}` |
 | 503 | Manager paused | `{"error": "..."}` |
 
 ### `POST /equip` (async)
@@ -247,9 +272,10 @@ When equipping an artifact that is currently equipped on another character, the 
 |------|------|------|
 | 202 | Job accepted | `{"jobId": "<uuid>", "total": N}` |
 | 400 | Bad JSON, `equip` list empty, or any entry invalid (empty keys, rarity outside 4–5, level outside 0–20) | `{"error": "..."}` |
-| 403 | Disallowed origin | `{"error": "Origin not allowed"}` |
+| 403 | Disallowed origin | `{"error": "<localized message>"}` |
 | 409 | Another job running (manage or equip) | `{"error": "..."}` |
 | 413 | Body too large (>5 MB) | `{"error": "..."}` |
+| 500 | Execution thread unavailable | `{"error": "<localized hint + full diagnostic>"}` |
 | 503 | Manager paused | `{"error": "..."}` |
 
 **Notes:**
@@ -305,18 +331,20 @@ Scan jobs use `scanProgress` on `GET /status` (not the linear `progress` field u
 
 #### Result
 
-`GET /result?jobId=xxx` returns a `ManageResult` where each requested phase is one entry. `status` is `success` when the category finished scanning in full, `aborted` when it did not (user RMB, error, or the scan stopped before reaching it). Phases the client didn't request are omitted.
+`GET /result?jobId=xxx` returns a `ManageResult` where each requested phase is one entry. `status` is `success` when the category finished scanning in full, `ui_error` when the category failed, and `aborted` only when it was stopped before completion. Phases the client didn't request are omitted. The optional localized `message` distinguishes a real scanner failure from a phase that was stopped: failures include the complete underlying diagnostic after the hint, while stopped phases contain only the readable stop explanation.
 
 ```json
 {
   "results": [
     {"id": "characters", "status": "success"},
-    {"id": "weapons",    "status": "aborted"},
-    {"id": "artifacts",  "status": "aborted"}
+    {"id": "weapons",    "status": "ui_error", "message": "The weapon scan encountered an error and could not finish. The complete copyable error is included below.\n\nFull error details:\nopening the weapon inventory: Access is denied. (os error 5)"},
+    {"id": "artifacts",  "status": "aborted", "message": "The artifact scan was stopped before it finished, so incomplete data was not published."}
   ],
-  "summary": {"total": 3, "success": 1, "aborted": 2, ...}
+  "summary": {"total": 3, "success": 1, "errors": 1, "aborted": 1, ...}
 }
 ```
+
+If the scan job itself fails before per-category results can be produced, the result contains one `{"id":"scan","status":"ui_error","message":"..."}` entry. Its message follows the same localized-hint-first, complete-diagnostic-second format.
 
 #### Fetching scan data
 
@@ -336,8 +364,9 @@ Each cache stores only the latest completed jobId for its type. A characters-onl
 |------|------|------|
 | 202 | Job accepted | `{"jobId": "<uuid>", "targets": {"characters": true, "weapons": true, "artifacts": true}, "artifactMode": "all", "artifactLimit": null}` |
 | 400 | Bad JSON, no targets enabled, invalid recent artifact options, or `artifactLimit` outside `1..=1000` | `{"error": "..."}` |
-| 403 | Disallowed origin | `{"error": "Origin not allowed"}` |
+| 403 | Disallowed origin | `{"error": "<localized message>"}` |
 | 409 | Another job running | `{"error": "..."}` |
+| 500 | Execution thread unavailable | `{"error": "<localized hint + full diagnostic>"}` |
 | 503 | Manager paused | `{"error": "..."}` |
 
 **Notes:**
@@ -429,7 +458,7 @@ Both `progress` and `scanProgress` are cleared. The `summary` is aggregated acro
 }
 ```
 
-Per-category final status for a scan is in `GET /result`, not `/status` — each category becomes a `{"id": "characters|weapons|artifacts", "status": "success|aborted"}` entry.
+Per-category final status for a scan is in `GET /result`, not `/status` — each category becomes a `{"id": "characters|weapons|artifacts", "status": "success|ui_error|aborted"}` entry.
 
 ### `GET /result?jobId=<id>`
 
@@ -441,7 +470,11 @@ Full execution result. Requires the `jobId` returned by `POST /manage`, `POST /e
 {
   "results": [
     {"id": "lock:0", "status": "success"},
-    {"id": "lock:1", "status": "not_found"},
+    {
+      "id": "lock:1",
+      "status": "not_found",
+      "message": "A matching artifact was not found in the inventory. Check that the inventory and target data are still in sync."
+    },
     {"id": "unlock:0", "status": "already_correct"}
   ],
   "summary": {
@@ -455,15 +488,16 @@ Full execution result. Requires the `jobId` returned by `POST /manage`, `POST /e
 }
 ```
 
-Each result contains only `id` and `status`. No human-readable detail — i18n is the client's responsibility.
+Every result keeps the existing `id` and `status` fields. Failed results also include an optional `message` string. Its first paragraph is a plain-language hint selected from GOODScanner's configured language. When a lower-level error exists, the same string then contains `完整错误详情:` or `Full error details:` followed by the complete diagnostic/source chain. Clients should display the whole string as selectable/copyable text; successful results omit `message`.
 
 #### Other responses
 
-| Code | When |
-|------|------|
-| 400 | Missing `jobId` query parameter |
-| 404 | Job not found (wrong jobId, or replaced by a newer job) |
-| 409 | Job still running |
+| Code | When | Body |
+|------|------|------|
+| 400 | Missing `jobId` query parameter | `{"error": "<localized message>"}` |
+| 404 | Job not found (wrong jobId, or replaced by a newer job) | `{"error": "<localized message>"}` |
+| 409 | Job still running | `{"error": "<localized message>"}` |
+| 500 | Completed job has no result data, or the result cannot be serialized | `{"error": "<localized hint + full diagnostic>"}` |
 
 ## Status Values
 
@@ -503,9 +537,10 @@ Character scan data from the latest scan that produced character results.
 
 | Code | When | Body |
 |------|------|------|
-| 400 | Missing `jobId` query parameter | `{"error": "missing required query parameter: jobId"}` |
-| 404 | Unknown `jobId` — never seen, or overwritten by a later scan | `{"error": "no characters data for this jobId"}` |
-| 503 | The supplied `jobId` attempted to scan characters but did not finish (user aborted, error, or the job stopped before reaching this category) | `{"error": "characters scan incomplete for this jobId"}` |
+| 400 | Missing `jobId` query parameter | `{"error": "<localized message>"}` |
+| 404 | Unknown `jobId` — never seen, or overwritten by a later scan | `{"error": "<localized message>"}` |
+| 503 | The supplied `jobId` attempted to scan characters but did not finish (user aborted, error, or the job stopped before reaching this category) | `{"error": "<localized message>"}` |
+| 500 | Cached character data cannot be serialized | `{"error": "<localized hint + full diagnostic>"}` |
 
 ### `GET /weapons?jobId=<id>`
 
@@ -530,9 +565,10 @@ Weapon scan data from the latest scan that produced weapon results.
 
 | Code | When | Body |
 |------|------|------|
-| 400 | Missing `jobId` query parameter | `{"error": "missing required query parameter: jobId"}` |
-| 404 | Unknown `jobId` | `{"error": "no weapons data for this jobId"}` |
-| 503 | The supplied `jobId` attempted to scan weapons but did not finish | `{"error": "weapons scan incomplete for this jobId"}` |
+| 400 | Missing `jobId` query parameter | `{"error": "<localized message>"}` |
+| 404 | Unknown `jobId` | `{"error": "<localized message>"}` |
+| 503 | The supplied `jobId` attempted to scan weapons but did not finish | `{"error": "<localized message>"}` |
+| 500 | Cached weapon data cannot be serialized | `{"error": "<localized hint + full diagnostic>"}` |
 
 ### `GET /artifacts[?jobId=<id>]`
 
@@ -570,8 +606,9 @@ The `jobId` parameter is **optional** for backwards compatibility:
 
 | Code | When | Body |
 |------|------|------|
-| 404 | No artifact data cached, or `jobId` was provided but doesn't match | `{"error": "no artifacts data for this jobId"}` / `{"error": "没有可用的圣遗物数据 / No artifact data available"}` |
-| 503 | The supplied `jobId` attempted to populate the artifact cache (via `POST /scan` with `artifacts: true`) but did not finish | `{"error": "artifacts scan incomplete for this jobId"}` |
+| 404 | No artifact data cached, or `jobId` was provided but doesn't match | `{"error": "<localized message>"}` |
+| 503 | The supplied `jobId` attempted to populate the artifact cache (via `POST /scan` with `artifacts: true`) but did not finish | `{"error": "<localized message>"}` |
+| 500 | Cached artifact data cannot be serialized | `{"error": "<localized hint + full diagnostic>"}` |
 
 **Notes on artifact cache sources:**
 - **Scan jobs** (`POST /scan` with `artifacts: true`): populates the artifact cache with the full scan results.
@@ -698,6 +735,11 @@ All targets execute in a single backpack scan pass. Invalid entries (empty keys,
 **Duplicate-aware request:** If the client locks two pieces with identical stat lines, list order must match the intended backpack order (or include disambiguating fields the server does not yet support, such as `location`). Otherwise the wrong physical piece may be toggled even when OCR is perfect.
 
 ## Changelog
+
+### 2026-08-28
+
+- **HTTP errors now follow the configured language.** Every error response keeps the `{ "error": string }` schema and selects either Chinese or English from GOODScanner's current language. Lower-level I/O, JSON, serialization, and job-channel diagnostics follow the localized hint and are preserved verbatim after JSON decoding; dynamic error text is serialized instead of interpolated into JSON source.
+- **Failed job results now explain themselves.** `GET /result` keeps the existing `id` and `status` fields and adds an optional `message` only to failed entries. The configured-language hint comes first; when available, the full underlying error chain follows so users can copy and search it. Successful entries keep their previous two-field shape.
 
 ### 2026-06-14
 
