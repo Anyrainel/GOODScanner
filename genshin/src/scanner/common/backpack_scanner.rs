@@ -109,27 +109,6 @@ fn cell_samples(image: &RgbImage, scaler: &CoordScaler, row: usize, col: usize) 
     samples
 }
 
-fn cell_samples_with_y_offset(
-    image: &RgbImage,
-    scaler: &CoordScaler,
-    row: usize,
-    col: usize,
-    y_offset: f64,
-) -> Vec<u8> {
-    let (x0, y0, x1, y1) = cell_sample_bounds_with_y_offset(image, scaler, row, col, y_offset);
-    let mut samples = Vec::new();
-    let mut y = y0;
-    while y < y1 {
-        let mut x = x0;
-        while x < x1 {
-            samples.extend_from_slice(&image.get_pixel(x, y).0);
-            x += 4;
-        }
-        y += 4;
-    }
-    samples
-}
-
 /// Sample every visible grid position for page-change detection.
 ///
 /// Empty positions are intentionally included: an unchanged final page has the
@@ -189,8 +168,6 @@ fn scrollbar_band_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<Vec<u8>
 
 #[derive(Debug, Clone)]
 struct ScrollVisualState {
-    image: RgbImage,
-    scaler: CoordScaler,
     grid: Vec<u8>,
     grid_cells: Vec<Vec<u8>>,
     scrollbar_band: Vec<Vec<u8>>,
@@ -199,8 +176,6 @@ struct ScrollVisualState {
 fn scroll_visual_state(image: &RgbImage, scaler: &CoordScaler) -> ScrollVisualState {
     let grid_cells = visible_grid_cell_samples(image, scaler);
     ScrollVisualState {
-        image: image.clone(),
-        scaler: scaler.clone(),
         grid: grid_cells.iter().flatten().copied().collect(),
         grid_cells,
         scrollbar_band: scrollbar_band_samples(image, scaler),
@@ -273,51 +248,7 @@ fn scroll_states_similar(first: &ScrollVisualState, second: &ScrollVisualState) 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScrollAdvance {
     NoMovement,
-    RequestedRows,
-    PartialOrUncertain,
-}
-
-fn grid_rows_match_after_shift(
-    first: &ScrollVisualState,
-    second: &ScrollVisualState,
-    row_shift: usize,
-) -> bool {
-    if row_shift >= GRID_ROWS {
-        return false;
-    }
-
-    let comparisons = (GRID_ROWS - row_shift) * GRID_COLS;
-    // 49 wheel ticks are calibrated for five rows as a whole. Intermediate
-    // 10/9-tick chunks can land a few pixels either side of a row boundary, so
-    // search a tight residual window while still rejecting materially partial
-    // delivery (for example, half a row).
-    const MAX_ROW_RESIDUAL_BASE: i32 = 18;
-    for residual in -MAX_ROW_RESIDUAL_BASE..=MAX_ROW_RESIDUAL_BASE {
-        let mut matches = 0;
-        for row in 0..(GRID_ROWS - row_shift) {
-            for col in 0..GRID_COLS {
-                let before = &first.grid_cells[(row + row_shift) * GRID_COLS + col];
-                let after = cell_samples_with_y_offset(
-                    &second.image,
-                    &second.scaler,
-                    row,
-                    col,
-                    residual as f64,
-                );
-                if visual_samples_similar(before, &after) {
-                    matches += 1;
-                }
-            }
-        }
-
-        // One selected cell can retain a faint highlight after scrolling.
-        // Requiring three quarters of the physical cells to line up still
-        // identifies a real row overlap while rejecting coincidental icons.
-        if matches * 4 >= comparisons * 3 {
-            return true;
-        }
-    }
-    false
+    AdvancedRows(usize),
 }
 
 fn classify_scroll_advance(
@@ -334,34 +265,14 @@ fn classify_scroll_advance(
 
     let grid_moved = !visual_samples_similar(&first.grid, &second.grid);
     let scrollbar_moved = scrollbar_band_moved(&first.scrollbar_band, &second.scrollbar_band)?;
-    if !grid_moved {
-        // The thumb proves that something moved, but not how far. Never use it
-        // by itself to advance logical rows; a completely repeated grid is an
-        // uncertainty rather than permission to rescan physical artifacts.
-        return Some(if scrollbar_moved {
-            ScrollAdvance::PartialOrUncertain
-        } else {
-            ScrollAdvance::NoMovement
-        });
-    }
-
-    if requested_rows == GRID_ROWS {
-        if grid_moved
-            && (1..GRID_ROWS).any(|shift| grid_rows_match_after_shift(first, second, shift))
-        {
-            return Some(ScrollAdvance::PartialOrUncertain);
-        }
-        return Some(ScrollAdvance::RequestedRows);
-    }
-
-    let exact_shift = grid_rows_match_after_shift(first, second, requested_rows);
-    let competing_shift = (0..GRID_ROWS)
-        .filter(|shift| *shift != requested_rows)
-        .any(|shift| grid_rows_match_after_shift(first, second, shift));
-    Some(if exact_shift && !competing_shift {
-        ScrollAdvance::RequestedRows
+    // Scrolling distance belongs to the calibrated control path, not to image
+    // recognition. Detection answers only whether the page moved. This avoids
+    // mistaking coincidentally aligned or pixel-identical artifact rows for a
+    // short turn and then skipping part of the next page.
+    Some(if grid_moved || scrollbar_moved {
+        ScrollAdvance::AdvancedRows(requested_rows)
     } else {
-        ScrollAdvance::PartialOrUncertain
+        ScrollAdvance::NoMovement
     })
 }
 
@@ -838,19 +749,24 @@ const SCROLL_TICK_DELAY_MS: u32 = 10;
 const MIN_SCROLL_SETTLE_MS: u64 = 200;
 /// Additional stable-frame interval used before accepting scroll evidence.
 const SCROLL_STABLE_INTERVAL_MS: u32 = 80;
-/// A first unchanged page turn is never terminal; re-focus and send the wheel
-/// input once more before deciding that the inventory cannot advance.
+/// A first unchanged page turn is never terminal; reposition the pointer and
+/// send the same atomic wheel input once more before deciding the list ended.
 const SCROLL_RETRY_COUNT: usize = 1;
 
-fn scroll_ticks_for_row_step(step: usize, subtract_page_correction: bool) -> i32 {
-    let cumulative_ticks = |rows: usize| {
-        ((rows as i32 * SCROLL_TICKS_PER_PAGE) + GRID_ROWS as i32 / 2) / GRID_ROWS as i32
-    };
-    let mut ticks = cumulative_ticks(step + 1) - cumulative_ticks(step);
-    if subtract_page_correction && step + 1 == GRID_ROWS {
+fn scroll_ticks_for_rows(row_count: usize, completed_pages: u32) -> i32 {
+    let ticks_per_row = SCROLL_TICKS_PER_PAGE as f64 / GRID_ROWS as f64;
+    let mut ticks = (ticks_per_row * row_count as f64).round() as i32;
+    if row_count == GRID_ROWS
+        && SCROLL_CORRECTION_INTERVAL > 0
+        && (completed_pages + 1) % SCROLL_CORRECTION_INTERVAL as u32 == 0
+    {
         ticks -= 1;
     }
     ticks.max(1)
+}
+
+fn completed_page_turn_increment(row_count: usize) -> u32 {
+    u32::from(row_count == GRID_ROWS)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -928,14 +844,13 @@ impl<'a> BackpackScanner<'a> {
     ///
     /// Uses SCROLL_TICKS_PER_PAGE (49 ticks for 5 rows) as the base ratio.
     /// Applies correction every SCROLL_CORRECTION_INTERVAL pages.
-    fn prepare_scroll_target(&mut self, settle_ms: u64) {
+    fn prepare_scroll_target(&mut self) {
         let center_x = GRID_FIRST_X + 3.0 * GRID_OFFSET_X;
         let center_y = GRID_FIRST_Y + 2.0 * GRID_OFFSET_Y;
-        // A click is intentional: after PageCompleted, the detail panel may
-        // still own wheel focus. Capture baselines only after this focus and
-        // hover state has settled so it cannot masquerade as page movement.
-        self.ctrl.click_at(center_x, center_y);
-        utils::sleep(settle_ms.min(u32::MAX as u64) as u32);
+        // Preserve the original calibrated control path: hover the grid, but
+        // do not click or split the wheel input into separately verified parts.
+        self.ctrl.move_to(center_x, center_y);
+        utils::sleep(30);
     }
 
     fn scroll_rows(&mut self, row_count: usize, settle_ms: u64) -> bool {
@@ -943,21 +858,8 @@ impl<'a> BackpackScanner<'a> {
             return true;
         }
 
-        // Calculate ticks: SCROLL_TICKS_PER_PAGE ticks per GRID_ROWS rows
-        let ticks_per_row = SCROLL_TICKS_PER_PAGE as f64 / GRID_ROWS as f64;
-        let mut ticks = (ticks_per_row * row_count as f64).round() as i32;
-
-        // Apply correction for the next full-page scroll. The page counter is
-        // committed only after visual confirmation, so a dropped or partial
-        // wheel delivery cannot shift later correction accounting.
-        if row_count == GRID_ROWS {
-            if SCROLL_CORRECTION_INTERVAL > 0
-                && (self.pages_scrolled + 1) % SCROLL_CORRECTION_INTERVAL as u32 == 0
-            {
-                ticks -= 1;
-            }
-        }
-
+        self.prepare_scroll_target();
+        let ticks = scroll_ticks_for_rows(row_count, self.pages_scrolled);
         self.send_scroll_ticks(ticks, settle_ms)
     }
 
@@ -983,13 +885,12 @@ impl<'a> BackpackScanner<'a> {
     fn record_completed_scroll(&mut self, row_count: usize) {
         self.pages_scrolled = self
             .pages_scrolled
-            .saturating_add((row_count / GRID_ROWS) as u32);
+            .saturating_add(completed_page_turn_increment(row_count));
     }
 
-    /// Scroll manager traversal one row at a time and verify the expected
-    /// four-row overlap after every step. This proves distance as well as
-    /// movement, catches fractional delivery, and can preserve a short final
-    /// page without rescanning its overlapping rows under new indices.
+    /// Send the original calibrated page turn as one atomic wheel sequence,
+    /// then verify only whether movement occurred after the animation settles.
+    /// The calibrated input remains authoritative for distance.
     fn scroll_rows_verified(
         &mut self,
         requested_rows: usize,
@@ -1003,69 +904,37 @@ impl<'a> BackpackScanner<'a> {
             ));
         }
 
-        self.prepare_scroll_target(settle_ms.max(100));
-        let mut before = self.capture_stable_scroll_state()?;
-        let subtract_page_correction = requested_rows == GRID_ROWS
-            && SCROLL_CORRECTION_INTERVAL > 0
-            && (self.pages_scrolled + 1) % SCROLL_CORRECTION_INTERVAL as u32 == 0;
-        let mut advanced_rows = 0;
-
-        for step in 0..requested_rows {
-            let ticks = scroll_ticks_for_row_step(step, subtract_page_correction);
-            let mut row_advanced = false;
-            for attempt in 0..=SCROLL_RETRY_COUNT {
-                if attempt > 0 {
-                    self.prepare_scroll_target(settle_ms.max(100));
-                    before = self.capture_stable_scroll_state()?;
-                }
-
-                if !self.send_scroll_ticks(ticks, settle_ms) {
-                    return Ok(VerifiedScrollOutcome::Cancelled);
-                }
-                let after = self.capture_stable_scroll_state()?;
-                match classify_scroll_advance(&before, &after, 1) {
-                    Some(ScrollAdvance::RequestedRows) => {
-                        before = after;
-                        advanced_rows += 1;
-                        row_advanced = true;
-                        break;
-                    },
-                    Some(ScrollAdvance::NoMovement) if attempt < SCROLL_RETRY_COUNT => {
-                        log_warn!(
-                            "[backpack] 单行滚动未移动；重新聚焦后重试 (已确认移动={}行)",
-                            "[backpack] A one-row scroll did not move; refocusing and retrying (confirmed rows={})",
-                            advanced_rows
-                        );
-                    },
-                    Some(ScrollAdvance::NoMovement) => {
-                        if advanced_rows == 0 {
-                            return Ok(VerifiedScrollOutcome::EndOfList);
-                        }
-                        self.record_completed_scroll(advanced_rows);
-                        return Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows));
-                    },
-                    Some(ScrollAdvance::PartialOrUncertain) => {
-                        return Err(anyhow!(
-                            "单行滚动只移动了部分距离或距离无法确认 / A one-row scroll moved only partially or its distance could not be confirmed"
-                        ));
-                    },
-                    None => {
-                        return Err(anyhow!(
-                            "翻页前后的截图尺寸不一致 / Pre- and post-scroll captures had incompatible dimensions"
-                        ));
-                    },
-                }
+        for attempt in 0..=SCROLL_RETRY_COUNT {
+            self.prepare_scroll_target();
+            let before = self.capture_stable_scroll_state()?;
+            let ticks = scroll_ticks_for_rows(requested_rows, self.pages_scrolled);
+            if !self.send_scroll_ticks(ticks, settle_ms) {
+                return Ok(VerifiedScrollOutcome::Cancelled);
             }
-
-            if !row_advanced {
-                return Err(anyhow!(
-                    "单行滚动没有可确认的结果 / A one-row scroll had no confirmable outcome"
-                ));
+            let after = self.capture_stable_scroll_state()?;
+            match classify_scroll_advance(&before, &after, requested_rows) {
+                Some(ScrollAdvance::AdvancedRows(advanced_rows)) => {
+                    self.record_completed_scroll(advanced_rows);
+                    return Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows));
+                },
+                Some(ScrollAdvance::NoMovement) if attempt < SCROLL_RETRY_COUNT => {
+                    log_warn!(
+                        "[backpack] 整页滚动未移动；重新定位鼠标后重试",
+                        "[backpack] The atomic page turn did not move; repositioning the pointer and retrying"
+                    );
+                },
+                Some(ScrollAdvance::NoMovement) => {
+                    return Ok(VerifiedScrollOutcome::EndOfList);
+                },
+                None => {
+                    return Err(anyhow!(
+                        "翻页前后的截图尺寸不一致 / Pre- and post-scroll captures had incompatible dimensions"
+                    ));
+                },
             }
         }
 
-        self.record_completed_scroll(advanced_rows);
-        Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows))
+        unreachable!("verified scroll retry loop always returns")
     }
 
     /// Re-check a cell whose fast substat panel did not change.
@@ -1279,7 +1148,6 @@ impl<'a> BackpackScanner<'a> {
                     skip_rows
                 );
                 let rows_to_scroll = full_pages * GRID_ROWS;
-                self.prepare_scroll_target(config.delay_scroll.max(100));
                 if !self.scroll_rows(rows_to_scroll, config.delay_scroll) {
                     return ScanGridOutcome {
                         termination: ScanTermination::Cancelled,
@@ -1773,18 +1641,10 @@ impl<'a> BackpackScanner<'a> {
             if config.detect_empty_cells {
                 match self.scroll_rows_verified(scroll_row, config.delay_scroll) {
                     Ok(VerifiedScrollOutcome::AdvancedRows(advanced_rows)) => {
-                        // At the physical bottom the game can expose fewer rows
-                        // than requested. Scan only those newly revealed rows;
-                        // the rows above still belong to the previous page.
+                        // Image recognition confirms movement only. The restored
+                        // atomic control path owns the calibrated row distance,
+                        // even when adjacent filtered pages look identical.
                         start_row = GRID_ROWS - advanced_rows;
-                        if advanced_rows < scroll_row {
-                            log_debug!(
-                                "[backpack] 到达列表末端，本次仅新增{}行（请求{}行）",
-                                "[backpack] Reached the list tail; only {} new rows appeared (requested {})",
-                                advanced_rows,
-                                scroll_row
-                            );
-                        }
                         page_advanced = true;
                     },
                     Ok(VerifiedScrollOutcome::EndOfList) => {},
@@ -1805,7 +1665,6 @@ impl<'a> BackpackScanner<'a> {
                 }
             } else {
                 start_row = GRID_ROWS - scroll_row;
-                self.prepare_scroll_target(config.delay_scroll.max(100));
                 if !self.scroll_rows(scroll_row, config.delay_scroll) {
                     termination = ScanTermination::Cancelled;
                     break 'outer;
@@ -1817,14 +1676,14 @@ impl<'a> BackpackScanner<'a> {
             if !page_advanced {
                 if visual_end_is_authoritative(scanned_count, config.min_items_before_visual_end) {
                     log_info!(
-                        "[backpack] 重新聚焦并重试后网格与滚动条仍未变化，已到达可见列表末尾",
-                        "[backpack] Grid and scrollbar remained unchanged after a focused retry; reached the end of the visible list"
+                        "[backpack] 重新定位鼠标并重试后网格与滚动条仍未变化，已到达可见列表末尾",
+                        "[backpack] Grid and scrollbar remained unchanged after a pointer-position retry; reached the end of the visible list"
                     );
                     termination = ScanTermination::UnchangedPage;
                 } else {
                     log_error!(
-                        "[backpack] 在已读取数量之前，重新聚焦并重试后仍无法翻页；停止本次扫描以避免遗漏",
-                        "[backpack] The page still did not advance after a focused retry before the observed count; stopping this scan to avoid omissions"
+                        "[backpack] 在已读取数量之前，重新定位鼠标并重试后仍无法翻页；停止本次扫描以避免遗漏",
+                        "[backpack] The page still did not advance after a pointer-position retry before the observed count; stopping this scan to avoid omissions"
                     );
                     missed_count += 1;
                     termination = ScanTermination::CaptureFailure;
@@ -1891,43 +1750,6 @@ mod tests {
                     col,
                     Rgb([id, id.wrapping_mul(3), id.wrapping_mul(7)]),
                 );
-            }
-        }
-    }
-
-    fn shift_grid_up(first: &RgbImage, scaler: &CoordScaler, displacement_base: f64) -> RgbImage {
-        let mut shifted = RgbImage::from_pixel(first.width(), first.height(), Rgb([100, 100, 100]));
-        let (x0, y0, _, _) = cell_sample_bounds(first, scaler, 0, 0);
-        let (_, _, x1, y1) = cell_sample_bounds(first, scaler, GRID_ROWS - 1, GRID_COLS - 1);
-        let displacement = scaler.y(displacement_base).max(1) as u32;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                if y + displacement < y1 {
-                    shifted.put_pixel(x, y, *first.get_pixel(x, y + displacement));
-                }
-            }
-        }
-        shifted
-    }
-
-    fn paint_repeated_row_texture(image: &mut RgbImage, scaler: &CoordScaler) {
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
-                let (x0, y0, x1, y1) = cell_sample_bounds(image, scaler, row, col);
-                for y in y0..y1 {
-                    let stripe = ((y - y0) % 53) as u8;
-                    for x in x0..x1 {
-                        image.put_pixel(
-                            x,
-                            y,
-                            Rgb([
-                                stripe.wrapping_add(col as u8 * 17),
-                                stripe.wrapping_mul(3),
-                                stripe.wrapping_mul(7),
-                            ]),
-                        );
-                    }
-                }
             }
         }
     }
@@ -2037,11 +1859,11 @@ mod tests {
                     );
                     assert_eq!(
                         classify_scroll_advance(&first, &moved, GRID_ROWS),
-                        Some(ScrollAdvance::PartialOrUncertain)
+                        Some(ScrollAdvance::AdvancedRows(GRID_ROWS))
                     );
                     assert_eq!(
                         classify_scroll_advance(&first, &moved, 1),
-                        Some(ScrollAdvance::PartialOrUncertain)
+                        Some(ScrollAdvance::AdvancedRows(1))
                     );
                     assert_eq!(scroll_states_similar(&first, &moved), Some(false));
                 }
@@ -2094,12 +1916,12 @@ mod tests {
         );
         assert_eq!(
             classify_scroll_advance(&first_state, &moved_state, GRID_ROWS),
-            Some(ScrollAdvance::RequestedRows)
+            Some(ScrollAdvance::AdvancedRows(GRID_ROWS))
         );
     }
 
     #[test]
-    fn partial_row_shifts_are_not_accepted_as_a_full_page() {
+    fn atomic_page_turn_uses_requested_distance_when_rows_happen_to_overlap() {
         let scaler = CoordScaler::new(1920, 1080);
         let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
         paint_distinct_grid(&mut first, &scaler, |row, col| {
@@ -2122,7 +1944,7 @@ mod tests {
                     &scroll_visual_state(&partial_shift, &scaler),
                     GRID_ROWS,
                 ),
-                Some(ScrollAdvance::PartialOrUncertain),
+                Some(ScrollAdvance::AdvancedRows(GRID_ROWS)),
                 "shift={shift}"
             );
 
@@ -2133,139 +1955,47 @@ mod tests {
                         &scroll_visual_state(&partial_shift, &scaler),
                         1,
                     ),
-                    Some(ScrollAdvance::RequestedRows)
+                    Some(ScrollAdvance::AdvancedRows(1))
                 );
             }
         }
     }
 
     #[test]
-    fn fractional_row_shift_is_not_accepted_as_one_row() {
-        let scaler = CoordScaler::new(1920, 1080);
-        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
-        paint_distinct_grid(&mut first, &scaler, |row, col| {
-            20 + (row * GRID_COLS + col) as u8
-        });
-        let fractional_shift = shift_grid_up(&first, &scaler, GRID_OFFSET_Y / 2.0);
-
+    fn atomic_page_turn_preserves_original_tick_calibration() {
+        assert_eq!(scroll_ticks_for_rows(GRID_ROWS, 0), SCROLL_TICKS_PER_PAGE);
         assert_eq!(
-            classify_scroll_advance(
-                &scroll_visual_state(&first, &scaler),
-                &scroll_visual_state(&fractional_shift, &scaler),
-                1,
-            ),
-            Some(ScrollAdvance::PartialOrUncertain)
+            scroll_ticks_for_rows(GRID_ROWS, SCROLL_CORRECTION_INTERVAL as u32 - 1),
+            SCROLL_TICKS_PER_PAGE - 1
         );
-    }
-
-    #[test]
-    fn one_row_overlap_tolerates_calibrated_tick_phase_residual() {
-        for (width, height) in [(1920, 1080), (2560, 1440), (3840, 2160)] {
-            let scaler = CoordScaler::new(width, height);
-            let mut first = RgbImage::from_pixel(width, height, Rgb([100, 100, 100]));
-            paint_distinct_grid(&mut first, &scaler, |row, col| {
-                20 + (row * GRID_COLS + col) as u8
-            });
-            let first_state = scroll_visual_state(&first, &scaler);
-
-            for residual in [-13.0, 5.0] {
-                let shifted = shift_grid_up(&first, &scaler, GRID_OFFSET_Y + residual);
-                assert_eq!(
-                    classify_scroll_advance(
-                        &first_state,
-                        &scroll_visual_state(&shifted, &scaler),
-                        1,
-                    ),
-                    Some(ScrollAdvance::RequestedRows),
-                    "resolution={width}x{height}, residual={residual}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn repeated_rows_do_not_turn_fractional_movement_into_a_full_row() {
-        let scaler = CoordScaler::new(1920, 1080);
-        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
-        paint_repeated_row_texture(&mut first, &scaler);
-        let fractional_shift = shift_grid_up(&first, &scaler, 13.0);
-
-        assert_eq!(
-            classify_scroll_advance(
-                &scroll_visual_state(&first, &scaler),
-                &scroll_visual_state(&fractional_shift, &scaler),
-                1,
-            ),
-            Some(ScrollAdvance::PartialOrUncertain)
-        );
-    }
-
-    #[test]
-    fn two_row_movement_is_not_accepted_as_one_row() {
-        let scaler = CoordScaler::new(1920, 1080);
-        let mut first = RgbImage::from_pixel(1920, 1080, Rgb([100, 100, 100]));
-        paint_distinct_grid(&mut first, &scaler, |row, col| {
-            20 + (row * GRID_COLS + col) as u8
-        });
-        let shifted = shift_grid_up(&first, &scaler, GRID_OFFSET_Y * 2.0);
-
-        assert_eq!(
-            classify_scroll_advance(
-                &scroll_visual_state(&first, &scaler),
-                &scroll_visual_state(&shifted, &scaler),
-                1,
-            ),
-            Some(ScrollAdvance::PartialOrUncertain)
-        );
-    }
-
-    #[test]
-    fn row_step_tick_schedule_preserves_page_calibration() {
-        let ticks: Vec<i32> = (0..GRID_ROWS)
-            .map(|step| scroll_ticks_for_row_step(step, false))
-            .collect();
-        assert_eq!(ticks, vec![10, 10, 9, 10, 10]);
-        assert_eq!(ticks.iter().sum::<i32>(), SCROLL_TICKS_PER_PAGE);
-
-        let corrected: i32 = (0..GRID_ROWS)
-            .map(|step| scroll_ticks_for_row_step(step, true))
-            .sum();
-        assert_eq!(corrected, SCROLL_TICKS_PER_PAGE - 1);
+        assert_eq!(scroll_ticks_for_rows(1, 0), 10);
+        assert_eq!(completed_page_turn_increment(GRID_ROWS), 1);
+        assert_eq!(completed_page_turn_increment(GRID_ROWS * 2), 0);
     }
 
     #[test]
     fn incompatible_scroll_samples_are_uncertain() {
         let state = ScrollVisualState {
-            image: RgbImage::new(1, 1),
-            scaler: CoordScaler::new(1, 1),
             grid: vec![1, 2, 3],
             grid_cells: vec![vec![1, 2, 3]; GRID_ROWS * GRID_COLS],
             scrollbar_band: vec![vec![1, 2, 3], vec![4, 5, 6]],
         };
         let mismatched_grid = ScrollVisualState {
-            image: state.image.clone(),
-            scaler: state.scaler.clone(),
             grid: vec![1, 2],
             grid_cells: state.grid_cells.clone(),
             scrollbar_band: state.scrollbar_band.clone(),
         };
         let mismatched_band = ScrollVisualState {
-            image: state.image.clone(),
-            scaler: state.scaler.clone(),
             grid: vec![9, 8, 7],
             grid_cells: state.grid_cells.clone(),
             scrollbar_band: vec![vec![1, 2, 3]],
         };
         let empty_band_column = ScrollVisualState {
-            image: state.image.clone(),
-            scaler: state.scaler.clone(),
             grid: state.grid.clone(),
             grid_cells: state.grid_cells.clone(),
             scrollbar_band: vec![vec![], vec![4, 5, 6]],
         };
         let mismatched_band_column = ScrollVisualState {
-            image: state.image.clone(),
-            scaler: state.scaler.clone(),
             grid: state.grid.clone(),
             grid_cells: state.grid_cells.clone(),
             scrollbar_band: vec![vec![1, 2], vec![4, 5, 6]],
