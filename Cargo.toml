@@ -5,6 +5,7 @@ members = [
     "genshin",
     "application",
 ]
+exclude = ["experimental/hsr"]
 
 [profile.release]
 lto = true

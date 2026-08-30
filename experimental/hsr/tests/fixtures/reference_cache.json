@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "provider": "synthetic-fixture-provider",
+  "revision": "synthetic-reference-r1",
+  "characters": [
+    {
+      "gameId": 990001,
+      "key": "FixtureNavigator",
+      "name": {
+        "zhCn": "夹具开拓者",
+        "en": "Fixture Navigator"
+      },
+      "rarity": 5,
+      "path": "FixturePath"
+    }
+  ],
+  "lightCones": [
+    {
+      "gameId": 990101,
+      "key": "FixtureLightCone",
+      "name": {
+        "zhCn": "夹具光锥",
+        "en": "Fixture Light Cone"
+      },
+      "rarity": 5,
+      "path": "FixturePath"
+    }
+  ],
+  "gearPieces": [
+    {
+      "gameId": 990201,
+      "key": "FixtureRelicHead",
+      "name": {
+        "zhCn": "夹具遗器头部",
+        "en": "Fixture Relic Head"
+      },
+      "setKey": "FixtureCavernSet",
+      "setName": {
+        "zhCn": "夹具隧洞套装",
+        "en": "Fixture Cavern Set"
+      },
+      "rarity": 5,
+      "category": "relic",
+      "slot": "Head"
+    },
+    {
+      "gameId": 990202,
+      "key": "FixturePlanarSphere",
+      "name": {
+        "zhCn": "夹具位面球",
+        "en": "Fixture Planar Sphere"
+      },
+      "setKey": "FixturePlanarSet",
+      "setName": {
+        "zhCn": "夹具位面套装",
+        "en": "Fixture Planar Set"
+      },
+      "rarity": 5,
+      "category": "planarOrnament",
+      "slot": "PlanarSphere"
+    }
+  ],
+  "stats": [
+    {
+      "gameId": 990301,
+      "key": "HPFlat",
+      "name": {
+        "zhCn": "生命值",
+        "en": "HP"
+      }
+    },
+    {
+      "gameId": 990302,
+      "key": "ATKPercent",
+      "name": {
+        "zhCn": "攻击力百分比",
+        "en": "ATK Percentage"
+      }
+    },
+    {
+      "gameId": 990303,
+      "key": "CRITRate",
+      "name": {
+        "zhCn": "暴击率",
+        "en": "CRIT Rate"
+      }
+    },
+    {
+      "gameId": 990304,
+      "key": "Speed",
+      "name": {
+        "zhCn": "速度",
+        "en": "Speed"
+      }
+    }
+  ]
+}

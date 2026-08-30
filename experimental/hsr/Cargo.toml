@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "hsr_scanner_experimental"
+version = "0.1.0"
+edition = "2021"
+description = "Isolated experimental Honkai: Star Rail inventory export prototype"
+license = "GPL-2.0-or-later"
+publish = false
+
+[features]
+default = []
+experimental-hsr = []
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+yas = { path = "../../yas", package = "yas_core" }
+
+[[bin]]
+name = "HSRScannerExperimental"
+path = "src/bin/hsr_scanner_experimental.rs"
+required-features = ["experimental-hsr"]
+test = false

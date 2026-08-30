@@ -1,0 +1,144 @@
+{
+  "schema": "goodscanner.hsr.experimental",
+  "schemaVersion": 1,
+  "source": {
+    "kind": "sanitizedFixture",
+    "revision": "synthetic-fixture-v1"
+  },
+  "reference": {
+    "schemaVersion": 1,
+    "provider": "synthetic-fixture-provider",
+    "revision": "synthetic-reference-r1"
+  },
+  "privacy": {
+    "accountIdentifiersIncluded": false,
+    "rawPacketDataIncluded": false
+  },
+  "characters": [
+    {
+      "localId": "character-001",
+      "key": "FixtureNavigator",
+      "gameId": 990001,
+      "name": {
+        "zhCn": "夹具开拓者",
+        "en": "Fixture Navigator"
+      },
+      "rarity": 5,
+      "path": "FixturePath",
+      "level": 80,
+      "ascension": 6,
+      "eidolon": 2
+    }
+  ],
+  "lightCones": [
+    {
+      "localId": "light-cone-001",
+      "key": "FixtureLightCone",
+      "gameId": 990101,
+      "name": {
+        "zhCn": "夹具光锥",
+        "en": "Fixture Light Cone"
+      },
+      "rarity": 5,
+      "path": "FixturePath",
+      "level": 80,
+      "ascension": 6,
+      "superimposition": 3,
+      "locationKey": "FixtureNavigator",
+      "lock": true
+    }
+  ],
+  "relics": [
+    {
+      "localId": "relic-001",
+      "key": "FixtureRelicHead",
+      "gameId": 990201,
+      "name": {
+        "zhCn": "夹具遗器头部",
+        "en": "Fixture Relic Head"
+      },
+      "setKey": "FixtureCavernSet",
+      "setName": {
+        "zhCn": "夹具隧洞套装",
+        "en": "Fixture Cavern Set"
+      },
+      "rarity": 5,
+      "slot": "Head",
+      "level": 15,
+      "mainStat": {
+        "key": "HPFlat",
+        "gameId": 990301,
+        "name": {
+          "zhCn": "生命值",
+          "en": "HP"
+        },
+        "value": 705.0
+      },
+      "substats": [
+        {
+          "key": "CRITRate",
+          "gameId": 990303,
+          "name": {
+            "zhCn": "暴击率",
+            "en": "CRIT Rate"
+          },
+          "value": 8.7
+        },
+        {
+          "key": "Speed",
+          "gameId": 990304,
+          "name": {
+            "zhCn": "速度",
+            "en": "Speed"
+          },
+          "value": 5.1
+        }
+      ],
+      "locationKey": null,
+      "lock": false,
+      "discard": true
+    }
+  ],
+  "planarOrnaments": [
+    {
+      "localId": "planar-001",
+      "key": "FixturePlanarSphere",
+      "gameId": 990202,
+      "name": {
+        "zhCn": "夹具位面球",
+        "en": "Fixture Planar Sphere"
+      },
+      "setKey": "FixturePlanarSet",
+      "setName": {
+        "zhCn": "夹具位面套装",
+        "en": "Fixture Planar Set"
+      },
+      "rarity": 5,
+      "slot": "PlanarSphere",
+      "level": 12,
+      "mainStat": {
+        "key": "ATKPercent",
+        "gameId": 990302,
+        "name": {
+          "zhCn": "攻击力百分比",
+          "en": "ATK Percentage"
+        },
+        "value": 38.8
+      },
+      "substats": [
+        {
+          "key": "Speed",
+          "gameId": 990304,
+          "name": {
+            "zhCn": "速度",
+            "en": "Speed"
+          },
+          "value": 4.0
+        }
+      ],
+      "locationKey": "FixtureNavigator",
+      "lock": null,
+      "discard": null
+    }
+  ]
+}

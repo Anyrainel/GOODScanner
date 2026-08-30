@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "evidence": {
+    "kind": "sanitizedFixture",
+    "fixtureVersion": 1
+  },
+  "characters": [
+    {
+      "characterId": 990001,
+      "level": 80,
+      "ascension": 6,
+      "eidolon": 2
+    }
+  ],
+  "lightCones": [
+    {
+      "lightConeId": 990101,
+      "level": 80,
+      "ascension": 6,
+      "superimposition": 3,
+      "equippedCharacterId": 990001,
+      "lock": true
+    }
+  ],
+  "gear": [
+    {
+      "pieceId": 990201,
+      "level": 15,
+      "mainStatId": 990301,
+      "mainStatValue": 705.0,
+      "substats": [
+        {
+          "statId": 990304,
+          "value": 5.1
+        },
+        {
+          "statId": 990303,
+          "value": 8.7
+        }
+      ],
+      "equippedCharacterId": null,
+      "lock": false,
+      "discard": true
+    },
+    {
+      "pieceId": 990202,
+      "level": 12,
+      "mainStatId": 990302,
+      "mainStatValue": 38.8,
+      "substats": [
+        {
+          "statId": 990304,
+          "value": 4.0
+        }
+      ],
+      "equippedCharacterId": 990001,
+      "lock": null,
+      "discard": null
+    }
+  ]
+}
