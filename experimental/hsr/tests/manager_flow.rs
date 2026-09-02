@@ -598,6 +598,109 @@ fn planner_keeps_mark_discard_on_locked_relic_preview_only() {
 }
 
 #[test]
+fn declared_locked_discard_stays_preview_only_through_apply_and_restart() {
+    let _serial = apply_lease_test_guard();
+    let mut locked_discard = envelope();
+    locked_discard.instructions[0].before.lock = Some(true);
+    locked_discard.instructions[0].before.discard = Some(false);
+    locked_discard.instructions[0].desired.lock = None;
+    locked_discard.instructions[0].desired.discard = Some(true);
+    refresh_envelope_idempotency(&mut locked_discard);
+    let planning = observed(
+        locked_discard.instructions[0].matcher.clone(),
+        Some(true),
+        Some(false),
+        Some(false),
+    );
+    let preview = build_manager_plan(&locked_discard, std::slice::from_ref(&planning)).unwrap();
+    let authorization = ApplyAuthorization::new(&preview.digest, [MutationScope::MarkDiscard]);
+    let path = temporary_journal_path("declared-locked-discard");
+    let scans = Cell::new(0);
+    let reviews = Cell::new(0);
+    let mut device = SimulatedDevice::new(vec![planning.clone()]);
+
+    let report = {
+        let store = AppendOnlyJsonJournalStore::new(&path);
+        let mut lease = store.try_acquire_apply_lease().unwrap();
+        apply_manager_envelope(
+            &locked_discard,
+            &authorization,
+            &mut device,
+            &mut lease,
+            |_| {
+                scans.set(scans.get() + 1);
+                Ok(vec![planning.clone()])
+            },
+            |exact| {
+                reviews.set(reviews.get() + 1);
+                assert_eq!(
+                    exact.entries[0].classification,
+                    PlanClassification::PreviewOnlyLocked
+                );
+                assert!(exact.entries[0].changes.is_empty());
+                Ok(())
+            },
+        )
+        .unwrap()
+    };
+
+    assert_eq!(
+        scans.get(),
+        1,
+        "a first apply still obtains fresh preview evidence"
+    );
+    assert_eq!(
+        reviews.get(),
+        1,
+        "the exact preview must be displayed before apply"
+    );
+    assert_eq!(report.total_actions, 0);
+    assert_eq!(report.device_toggles, 0);
+    assert_eq!(device.rereads, 0);
+    assert!(device.toggles.is_empty());
+
+    let mut reloaded = AppendOnlyJsonJournalStore::new(&path);
+    let journal = reloaded.load().unwrap().unwrap();
+    assert!(journal.entries.is_empty());
+    assert_eq!(
+        journal.plan.entries[0].classification,
+        PlanClassification::PreviewOnlyLocked
+    );
+
+    let restart_scans = Cell::new(0);
+    let mut restarted_device = SimulatedDevice::new(Vec::new());
+    let restarted = {
+        let store = AppendOnlyJsonJournalStore::new(&path);
+        let mut lease = store.try_acquire_apply_lease().unwrap();
+        apply_manager_envelope(
+            &locked_discard,
+            &authorization,
+            &mut restarted_device,
+            &mut lease,
+            |_| {
+                restart_scans.set(restart_scans.get() + 1);
+                panic!("a restart must recover the empty preview-only plan before device access")
+            },
+            |exact| {
+                assert_eq!(
+                    exact.entries[0].classification,
+                    PlanClassification::PreviewOnlyLocked
+                );
+                assert!(exact.entries[0].changes.is_empty());
+                Ok(())
+            },
+        )
+        .unwrap()
+    };
+    assert_eq!(restart_scans.get(), 0);
+    assert_eq!(restarted.total_actions, 0);
+    assert_eq!(restarted.device_toggles, 0);
+    assert_eq!(restarted_device.rereads, 0);
+    assert!(restarted_device.toggles.is_empty());
+    remove_journal_and_lock(&path);
+}
+
+#[test]
 fn location_is_optional_for_matching_but_never_bypasses_equipped_protection() {
     let base = envelope();
     assert!(base.instructions[0].matcher.location_key.is_none());
