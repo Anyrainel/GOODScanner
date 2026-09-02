@@ -450,6 +450,10 @@ impl MutationScope {
             (ManagedField::Discard, false) => Self::UnmarkDiscard,
         }
     }
+
+    pub(crate) fn has_required_lock_evidence(self, state: Option<&ManagedState>) -> bool {
+        self != Self::MarkDiscard || state.and_then(|state| state.lock) == Some(false)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1404,11 +1408,12 @@ pub fn apply_manager_plan<D: ManagerMutationDevice, S: ManagerJournalStore>(
                 let entry = &mut journal.entries[index];
                 match recovered {
                     Ok(observation)
-                        if mark_discard_has_unlocked_evidence(
-                            &entry.change,
-                            &observation.state,
-                        ) && observed_field(&observation.state, entry.change.field)
-                            == Some(entry.change.desired)
+                        if entry
+                            .change
+                            .scope
+                            .has_required_lock_evidence(Some(&observation.state))
+                            && observed_field(&observation.state, entry.change.field)
+                                == Some(entry.change.desired)
                             && collateral_state_matches(
                                 &observation.state,
                                 &expected_before,
@@ -1443,7 +1448,7 @@ pub fn apply_manager_plan<D: ManagerMutationDevice, S: ManagerJournalStore>(
                 };
                 let change = &journal.entries[index].change;
                 let current = observed_field(&fresh.state, change.field);
-                if !mark_discard_has_unlocked_evidence(change, &fresh.state) {
+                if !change.scope.has_required_lock_evidence(Some(&fresh.state)) {
                     let entry = &mut journal.entries[index];
                     entry.status = JournalStatus::NeedsReview;
                     entry.outcome_code = Some("mark_discard_locked_or_lock_unknown".to_owned());
@@ -1490,7 +1495,7 @@ pub fn apply_manager_plan<D: ManagerMutationDevice, S: ManagerJournalStore>(
                 let post = read_single_safe_target(device, &plan_entry.matcher);
                 let entry = &mut journal.entries[index];
                 if matches!(post, Ok(ref observation)
-                if mark_discard_has_unlocked_evidence(&entry.change, &observation.state)
+                if entry.change.scope.has_required_lock_evidence(Some(&observation.state))
                     && observed_field(&observation.state, entry.change.field) == Some(entry.change.desired)
                     && collateral_state_matches(
                         &observation.state,
@@ -1649,8 +1654,9 @@ fn validate_plan_digest(plan: &ManagerPlan) -> HsrResult<()> {
 fn validate_plan_action_safety(plan: &ManagerPlan) -> HsrResult<()> {
     if plan.entries.iter().any(|entry| {
         entry.changes.iter().any(|change| {
-            change.scope == MutationScope::MarkDiscard
-                && entry.observed_before.and_then(|state| state.lock) != Some(false)
+            !change
+                .scope
+                .has_required_lock_evidence(entry.observed_before.as_ref())
         })
     }) {
         return Err(HsrError::new(
@@ -1732,10 +1738,6 @@ fn observed_field(state: &ManagedState, field: ManagedField) -> Option<bool> {
         ManagedField::Lock => state.lock,
         ManagedField::Discard => state.discard,
     }
-}
-
-fn mark_discard_has_unlocked_evidence(change: &ExactChange, state: &ManagedState) -> bool {
-    change.scope != MutationScope::MarkDiscard || state.lock == Some(false)
 }
 
 fn collateral_state_matches(

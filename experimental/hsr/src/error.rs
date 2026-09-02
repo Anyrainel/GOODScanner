@@ -93,6 +93,10 @@ pub(crate) mod hints {
         "当前画面无法通过 HSR 实验扫描器的语义验证。",
         "The current screen could not be validated by the experimental HSR scanner.",
     );
+    pub const MARK_DISCARD_REQUIRES_UNLOCKED: LocalizedText = LocalizedText::new(
+        "已拒绝标记弃置：必须有最新且明确的未锁定证据；若装备已锁定，请先通过单独审核并确认的操作解锁。不会执行任何游戏操作。",
+        "Discard marking was refused: fresh evidence must explicitly show the gear is unlocked; if it is locked, unlock it through a separate reviewed and confirmed operation first. No game action was performed.",
+    );
     pub const OCR_FAILED: LocalizedText = LocalizedText::new(
         "无法可靠识别当前 HSR 面板。",
         "The current HSR panel could not be recognized reliably.",

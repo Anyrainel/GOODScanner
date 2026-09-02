@@ -989,6 +989,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         target: &ManagedGearObservation,
         scope: MutationScope,
     ) -> HsrResult<()> {
+        // The public mutation-device adapter is an independent safety boundary:
+        // reject locked or unknown mark-discard targets before touching the device.
+        ensure_mutation_lock_evidence(scope, &target.state)?;
         self.device.focus_and_verify()?;
 
         // A complete reread detects visible duplicates before any status
@@ -1059,6 +1062,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 format!("status field={field:?} is unknown or already desired before click"),
             ));
         }
+        // Reapply the shared rule to the freshly selected panel. The immediate
+        // pixel recapture below then binds this explicit unlocked state to the click.
+        ensure_mutation_lock_evidence(scope, &selected_observation.state)?;
 
         // This cheap final recapture happens after all OCR calls. It binds the
         // click to the same selected cell, exact immutable panel pixels, and
@@ -1154,6 +1160,20 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         }
         Ok(button)
     }
+}
+
+fn ensure_mutation_lock_evidence(scope: MutationScope, state: &ManagedState) -> HsrResult<()> {
+    if scope.has_required_lock_evidence(Some(state)) {
+        return Ok(());
+    }
+    Err(HsrError::new(
+        "HSR-MANAGER-MARK-DISCARD-LOCK-EVIDENCE",
+        hints::MARK_DISCARD_REQUIRES_UNLOCKED,
+        format!(
+            "mutation adapter requires fresh lock=Some(false) for MarkDiscard before status input; observedLock={:?}; no status input was issued",
+            state.lock
+        ),
+    ))
 }
 
 struct SelectedGearContext {
@@ -1545,7 +1565,10 @@ mod tests {
     use super::*;
     use image::Rgb;
 
-    use crate::{device::ReplayDevice, model::ReferenceSnapshot, ocr::ScriptedOcrReader};
+    use crate::{
+        device::ReplayDevice, localization::Language, model::ReferenceSnapshot,
+        ocr::ScriptedOcrReader,
+    };
 
     fn test_grid() -> GridGeometry {
         GridGeometry {
@@ -2031,6 +2054,50 @@ mod tests {
         let invalid = managed_observation(&parsed_manager_gear(f64::NAN));
         assert_eq!(invalid.state.lock, None);
         assert_eq!(invalid.state.discard, None);
+    }
+
+    #[test]
+    fn direct_manager_trait_refuses_locked_or_unknown_discard_without_device_input() {
+        let frame = RgbImage::from_pixel(1280, 720, Rgb([24, 28, 35]));
+
+        for (lock, observed_detail) in [
+            (Some(true), "observedLock=Some(true)"),
+            (None, "observedLock=None"),
+        ] {
+            let mut target = managed_observation(&parsed_manager_gear(1.0));
+            target.state.lock = lock;
+            let domain_error =
+                ensure_mutation_lock_evidence(MutationScope::MarkDiscard, &target.state)
+                    .expect_err("locked or unknown lock evidence must reject discard marking");
+            assert_eq!(
+                domain_error.code(),
+                "HSR-MANAGER-MARK-DISCARD-LOCK-EVIDENCE"
+            );
+            assert!(domain_error
+                .localized_message(Language::En)
+                .contains("Discard marking was refused"));
+            assert!(domain_error
+                .localized_message(Language::ZhCn)
+                .contains("已拒绝标记弃置"));
+
+            let mut scanner = scanner_with_frames(vec![frame.clone()], ScanConfig::default());
+            let error = ManagerMutationDevice::toggle_once(
+                &mut scanner,
+                &target,
+                MutationScope::MarkDiscard,
+            )
+            .expect_err("the public mutation trait must fail before touching the device");
+
+            assert!(error.contains("[HSR-MANAGER-MARK-DISCARD-LOCK-EVIDENCE]"));
+            assert!(error.contains(observed_detail));
+            assert!(error.contains("no status input was issued"));
+            assert!(scanner.device().commands().is_empty());
+            assert_eq!(
+                scanner.device().remaining_frames(),
+                1,
+                "the adapter guard must run before even capturing from the device"
+            );
+        }
     }
 
     #[test]
