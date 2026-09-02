@@ -1,0 +1,42 @@
+{
+  "bundle_id": "ggstarrail-reference",
+  "game_id": "honkai_star_rail",
+  "schema_version": "1.1.0",
+  "locales": ["en", "zh-CN"],
+  "source": {
+    "source_id": "turn_based_game_data",
+    "revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992"
+  },
+  "files": {
+    "characters.json": {
+      "byte_count": 401,
+      "entity_count": 1,
+      "sha256": "87c695fbd44589e6abc7456be9c72f0126909233f3af9de01db9947331b80456"
+    },
+    "light_cones.json": {
+      "byte_count": 417,
+      "entity_count": 1,
+      "sha256": "60ab0ee8223df84bb8798de37952aa52581611602fe8bb599d68086b779f1bc9"
+    },
+    "property_tables.json": {
+      "byte_count": 1617,
+      "entity_count": 7,
+      "sha256": "c7dc734819e7e75a7158087fadf03054c20ccaa91ef385bab74b704e64736a30"
+    },
+    "relic_pieces.json": {
+      "byte_count": 1693,
+      "entity_count": 4,
+      "sha256": "5346b48da8296e53207771ad24ad11c1e459e5cca024ef51e60e4cf44382f57c"
+    },
+    "relic_sets.json": {
+      "byte_count": 603,
+      "entity_count": 2,
+      "sha256": "62c6c8ec505311d91f8a9df587ca51d82a3951929584a0065ed3940931fd0c60"
+    },
+    "progression.json": {
+      "byte_count": 2358,
+      "entity_count": 5,
+      "sha256": "73b32d98fc6e7c59e3618abb2236c19015901c68c9d4965bb899caafc59a604d"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "bundle_id": "ggstarrail-reference",
+  "collection": "characters",
+  "game_id": "honkai_star_rail",
+  "schema_version": "1.1.0",
+  "source_revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992",
+  "value": [
+    {
+      "id": "1001",
+      "name": {
+        "en": { "value": "March 7th" },
+        "zh-CN": { "value": "三月七" }
+      },
+      "rarity": 4,
+      "path_id": "Knight"
+    }
+  ]
+}

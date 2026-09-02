@@ -26,7 +26,7 @@ fn provider_rejects_duplicate_semantic_ids() {
     assert_eq!(error.code(), "HSR-REF-INVALID");
     assert!(error
         .localized_message(Language::En)
-        .contains("duplicate gameId=990001"));
+        .contains("duplicate gameId=1001"));
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn provider_rejects_duplicate_stable_keys() {
     assert_eq!(error.code(), "HSR-REF-INVALID");
     assert!(error
         .localized_message(Language::En)
-        .contains("duplicate key=FixtureNavigator in characters"));
+        .contains("duplicate key=1001 in characters"));
 }
 
 #[test]

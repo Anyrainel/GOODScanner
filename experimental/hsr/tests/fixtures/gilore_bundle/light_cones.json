@@ -1,0 +1,18 @@
+{
+  "bundle_id": "ggstarrail-reference",
+  "collection": "light_cones",
+  "game_id": "honkai_star_rail",
+  "schema_version": "1.1.0",
+  "source_revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992",
+  "value": [
+    {
+      "id": "23005",
+      "name": {
+        "en": { "value": "Moment of Victory" },
+        "zh-CN": { "value": "制胜的瞬间" }
+      },
+      "rarity": 5,
+      "path_id": "Knight"
+    }
+  ]
+}

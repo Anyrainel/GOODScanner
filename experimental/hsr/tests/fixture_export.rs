@@ -1,8 +1,10 @@
 use std::{fs, path::PathBuf};
 
+use hsr_scanner_experimental::reference::GiloreBundleReferenceProvider;
 use hsr_scanner_experimental::{
-    build_export, parse_sanitized_fixture, FixtureObservationSource, JsonFileReferenceProvider,
-    Language, ObservationSource, ReferenceCache,
+    build_export, parse_sanitized_fixture, EvidenceKind, FixtureObservationSource,
+    JsonFileReferenceProvider, Language, ObservationSnapshot, ObservationSource, ReferenceCache,
+    ValidatedObservationSnapshot,
 };
 use serde_json::Value;
 
@@ -21,14 +23,28 @@ fn observation_value() -> Value {
 }
 
 fn load_export() -> hsr_scanner_experimental::HsrInventoryExport {
-    let cache = ReferenceCache::from_provider(&JsonFileReferenceProvider::new(fixture(
-        "reference_cache.json",
+    let cache = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(fixture(
+        "gilore_bundle",
     )))
-    .expect("reference fixture must be valid");
+    .expect("GIlore bundle fixture must be valid");
     let observations = FixtureObservationSource::new(fixture("observations.json"))
         .load()
         .expect("observation fixture must be valid");
     build_export(observations, &cache).expect("fixture export must resolve")
+}
+
+fn load_screen_export() -> hsr_scanner_experimental::HsrInventoryExport {
+    let cache = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(fixture(
+        "gilore_bundle",
+    )))
+    .expect("GIlore bundle fixture must be valid");
+    let mut snapshot: ObservationSnapshot =
+        serde_json::from_value(observation_value()).expect("observation fixture must be typed");
+    snapshot.evidence.kind = EvidenceKind::ScreenCapture;
+    snapshot.evidence.revision = "screen-capture-fixture-v2".to_string();
+    let observations = ValidatedObservationSnapshot::from_screen_capture(snapshot)
+        .expect("synthetic screen observation must pass production gates");
+    build_export(observations, &cache).expect("screen fixture must resolve")
 }
 
 #[test]
@@ -40,16 +56,36 @@ fn fixture_proves_all_four_inventory_categories() {
     assert_eq!(export.planar_ornaments.len(), 1);
     assert!(!export.privacy.account_identifiers_included);
     assert!(!export.privacy.raw_packet_data_included);
+    assert!(!export.privacy.server_item_identifiers_included);
 }
 
 #[test]
 fn fixture_export_matches_the_golden_document() {
-    let actual = serde_json::to_value(load_export()).expect("export must serialize");
-    let expected: Value = serde_json::from_str(
+    let actual = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&load_screen_export()).expect("export must serialize")
+    );
+    let expected =
+        fs::read_to_string(fixture("expected_export.json")).expect("golden fixture must exist");
+    assert_eq!(actual.as_bytes(), expected.as_bytes());
+}
+
+#[test]
+fn sanitized_fixture_and_screen_golden_differ_only_in_explicit_provenance() {
+    let mut sanitized = serde_json::to_value(load_export()).expect("fixture export must serialize");
+    let screen: Value = serde_json::from_str(
         &fs::read_to_string(fixture("expected_export.json")).expect("golden fixture must exist"),
     )
-    .expect("golden fixture must be JSON");
-    assert_eq!(actual, expected);
+    .expect("screen golden must be JSON");
+
+    assert_eq!(sanitized["source"]["kind"], "sanitizedFixture");
+    assert_eq!(sanitized["source"]["revision"], "sanitized-gilore-v2");
+    assert_eq!(screen["source"]["kind"], "screenCapture");
+    assert_eq!(screen["source"]["revision"], "screen-capture-fixture-v2");
+
+    sanitized["source"]["kind"] = screen["source"]["kind"].clone();
+    sanitized["source"]["revision"] = screen["source"]["revision"].clone();
+    assert_eq!(sanitized, screen);
 }
 
 #[test]
@@ -63,6 +99,22 @@ fn unknown_status_is_preserved_instead_of_inventing_false() {
         actual.pointer("/planarOrnaments/0/discard"),
         Some(&Value::Null)
     );
+}
+
+#[test]
+fn v2_uses_canonical_property_keys_without_invented_numeric_stat_ids() {
+    let actual = serde_json::to_value(load_export()).expect("export must serialize");
+    assert_eq!(actual["schemaVersion"], Value::from(2));
+    assert_eq!(
+        actual.pointer("/relics/0/mainStat/key"),
+        Some(&Value::from("HPDelta"))
+    );
+    assert_eq!(
+        actual.pointer("/relics/0/substats/0/key"),
+        Some(&Value::from("CriticalChanceBase"))
+    );
+    assert!(actual.pointer("/relics/0/mainStat/gameId").is_none());
+    assert!(actual.pointer("/relics/0/substats/0/gameId").is_none());
 }
 
 #[test]
@@ -139,13 +191,10 @@ fn unresolved_reference_has_bilingual_readable_error_and_technical_chain() {
 #[test]
 fn equipment_locations_are_resolved_to_canonical_character_keys() {
     let export = load_export();
-    assert_eq!(
-        export.light_cones[0].location_key.as_deref(),
-        Some("FixtureNavigator")
-    );
+    assert_eq!(export.light_cones[0].location_key.as_deref(), Some("1001"));
     assert_eq!(
         export.planar_ornaments[0].gear.location_key.as_deref(),
-        Some("FixtureNavigator")
+        Some("1001")
     );
 }
 
@@ -177,4 +226,34 @@ fn committed_fixtures_pass_the_production_privacy_gates() {
     FixtureObservationSource::new(fixture("observations.json"))
         .load()
         .expect("observation fixture must pass the shared privacy gate");
+}
+
+#[test]
+fn observation_semantics_match_the_website_v2_numeric_contract() {
+    for (pointer, invalid) in [
+        ("/characters/0/level", Value::from(0)),
+        ("/characters/0/ascension", Value::from(9)),
+        ("/characters/0/eidolon", Value::from(7)),
+        ("/lightCones/0/level", Value::from(101)),
+        ("/lightCones/0/superimposition", Value::from(0)),
+        ("/gear/0/level", Value::from(16)),
+    ] {
+        let mut value = observation_value();
+        *value
+            .pointer_mut(pointer)
+            .expect("fixture pointer must resolve") = invalid;
+        let error = parse_sanitized_fixture(&value.to_string())
+            .expect_err("out-of-contract game values must fail before export");
+        assert_eq!(error.code(), "HSR-OBS-INVALID", "pointer={pointer}");
+    }
+
+    let mut duplicate = observation_value();
+    let duplicate_character = duplicate["characters"][0].clone();
+    duplicate["characters"]
+        .as_array_mut()
+        .expect("characters must be an array")
+        .push(duplicate_character);
+    let error = parse_sanitized_fixture(&duplicate.to_string())
+        .expect_err("duplicate character definitions must fail before export");
+    assert_eq!(error.code(), "HSR-OBS-INVALID");
 }

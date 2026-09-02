@@ -1,0 +1,12 @@
+HSR 实验性管理预览：1 条指令，1 条可执行。
+请求 ID："1f8315ab-4d16-4f17-81da-3dbb3ba9a8ac"
+参考："gilore.ggstarrail-reference" @ "014e33e2404f8cd668bf06fc2ea6db53b6bc3992"
+库存指纹：sha256:3f949367d085735f8ff74667292f2eb87f2a013b1ac2c5f62f33fb94f65ee560
+确认摘要：c7629cb789951b83326657b1f480e2c9eb2f518f4b8bcedad609d3dd22fa5cbc
+- 指令 "hsr-manager-0001-lock"
+  分类：可执行
+  完整可见匹配器：{"key":"61011","gameId":61011,"setKey":"101","locationKey":null,"rarity":5,"slot":"Head","level":15,"mainStat":{"key":"HPDelta","value":705.6},"substats":[{"key":"CriticalChanceBase","value":8.7},{"key":"SpeedDelta","value":5.1}]}
+  已观察状态（锁定与弃置标记）：{"lock":false,"discard":false}
+  装备状态证明：false
+  请求的精确变更与范围：{"field":"lock","declaredBefore":false,"desired":true,"scope":"lock"}
+  可授权变更：[{"field":"lock","before":false,"desired":true,"scope":"lock"}]

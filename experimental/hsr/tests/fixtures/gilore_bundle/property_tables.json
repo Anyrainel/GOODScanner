@@ -1,0 +1,67 @@
+{
+  "bundle_id": "ggstarrail-reference",
+  "collection": "property_tables",
+  "game_id": "honkai_star_rail",
+  "schema_version": "1.1.0",
+  "source_revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992",
+  "value": {
+    "properties": [
+      {
+        "id": "HPDelta",
+        "value_kind": "flat",
+        "relic_name": {
+          "en": { "value": "HP" },
+          "zh-CN": { "value": "生命值" }
+        }
+      },
+      {
+        "id": "HPAddedRatio",
+        "value_kind": "ratio",
+        "relic_name": {
+          "en": { "value": "HP" },
+          "zh-CN": { "value": "生命值" }
+        }
+      },
+      {
+        "id": "AttackDelta",
+        "value_kind": "flat",
+        "relic_name": {
+          "en": { "value": "ATK" },
+          "zh-CN": { "value": "攻击力" }
+        }
+      },
+      {
+        "id": "AttackAddedRatio",
+        "value_kind": "ratio",
+        "relic_name": {
+          "en": { "value": "ATK" },
+          "zh-CN": { "value": "攻击力" }
+        }
+      },
+      {
+        "id": "HealRatioBase",
+        "value_kind": "ratio",
+        "relic_name": {
+          "en": { "value": "Outgoing Healing Boost" },
+          "zh-CN": { "value": "治疗量加成" }
+        }
+      },
+      {
+        "id": "CriticalChanceBase",
+        "value_kind": "ratio",
+        "relic_name": {
+          "en": { "value": "CRIT Rate" },
+          "zh-CN": { "value": "暴击率" }
+        }
+      },
+      {
+        "id": "SpeedDelta",
+        "value_kind": "flat",
+        "relic_name": {
+          "en": { "value": "SPD" },
+          "zh-CN": { "value": "速度" }
+        }
+      }
+    ]
+  }
+}

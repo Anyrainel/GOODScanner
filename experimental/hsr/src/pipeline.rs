@@ -78,18 +78,23 @@ pub fn build_export(
     for (index, observed) in observed_gear.into_iter().enumerate() {
         let context = format!("gear[{index}]");
         let reference = references
-            .gear(observed.piece_id)
-            .ok_or_else(|| missing_reference("gear", &context))?;
+            .canonical_gear_for_observation(
+                observed.piece_id,
+                &observed.main_stat_key,
+                observed.level,
+                observed.main_stat_value,
+            )
+            .ok_or_else(|| missing_reference("gearVisibleIdentity", &context))?;
         let category = reference.category;
         match category {
             GearCategory::Relic => {
                 let local_id = synthetic_local_id("relic", relics.len());
-                let gear = resolve_gear(observed, local_id, references, &context)?;
+                let gear = resolve_gear(observed, local_id, reference, references, &context)?;
                 relics.push(HsrRelic { gear });
             },
             GearCategory::PlanarOrnament => {
                 let local_id = synthetic_local_id("planar", planar_ornaments.len());
-                let gear = resolve_gear(observed, local_id, references, &context)?;
+                let gear = resolve_gear(observed, local_id, reference, references, &context)?;
                 planar_ornaments.push(HsrPlanarOrnament { gear });
             },
         }
@@ -100,7 +105,8 @@ pub fn build_export(
         schema_version: EXPORT_SCHEMA_VERSION,
         source: ExportSource {
             kind: evidence.kind,
-            revision: format!("synthetic-fixture-v{}", evidence.fixture_version),
+            revision: evidence.revision,
+            coverage: evidence.coverage,
         },
         reference: ExportReference {
             schema_version: references.schema_version(),
@@ -110,6 +116,7 @@ pub fn build_export(
         privacy: ExportPrivacy {
             account_identifiers_included: false,
             raw_packet_data_included: false,
+            server_item_identifiers_included: false,
         },
         characters,
         light_cones,
@@ -121,32 +128,32 @@ pub fn build_export(
 fn resolve_gear(
     observed: ObservedGear,
     local_id: String,
+    reference: &crate::model::GearReference,
     references: &ReferenceCache,
     context: &str,
 ) -> HsrResult<ExportGear> {
-    let reference = references
-        .gear(observed.piece_id)
-        .ok_or_else(|| missing_reference("gear", context))?;
     let main_reference = references
-        .stat(observed.main_stat_id)
+        .stat(&observed.main_stat_key)
         .ok_or_else(|| missing_reference("mainStat", context))?;
+    let main_stat_value = references
+        .relic_main_stat_value_for_piece(reference, &observed.main_stat_key, observed.level)
+        .ok_or_else(|| missing_reference("mainStatProgression", context))?;
 
     let mut substats = observed
         .substats
         .into_iter()
         .map(|observed_stat| {
             let stat_reference = references
-                .stat(observed_stat.stat_id)
+                .stat(&observed_stat.stat_key)
                 .ok_or_else(|| missing_reference("substat", context))?;
             Ok(ExportStat {
                 key: stat_reference.key.clone(),
-                game_id: stat_reference.game_id,
                 name: stat_reference.name.clone(),
                 value: observed_stat.value,
             })
         })
         .collect::<HsrResult<Vec<_>>>()?;
-    substats.sort_by(|left, right| left.game_id.cmp(&right.game_id));
+    substats.sort_by(|left, right| left.key.cmp(&right.key));
 
     Ok(ExportGear {
         local_id,
@@ -160,9 +167,8 @@ fn resolve_gear(
         level: observed.level,
         main_stat: ExportStat {
             key: main_reference.key.clone(),
-            game_id: main_reference.game_id,
             name: main_reference.name.clone(),
-            value: observed.main_stat_value,
+            value: main_stat_value,
         },
         substats,
         location_key: resolve_location(observed.equipped_character_id, references, context)?,

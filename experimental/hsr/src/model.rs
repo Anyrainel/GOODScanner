@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::localization::BilingualName;
 
 pub const EXPORT_SCHEMA: &str = "goodscanner.hsr.experimental";
-pub const EXPORT_SCHEMA_VERSION: u32 = 1;
+pub const EXPORT_SCHEMA_VERSION: u32 = 2;
 pub const REFERENCE_SCHEMA_VERSION: u32 = 1;
 pub const OBSERVATION_SCHEMA_VERSION: u32 = 1;
 
@@ -60,24 +60,55 @@ pub struct GearReference {
     pub game_id: u32,
     pub key: String,
     pub name: BilingualName,
+    /// Public GIlore asset path used only to distinguish otherwise identical
+    /// visible relic definitions. Legacy normalized fixtures may omit it, but
+    /// the verified GIlore adapter always supplies a nonempty value.
+    #[serde(default)]
+    pub icon_path: String,
     pub set_key: String,
     pub set_name: BilingualName,
     pub rarity: u8,
     pub category: GearCategory,
     pub slot: GearSlot,
+    /// GIlore's public relic main-affix group. Legacy normalized fixtures do
+    /// not contain progression metadata and deserialize this as zero, which
+    /// deliberately makes authoritative value lookup unavailable.
+    #[serde(default)]
+    pub main_affix_group: u32,
+    #[serde(default)]
+    pub max_level: u8,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatValueKind {
+    Flat,
+    Ratio,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatReference {
-    pub game_id: u32,
     pub key: String,
     pub name: BilingualName,
+    #[serde(default)]
+    pub value_kind: StatValueKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RelicMainAffixReference {
+    pub group_id: u32,
+    pub property_id: String,
+    pub max_level: u8,
+    pub level_values: Vec<f64>,
 }
 
 /// Normalized, provider-owned reference snapshot. GIlore can implement the
 /// provider contract later without changing observation or export code.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReferenceSnapshot {
     pub schema_version: u32,
@@ -87,19 +118,43 @@ pub struct ReferenceSnapshot {
     pub light_cones: Vec<LightConeReference>,
     pub gear_pieces: Vec<GearReference>,
     pub stats: Vec<StatReference>,
+    #[serde(default)]
+    pub relic_main_affixes: Vec<RelicMainAffixReference>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EvidenceKind {
     SanitizedFixture,
+    ScreenCapture,
+    PacketCapture,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservationEvidence {
     pub kind: EvidenceKind,
-    pub fixture_version: u32,
+    /// Scanner/build revision for live observations, or a fixture revision.
+    /// It never contains an account, device, or session identifier.
+    pub revision: String,
+    pub coverage: InventoryCoverage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CoverageLevel {
+    Complete,
+    EquippedOnly,
+    ShowcaseOnly,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InventoryCoverage {
+    pub characters: CoverageLevel,
+    pub light_cones: CoverageLevel,
+    pub relics: CoverageLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +182,9 @@ pub struct ObservedLightCone {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservedSubstat {
-    pub stat_id: u32,
+    /// Canonical language-neutral GIlore PropertyType (for example
+    /// `CriticalChanceBase`). HSR has no audited numeric stat game ID.
+    pub stat_key: String,
     pub value: f64,
 }
 
@@ -136,7 +193,7 @@ pub struct ObservedSubstat {
 pub struct ObservedGear {
     pub piece_id: u32,
     pub level: u8,
-    pub main_stat_id: u32,
+    pub main_stat_key: String,
     pub main_stat_value: f64,
     pub substats: Vec<ObservedSubstat>,
     /// Public character template ID, never a server avatar or account ID.
@@ -176,6 +233,7 @@ pub struct HsrInventoryExport {
 pub struct ExportSource {
     pub kind: EvidenceKind,
     pub revision: String,
+    pub coverage: InventoryCoverage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +249,7 @@ pub struct ExportReference {
 pub struct ExportPrivacy {
     pub account_identifiers_included: bool,
     pub raw_packet_data_included: bool,
+    pub server_item_identifiers_included: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,7 +286,6 @@ pub struct HsrLightCone {
 #[serde(rename_all = "camelCase")]
 pub struct ExportStat {
     pub key: String,
-    pub game_id: u32,
     pub name: BilingualName,
     pub value: f64,
 }

@@ -81,4 +81,24 @@ pub(crate) mod hints {
         "无法安全写入实验性 HSR 导出文件。",
         "Could not safely write the experimental HSR export file.",
     );
+    pub const DEVICE_UNAVAILABLE: LocalizedText = LocalizedText::new(
+        "无法连接到实验性 HSR 截图设备。",
+        "Could not connect to the experimental HSR capture device.",
+    );
+    pub const FOCUS_REQUIRED: LocalizedText = LocalizedText::new(
+        "已拒绝输入：HSR 游戏窗口必须保持在前台。",
+        "Input was refused because the HSR game window must remain foreground.",
+    );
+    pub const SCREEN_INVALID: LocalizedText = LocalizedText::new(
+        "当前画面无法通过 HSR 实验扫描器的语义验证。",
+        "The current screen could not be validated by the experimental HSR scanner.",
+    );
+    pub const OCR_FAILED: LocalizedText = LocalizedText::new(
+        "无法可靠识别当前 HSR 面板。",
+        "The current HSR panel could not be recognized reliably.",
+    );
+    pub const CANCELLED: LocalizedText = LocalizedText::new(
+        "实验性 HSR 操作已安全中止。",
+        "The experimental HSR operation was safely aborted.",
+    );
 }

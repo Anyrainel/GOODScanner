@@ -2,8 +2,8 @@
   "schema": "goodscanner.hsr.experimental",
   "schemaVersion": 2,
   "source": {
-    "kind": "screenCapture",
-    "revision": "screen-capture-fixture-v2",
+    "kind": "packetCapture",
+    "revision": "reliquary-archiver-0.18.0-cb109f17",
     "coverage": {
       "characters": "complete",
       "lightCones": "complete",
@@ -33,7 +33,7 @@
       "path": "Knight",
       "level": 80,
       "ascension": 6,
-      "eidolon": 2
+      "eidolon": 6
     }
   ],
   "lightCones": [
@@ -49,7 +49,7 @@
       "path": "Knight",
       "level": 80,
       "ascension": 6,
-      "superimposition": 3,
+      "superimposition": 1,
       "locationKey": "1001",
       "lock": true
     }
@@ -86,7 +86,7 @@
             "zhCn": "暴击率",
             "en": "CRIT Rate"
           },
-          "value": 8.7
+          "value": 5.8
         },
         {
           "key": "SpeedDelta",
@@ -94,12 +94,12 @@
             "zhCn": "速度",
             "en": "SPD"
           },
-          "value": 5.1
+          "value": 2.0
         }
       ],
       "locationKey": null,
-      "lock": false,
-      "discard": true
+      "lock": true,
+      "discard": false
     }
   ],
   "planarOrnaments": [
@@ -118,28 +118,36 @@
       },
       "rarity": 5,
       "slot": "PlanarSphere",
-      "level": 12,
+      "level": 15,
       "mainStat": {
         "key": "AttackAddedRatio",
         "name": {
           "zhCn": "攻击力",
           "en": "ATK"
         },
-        "value": 35.9424
+        "value": 43.2
       },
       "substats": [
+        {
+          "key": "HPDelta",
+          "name": {
+            "zhCn": "生命值",
+            "en": "HP"
+          },
+          "value": 38.0
+        },
         {
           "key": "SpeedDelta",
           "name": {
             "zhCn": "速度",
             "en": "SPD"
           },
-          "value": 4.0
+          "value": 2.0
         }
       ],
       "locationKey": "1001",
-      "lock": null,
-      "discard": null
+      "lock": false,
+      "discard": true
     }
   ]
 }
