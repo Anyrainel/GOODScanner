@@ -9,11 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hsr_scanner::localization::Language;
 use hsr_scanner::manager::{
-    apply_manager_envelope, apply_manager_plan, build_manager_plan,
+    apply_manager_envelope, apply_manager_plan, build_manager_plan, load_manager_recovery_plan,
     validate_manager_envelope_reference, AppendOnlyJsonJournalStore, ApplyAuthorization,
     JournalEntry, JournalStatus, ManagedGearObservation, ManagedState, ManagerInstructionsEnvelope,
-    ManagerJournal, ManagerJournalStore, ManagerMutationDevice, MutationScope, PlanClassification,
-    VisibleGearMatcher,
+    ManagerJournal, ManagerJournalStore, ManagerMutationDevice, ManagerPlan, MutationScope,
+    PlanClassification, VisibleGearMatcher, MANAGER_JOURNAL_SCHEMA, MANAGER_JOURNAL_SCHEMA_VERSION,
 };
 use hsr_scanner::reference::{GiloreBundleReferenceProvider, ReferenceCache};
 
@@ -158,6 +158,24 @@ impl ManagerJournalStore for MemoryJournalStore {
     }
 }
 
+fn mutation_started_journal(plan: &ManagerPlan) -> ManagerJournal {
+    ManagerJournal {
+        schema: MANAGER_JOURNAL_SCHEMA.to_owned(),
+        schema_version: MANAGER_JOURNAL_SCHEMA_VERSION,
+        request_id: plan.request_id.clone(),
+        idempotency_key: plan.idempotency_key.clone(),
+        plan_digest: plan.digest.clone(),
+        plan: plan.clone(),
+        entries: vec![JournalEntry {
+            instruction_id: plan.entries[0].instruction_id.clone(),
+            change: plan.entries[0].changes[0].clone(),
+            status: JournalStatus::MutationStarted,
+            toggle_attempts: 1,
+            outcome_code: None,
+        }],
+    }
+}
+
 struct SimulatedDevice {
     matches: Vec<ManagedGearObservation>,
     rereads: usize,
@@ -244,6 +262,94 @@ impl ManagerMutationDevice for SimulatedDevice {
             Ok(())
         }
     }
+}
+
+#[test]
+fn recovery_plan_is_none_when_no_journal_exists() {
+    let mut store = MemoryJournalStore::default();
+
+    let recovered = load_manager_recovery_plan(&envelope(), &mut store).unwrap();
+
+    assert_eq!(recovered, None);
+    assert_eq!(
+        store.saves, 0,
+        "read-only recovery must not create a journal"
+    );
+}
+
+#[test]
+fn recovery_plan_returns_a_validated_mutation_started_plan_without_writing() {
+    let envelope = envelope();
+    let before = observed(
+        envelope.instructions[0].matcher.clone(),
+        Some(false),
+        Some(false),
+        Some(false),
+    );
+    let plan = build_manager_plan(&envelope, &[before]).unwrap();
+    let journal = mutation_started_journal(&plan);
+    let mut store = MemoryJournalStore {
+        journal: Some(journal.clone()),
+        saves: 0,
+    };
+
+    let recovered = load_manager_recovery_plan(&envelope, &mut store)
+        .unwrap()
+        .expect("mutationStarted journal must retain its exact confirmed plan");
+
+    assert_eq!(recovered, plan);
+    assert_eq!(store.journal, Some(journal));
+    assert_eq!(store.saves, 0, "read-only recovery must not advance state");
+}
+
+#[test]
+fn recovery_plan_rejects_journal_mismatch_tampering_and_stale_envelope() {
+    let envelope = envelope();
+    let before = observed(
+        envelope.instructions[0].matcher.clone(),
+        Some(false),
+        Some(false),
+        Some(false),
+    );
+    let plan = build_manager_plan(&envelope, &[before]).unwrap();
+    let journal = mutation_started_journal(&plan);
+
+    let mut mismatched = journal.clone();
+    mismatched.request_id = "mismatched-journal-request".to_owned();
+    let error = load_manager_recovery_plan(
+        &envelope,
+        &mut MemoryJournalStore {
+            journal: Some(mismatched),
+            saves: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "HSR_MANAGER_JOURNAL_MISMATCH");
+
+    let mut tampered = journal.clone();
+    tampered.plan.entries[0].changes[0].desired = false;
+    let error = load_manager_recovery_plan(
+        &envelope,
+        &mut MemoryJournalStore {
+            journal: Some(tampered),
+            saves: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "HSR_MANAGER_PLAN_DIGEST_INVALID");
+
+    let mut stale_envelope = envelope.clone();
+    stale_envelope.reference.revision = "stale-reference-revision".to_owned();
+    refresh_envelope_idempotency(&mut stale_envelope);
+    let error = load_manager_recovery_plan(
+        &stale_envelope,
+        &mut MemoryJournalStore {
+            journal: Some(journal),
+            saves: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "HSR_MANAGER_JOURNAL_ENVELOPE_MISMATCH");
 }
 
 #[test]

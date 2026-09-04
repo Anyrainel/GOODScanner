@@ -1293,6 +1293,25 @@ impl ApplyReport {
     }
 }
 
+/// Load the exact original plan retained by an existing manager journal.
+///
+/// This is the read-only recovery seam for attended callers: it validates the
+/// current instruction envelope, maps journal I/O into the manager error
+/// contract, and rejects any persisted plan whose digest, reference, or
+/// semantic instructions no longer match. It does not acquire a controller or
+/// perform any device action.
+pub fn load_manager_recovery_plan<S: ManagerJournalStore>(
+    envelope: &ManagerInstructionsEnvelope,
+    journal_store: &mut S,
+) -> HsrResult<Option<ManagerPlan>> {
+    envelope.validate()?;
+    let Some(journal) = journal_store.load().map_err(journal_io_error)? else {
+        return Ok(None);
+    };
+    validate_persisted_plan_for_envelope(&journal, envelope)?;
+    Ok(Some(journal.plan))
+}
+
 /// Journal-first manager entry point used by attended CLI apply. An existing
 /// journal supplies its original exact plan before `fresh_inventory` is ever
 /// invoked, so completed retries are idempotent and `mutationStarted` retries
@@ -1312,13 +1331,8 @@ where
     P: FnOnce(&ManagerPlan) -> HsrResult<()>,
 {
     require_exclusive_apply_lease(journal_store)?;
-    envelope.validate()?;
-
-    let plan = match journal_store.load().map_err(journal_io_error)? {
-        Some(journal) => {
-            validate_persisted_plan_for_envelope(&journal, envelope)?;
-            journal.plan
-        },
+    let plan = match load_manager_recovery_plan(envelope, journal_store)? {
+        Some(plan) => plan,
         None => {
             let inventory = fresh_inventory(device)?;
             build_manager_plan(envelope, &inventory)?
