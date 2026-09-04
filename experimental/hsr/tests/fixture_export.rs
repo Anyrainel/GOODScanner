@@ -1,12 +1,13 @@
 use std::{fs, path::PathBuf};
 
-use hsr_scanner_experimental::reference::GiloreBundleReferenceProvider;
-use hsr_scanner_experimental::{
+use hsr_scanner::reference::GiloreBundleReferenceProvider;
+use hsr_scanner::{
     build_export, parse_sanitized_fixture, EvidenceKind, FixtureObservationSource,
     JsonFileReferenceProvider, Language, ObservationSnapshot, ObservationSource, ReferenceCache,
     ValidatedObservationSnapshot,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -22,7 +23,7 @@ fn observation_value() -> Value {
     .expect("fixture must be JSON")
 }
 
-fn load_export() -> hsr_scanner_experimental::HsrInventoryExport {
+fn load_export() -> hsr_scanner::HsrInventoryExport {
     let cache = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(fixture(
         "gilore_bundle",
     )))
@@ -33,7 +34,7 @@ fn load_export() -> hsr_scanner_experimental::HsrInventoryExport {
     build_export(observations, &cache).expect("fixture export must resolve")
 }
 
-fn load_screen_export() -> hsr_scanner_experimental::HsrInventoryExport {
+fn load_screen_export() -> hsr_scanner::HsrInventoryExport {
     let cache = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(fixture(
         "gilore_bundle",
     )))
@@ -60,23 +61,26 @@ fn fixture_proves_all_four_inventory_categories() {
 }
 
 #[test]
-fn fixture_export_matches_the_golden_document() {
-    let actual = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&load_screen_export()).expect("export must serialize")
-    );
-    let expected =
-        fs::read_to_string(fixture("expected_export.json")).expect("golden fixture must exist");
-    assert_eq!(actual.as_bytes(), expected.as_bytes());
+fn inventory_v3_preserves_the_legacy_v2_payload() {
+    let actual = serde_json::to_value(load_screen_export()).expect("export must serialize");
+    let mut expected: Value = serde_json::from_slice(
+        &fs::read(fixture("expected_export.json")).expect("legacy golden must exist"),
+    )
+    .expect("legacy golden must be JSON");
+    expected["schema"] = Value::from("goodscanner.hsr");
+    expected["schemaVersion"] = Value::from(3);
+    assert_eq!(actual, expected);
 }
 
 #[test]
 fn sanitized_fixture_and_screen_golden_differ_only_in_explicit_provenance() {
     let mut sanitized = serde_json::to_value(load_export()).expect("fixture export must serialize");
-    let screen: Value = serde_json::from_str(
+    let mut screen: Value = serde_json::from_str(
         &fs::read_to_string(fixture("expected_export.json")).expect("golden fixture must exist"),
     )
     .expect("screen golden must be JSON");
+    screen["schema"] = Value::from("goodscanner.hsr");
+    screen["schemaVersion"] = Value::from(3);
 
     assert_eq!(sanitized["source"]["kind"], "sanitizedFixture");
     assert_eq!(sanitized["source"]["revision"], "sanitized-gilore-v2");
@@ -102,9 +106,9 @@ fn unknown_status_is_preserved_instead_of_inventing_false() {
 }
 
 #[test]
-fn v2_uses_canonical_property_keys_without_invented_numeric_stat_ids() {
+fn v3_uses_canonical_property_keys_without_invented_numeric_stat_ids() {
     let actual = serde_json::to_value(load_export()).expect("export must serialize");
-    assert_eq!(actual["schemaVersion"], Value::from(2));
+    assert_eq!(actual["schemaVersion"], Value::from(3));
     assert_eq!(
         actual.pointer("/relics/0/mainStat/key"),
         Some(&Value::from("HPDelta"))
@@ -115,6 +119,27 @@ fn v2_uses_canonical_property_keys_without_invented_numeric_stat_ids() {
     );
     assert!(actual.pointer("/relics/0/mainStat/gameId").is_none());
     assert!(actual.pointer("/relics/0/substats/0/gameId").is_none());
+}
+
+#[test]
+fn legacy_v2_goldens_remain_byte_exact() {
+    for (name, expected_sha256) in [
+        (
+            "expected_export.json",
+            "3734ff182b1e7d6511a00262457ed9e219a103c7f9a1e1baaf0f596d90a2d373",
+        ),
+        (
+            "capture_expected_export.json",
+            "24c5e8359c61599225ae23889bb087636dc3b818c095bf7f8abd4ac33f979dfb",
+        ),
+    ] {
+        let bytes = fs::read(fixture(name)).expect("legacy fixture must exist");
+        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), expected_sha256);
+        let value: Value = serde_json::from_slice(&bytes).expect("legacy fixture must be JSON");
+        assert_eq!(value["schema"], "goodscanner.hsr.experimental");
+        assert_eq!(value["schemaVersion"], 2);
+        assert!(value.get("achievements").is_none());
+    }
 }
 
 #[test]
@@ -229,7 +254,7 @@ fn committed_fixtures_pass_the_production_privacy_gates() {
 }
 
 #[test]
-fn observation_semantics_match_the_website_v2_numeric_contract() {
+fn observation_semantics_match_the_website_v3_numeric_contract() {
     for (pointer, invalid) in [
         ("/characters/0/level", Value::from(0)),
         ("/characters/0/ascension", Value::from(9)),

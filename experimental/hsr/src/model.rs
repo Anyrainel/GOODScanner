@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::localization::BilingualName;
 
-pub const EXPORT_SCHEMA: &str = "goodscanner.hsr.experimental";
-pub const EXPORT_SCHEMA_VERSION: u32 = 2;
+pub const EXPORT_SCHEMA: &str = "goodscanner.hsr";
+pub const EXPORT_SCHEMA_VERSION: u32 = 3;
 pub const REFERENCE_SCHEMA_VERSION: u32 = 1;
 pub const OBSERVATION_SCHEMA_VERSION: u32 = 1;
 
@@ -120,6 +120,11 @@ pub struct ReferenceSnapshot {
     pub stats: Vec<StatReference>,
     #[serde(default)]
     pub relic_main_affixes: Vec<RelicMainAffixReference>,
+    /// Public, account-independent numeric achievement IDs from GIlore.
+    /// Inventory-only v1.1 bundles omit this field; v1.2 bundles populate it
+    /// from `achievements.json`.
+    #[serde(default)]
+    pub achievement_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +231,52 @@ pub struct HsrInventoryExport {
     pub light_cones: Vec<HsrLightCone>,
     pub relics: Vec<HsrRelic>,
     pub planar_ornaments: Vec<HsrPlanarOrnament>,
+    /// Omitted means achievements were not observed. A present, complete empty
+    /// snapshot authoritatively means that zero achievements were completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub achievements: Option<HsrAchievementSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HsrAchievementSnapshot {
+    pub source: AchievementSource,
+    pub coverage: AchievementCoverage,
+    pub entries: Vec<HsrAchievementEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AchievementSource {
+    pub kind: AchievementSourceKind,
+    /// Parser/build revision only. It must not encode account, device, or
+    /// session identity.
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AchievementSourceKind {
+    PacketCapture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AchievementCoverage {
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HsrAchievementEntry {
+    pub achievement_id: u32,
+    pub status: AchievementStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AchievementStatus {
+    Completed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

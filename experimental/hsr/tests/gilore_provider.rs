@@ -5,12 +5,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use hsr_scanner_experimental::reference::{GiloreBundleReferenceProvider, ReferenceProvider};
-use hsr_scanner_experimental::{
+use hsr_scanner::reference::{GiloreBundleReferenceProvider, ReferenceProvider};
+use hsr_scanner::{
     build_export, parse_sanitized_fixture, EvidenceKind, FixtureObservationSource, GearCategory,
     GearSlot, ObservationSource, ReferenceCache, StatValueKind,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const GILORE_REVISION: &str = "014e33e2404f8cd668bf06fc2ea6db53b6bc3992";
@@ -42,6 +42,7 @@ fn gilore_bundle_resolves_audited_public_ids_and_canonical_property_keys() {
 
     assert_eq!(cache.provider(), "gilore.ggstarrail-reference");
     assert_eq!(cache.revision(), GILORE_REVISION);
+    assert_eq!(cache.achievement_count(), 0);
     assert_eq!(cache.character(1001).expect("March 7th").key, "1001");
     assert_eq!(
         cache.light_cone(23005).expect("Moment of Victory").name.en,
@@ -84,6 +85,64 @@ fn gilore_bundle_resolves_audited_public_ids_and_canonical_property_keys() {
             .en,
         "CRIT Rate"
     );
+}
+
+#[test]
+fn gilore_v1_2_exposes_numeric_achievement_ids() {
+    let bundle = CopiedBundle::new("achievement-reference");
+    upgrade_bundle_to_v1_2(bundle.path(), &[json!(4_040_201), json!(4_010_101)]);
+
+    let cache = load_cache(bundle.path());
+    assert_eq!(
+        cache.achievement_ids().collect::<Vec<_>>(),
+        vec![4_010_101, 4_040_201]
+    );
+    assert!(cache.has_achievement(4_040_201));
+    assert!(!cache.has_achievement(4_999_999));
+}
+
+#[test]
+fn gilore_v1_2_requires_nonzero_unique_u32_achievement_ids() {
+    for (label, ids) in [
+        ("zero", vec![json!(0)]),
+        ("string", vec![json!("4010101")]),
+        ("overflow", vec![json!(4_294_967_296_u64)]),
+        ("signed", vec![json!(-4_010_101)]),
+        ("fractional", vec![json!(4_010_101.5)]),
+        ("duplicate", vec![json!(4_010_101), json!(4_010_101)]),
+    ] {
+        let bundle = CopiedBundle::new(label);
+        upgrade_bundle_to_v1_2(bundle.path(), &ids);
+        let error =
+            ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(bundle.path()))
+                .expect_err("invalid achievement IDs must fail closed");
+        assert!(
+            matches!(error.code(), "HSR-GILORE-MEMBER" | "HSR-REF-INVALID"),
+            "case={label}; error={error}"
+        );
+    }
+}
+
+#[test]
+fn gilore_v1_2_requires_both_achievement_members() {
+    let bundle = CopiedBundle::new("missing-achievements");
+    upgrade_bundle_to_v1_2(bundle.path(), &[json!(4_010_101)]);
+    let path = bundle.path().join("achievements.json");
+    fs::remove_file(path).expect("test member must be removable");
+
+    let error = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(bundle.path()))
+        .expect_err("a declared v1.2 bundle cannot omit achievements");
+    assert_eq!(error.code(), "HSR-GILORE-READ");
+}
+
+#[test]
+fn configured_full_gilore_bundle_exposes_achievement_ids() {
+    let Some(root) = std::env::var_os("GILORE_HSR_REFERENCE_DIR") else {
+        return;
+    };
+    let cache = load_cache(PathBuf::from(root));
+    assert!(cache.achievement_count() > 0);
+    assert!(cache.has_achievement(4_010_101));
 }
 
 #[test]
@@ -326,7 +385,7 @@ fn provider_rejects_a_member_whose_bytes_do_not_match_the_manifest_hash() {
         .expect_err("hash mismatch must fail closed");
     assert_eq!(error.code(), "HSR-GILORE-HASH");
     assert!(error
-        .localized_message(hsr_scanner_experimental::Language::En)
+        .localized_message(hsr_scanner::Language::En)
         .contains("characters.json"));
 }
 
@@ -358,7 +417,7 @@ fn provider_rejects_cross_revision_members_even_when_their_hash_is_valid() {
         .expect_err("mixed revisions must fail closed");
     assert_eq!(error.code(), "HSR-GILORE-COHERENCE");
     assert!(error
-        .localized_message(hsr_scanner_experimental::Language::En)
+        .localized_message(hsr_scanner::Language::En)
         .contains("characters.json"));
 }
 
@@ -385,6 +444,82 @@ fn update_manifest_file_metadata(
     let mut bytes = serde_json::to_vec_pretty(&manifest).expect("manifest serialization");
     bytes.push(b'\n');
     fs::write(manifest_path, bytes).expect("manifest metadata update");
+}
+
+fn upgrade_bundle_to_v1_2(root: &Path, achievement_ids: &[Value]) {
+    let manifest_path = root.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(
+        &fs::read(&manifest_path).expect("copied manifest must be readable"),
+    )
+    .expect("copied manifest must be JSON");
+    manifest["schema_version"] = Value::from("1.2.0");
+
+    for filename in BUNDLE_FILES
+        .into_iter()
+        .filter(|name| *name != "manifest.json")
+    {
+        let path = root.join(filename);
+        let mut member: Value =
+            serde_json::from_slice(&fs::read(&path).expect("copied member must be readable"))
+                .expect("copied member must be JSON");
+        member["schema_version"] = Value::from("1.2.0");
+        write_member_and_update_manifest(&path, filename, &member, &mut manifest);
+    }
+
+    let categories = json!({
+        "bundle_id": "ggstarrail-reference",
+        "collection": "achievement_categories",
+        "game_id": "honkai_star_rail",
+        "schema_version": "1.2.0",
+        "source_revision": GILORE_REVISION,
+        "value": [{ "id": "1" }]
+    });
+    write_member_and_update_manifest(
+        &root.join("achievement_categories.json"),
+        "achievement_categories.json",
+        &categories,
+        &mut manifest,
+    );
+
+    let achievements = json!({
+        "bundle_id": "ggstarrail-reference",
+        "collection": "achievements",
+        "game_id": "honkai_star_rail",
+        "schema_version": "1.2.0",
+        "source_revision": GILORE_REVISION,
+        "value": achievement_ids.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>()
+    });
+    write_member_and_update_manifest(
+        &root.join("achievements.json"),
+        "achievements.json",
+        &achievements,
+        &mut manifest,
+    );
+
+    let mut bytes = serde_json::to_vec_pretty(&manifest).expect("manifest must serialize");
+    bytes.push(b'\n');
+    fs::write(manifest_path, bytes).expect("upgraded manifest must be writable");
+}
+
+fn write_member_and_update_manifest(
+    path: &Path,
+    filename: &str,
+    member: &Value,
+    manifest: &mut Value,
+) {
+    let mut bytes = serde_json::to_vec_pretty(member).expect("member must serialize");
+    bytes.push(b'\n');
+    fs::write(path, &bytes).expect("test member must be writable");
+    let entity_count = member["value"]
+        .as_array()
+        .map(|entries| entries.len() as u64)
+        .or_else(|| manifest["files"][filename]["entity_count"].as_u64())
+        .expect("member count must be known");
+    manifest["files"][filename] = json!({
+        "byte_count": bytes.len() as u64,
+        "entity_count": entity_count,
+        "sha256": format!("{:x}", Sha256::digest(&bytes))
+    });
 }
 
 #[test]
@@ -430,7 +565,7 @@ fn tiny_verified_bundle_is_fixture_capable_but_not_live_complete() {
         .expect_err("tiny fixture must never authorize an account-facing path");
     assert_eq!(error.code(), "HSR-REF-LIVE-INCOMPLETE");
     assert!(error
-        .localized_message(hsr_scanner_experimental::Language::En)
+        .localized_message(hsr_scanner::Language::En)
         .contains("characters"));
 }
 

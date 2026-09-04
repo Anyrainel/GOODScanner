@@ -1,0 +1,44 @@
+{
+  "schema": "goodscanner.hsr",
+  "schemaVersion": 3,
+  "source": {
+    "kind": "packetCapture",
+    "revision": "auto-reliquary-1.2.0",
+    "coverage": {
+      "characters": "unknown",
+      "lightCones": "unknown",
+      "relics": "unknown"
+    }
+  },
+  "reference": {
+    "schemaVersion": 1,
+    "provider": "gilore.ggstarrail-reference",
+    "revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992"
+  },
+  "privacy": {
+    "accountIdentifiersIncluded": false,
+    "rawPacketDataIncluded": false,
+    "serverItemIdentifiersIncluded": false
+  },
+  "characters": [],
+  "lightCones": [],
+  "relics": [],
+  "planarOrnaments": [],
+  "achievements": {
+    "source": {
+      "kind": "packetCapture",
+      "revision": "auto-reliquary-1.2.0"
+    },
+    "coverage": "complete",
+    "entries": [
+      {
+        "achievementId": 4010101,
+        "status": "completed"
+      },
+      {
+        "achievementId": 4040201,
+        "status": "completed"
+      }
+    ]
+  }
+}

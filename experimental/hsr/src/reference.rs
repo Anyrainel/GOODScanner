@@ -100,6 +100,13 @@ impl GiloreBundleReferenceProvider {
     }
 }
 
+/// Load and validate a GIlore reference bundle in one call. Inventory-only
+/// schema 1.1 bundles remain valid; schema 1.2+ bundles additionally expose the
+/// public achievement ID set.
+pub fn load_gilore_reference_bundle(root: impl Into<PathBuf>) -> HsrResult<ReferenceCache> {
+    ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(root))
+}
+
 impl JsonFileReferenceProvider {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
@@ -252,6 +259,11 @@ struct GiloreRelicMainAffix {
     level_values: Vec<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GiloreAchievement {
+    id: u32,
+}
+
 impl ReferenceProvider for GiloreBundleReferenceProvider {
     fn load(&self) -> HsrResult<ReferenceSnapshot> {
         let manifest_path = self.root.join("manifest.json");
@@ -277,6 +289,7 @@ impl ReferenceProvider for GiloreBundleReferenceProvider {
             &manifest.schema_version,
         )?;
         require_safe_identifier("source.revision", &manifest.source.revision)?;
+        let includes_achievements = gilore_schema_includes_achievements(&manifest.schema_version)?;
 
         let characters: GiloreMember<Vec<GiloreCharacter>> =
             self.read_member(&manifest, "characters.json", "characters")?;
@@ -290,6 +303,32 @@ impl ReferenceProvider for GiloreBundleReferenceProvider {
             self.read_member(&manifest, "property_tables.json", "property_tables")?;
         let progression: GiloreMember<GiloreProgression> =
             self.read_member(&manifest, "progression.json", "progression")?;
+        let achievement_ids = if includes_achievements {
+            let categories: GiloreMember<Vec<Value>> = self.read_member(
+                &manifest,
+                "achievement_categories.json",
+                "achievement_categories",
+            )?;
+            if categories.value.is_empty() {
+                return reference_error(
+                    "achievement_categories.json must contain at least one category".to_string(),
+                );
+            }
+            let achievements: GiloreMember<Vec<GiloreAchievement>> =
+                self.read_member(&manifest, "achievements.json", "achievements")?;
+            if achievements.value.is_empty() {
+                return reference_error(
+                    "achievements.json must contain at least one achievement".to_string(),
+                );
+            }
+            achievements
+                .value
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let sets = relic_sets
             .value
@@ -409,6 +448,7 @@ impl ReferenceProvider for GiloreBundleReferenceProvider {
             gear_pieces,
             stats,
             relic_main_affixes,
+            achievement_ids,
         })
     }
 }
@@ -476,7 +516,10 @@ impl GiloreBundleReferenceProvider {
             )
         })?;
         validate_gilore_header(&member.bundle_id, &member.game_id, &member.schema_version)?;
-        if member.collection != collection || member.source_revision != manifest.source.revision {
+        if member.collection != collection
+            || member.source_revision != manifest.source.revision
+            || member.schema_version != manifest.schema_version
+        {
             return Err(HsrError::new(
                 "HSR-GILORE-COHERENCE",
                 hints::REFERENCE_INVALID,
@@ -496,9 +539,12 @@ fn decoded_entity_count(collection: &str, document: &Value) -> HsrResult<u64> {
         )
     })?;
     let count = match collection {
-        "characters" | "light_cones" | "relic_sets" | "relic_pieces" => {
-            json_array_len(value, collection)?
-        },
+        "characters"
+        | "light_cones"
+        | "relic_sets"
+        | "relic_pieces"
+        | "achievement_categories"
+        | "achievements" => json_array_len(value, collection)?,
         "property_tables" => json_array_len(
             value.get("properties").unwrap_or(&Value::Null),
             "property_tables.properties",
@@ -581,13 +627,38 @@ fn read_file(path: &Path, label: &str) -> HsrResult<Vec<u8>> {
 }
 
 fn validate_gilore_header(bundle: &str, game: &str, schema: &str) -> HsrResult<()> {
-    let major = schema.split('.').next().unwrap_or_default();
-    if bundle != "ggstarrail-reference" || game != "honkai_star_rail" || major != "1" {
+    let (major, _, _) = parse_gilore_schema_version(schema)?;
+    if bundle != "ggstarrail-reference" || game != "honkai_star_rail" || major != 1 {
         return reference_error(format!(
             "unsupported GIlore envelope bundle={bundle}, game={game}, schema={schema}"
         ));
     }
     Ok(())
+}
+
+fn gilore_schema_includes_achievements(schema: &str) -> HsrResult<bool> {
+    let (major, minor, _) = parse_gilore_schema_version(schema)?;
+    Ok(major == 1 && minor >= 2)
+}
+
+fn parse_gilore_schema_version(schema: &str) -> HsrResult<(u32, u32, u32)> {
+    let components = schema
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            HsrError::new(
+                "HSR-GILORE-SCHEMA",
+                hints::REFERENCE_INVALID,
+                "GIlore schemaVersion must use numeric major.minor.patch form",
+            )
+        })?;
+    match components.as_slice() {
+        [major, minor, patch] => Ok((*major, *minor, *patch)),
+        _ => reference_error(
+            "GIlore schemaVersion must use numeric major.minor.patch form".to_string(),
+        ),
+    }
 }
 
 fn parse_public_id(kind: &str, value: &str) -> HsrResult<u32> {
@@ -627,6 +698,7 @@ pub struct ReferenceCache {
     gear_pieces: BTreeMap<u32, GearReference>,
     stats: BTreeMap<String, StatReference>,
     relic_main_affixes: BTreeMap<(u32, String), RelicMainAffixReference>,
+    achievement_ids: BTreeSet<u32>,
 }
 
 impl ReferenceCache {
@@ -672,6 +744,17 @@ impl ReferenceCache {
                 ));
             }
         }
+        let mut achievement_ids = BTreeSet::new();
+        for achievement_id in snapshot.achievement_ids {
+            if achievement_id == 0 {
+                return reference_error("achievement ID must not be zero".to_string());
+            }
+            if !achievement_ids.insert(achievement_id) {
+                return reference_error(format!(
+                    "duplicate achievementId={achievement_id} in achievements"
+                ));
+            }
+        }
 
         for gear in gear_pieces.values() {
             if gear.main_affix_group != 0
@@ -712,6 +795,7 @@ impl ReferenceCache {
             gear_pieces,
             stats,
             relic_main_affixes,
+            achievement_ids,
         })
     }
 
@@ -725,6 +809,18 @@ impl ReferenceCache {
 
     pub fn revision(&self) -> &str {
         &self.revision
+    }
+
+    pub fn has_achievement(&self, achievement_id: u32) -> bool {
+        self.achievement_ids.contains(&achievement_id)
+    }
+
+    pub fn achievement_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.achievement_ids.iter().copied()
+    }
+
+    pub fn achievement_count(&self) -> usize {
+        self.achievement_ids.len()
     }
 
     /// Require a production-sized, property-complete reference cache before a
