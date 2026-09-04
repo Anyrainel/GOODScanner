@@ -5,6 +5,7 @@
 pub mod achievement_capture;
 pub mod capture;
 pub mod device;
+mod embedded_reference;
 pub mod error;
 pub mod localization;
 pub mod manager;
@@ -21,6 +22,13 @@ pub mod vision;
 pub use achievement_capture::{
     AchievementCaptureCommand, AchievementCaptureMonitor, AchievementCaptureState,
     AchievementPacketDecoder, DecodedAchievementSnapshot, ACHIEVEMENT_CAPTURE_REVISION,
+};
+pub use embedded_reference::{
+    generate_embedded_gilore_reference, load_embedded_gilore_reference, EMBEDDED_GILORE_COMMIT,
+    EMBEDDED_GILORE_MANIFEST_SHA256, EMBEDDED_GILORE_SOURCE_REVISION,
+    EMBEDDED_REFERENCE_ACHIEVEMENT_COUNT, EMBEDDED_REFERENCE_BYTE_COUNT,
+    EMBEDDED_REFERENCE_FORMAT_VERSION, EMBEDDED_REFERENCE_PROVIDER,
+    EMBEDDED_REFERENCE_SENTINEL_ACHIEVEMENT_ID, EMBEDDED_REFERENCE_SHA256,
 };
 pub use error::{HsrError, HsrResult};
 pub use localization::{Language, LocalizedText};

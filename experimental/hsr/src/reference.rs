@@ -107,6 +107,8 @@ pub fn load_gilore_reference_bundle(root: impl Into<PathBuf>) -> HsrResult<Refer
     ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(root))
 }
 
+pub use crate::embedded_reference::load_embedded_gilore_reference;
+
 impl JsonFileReferenceProvider {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
