@@ -22,10 +22,7 @@ impl CaptureFrame {
         }
     }
 
-    pub fn from_region(
-        ctrl: &GenshinGameController,
-        rect: (f64, f64, f64, f64),
-    ) -> Result<Self> {
+    pub fn from_region(ctrl: &GenshinGameController, rect: (f64, f64, f64, f64)) -> Result<Self> {
         let (x, y, w, h) = rect;
         Ok(Self {
             image: ctrl.capture_region(x, y, w, h)?,
@@ -57,12 +54,7 @@ impl CaptureFrame {
         scaler: &CoordScaler,
     ) -> Option<RgbImage> {
         let (bx, by, bw, bh) = rect;
-        let rel = (
-            bx - self.origin.0,
-            by + y_shift - self.origin.1,
-            bw,
-            bh,
-        );
+        let rel = (bx - self.origin.0, by + y_shift - self.origin.1, bw, bh);
         crop_region(&self.image, rel, scaler)
     }
 }
