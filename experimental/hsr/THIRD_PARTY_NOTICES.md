@@ -29,15 +29,26 @@ upstream single-achievement sentinel matcher. Repeated fields are inferred
 against the complete public achievement-ID set supplied through the GIlore
 reference bundle, and only normalized completed IDs leave the capture boundary.
 
-## External normalized reference input
+## Embedded normalized reference and optional override
 
-Live operations consume a separately generated, manifest-verified
-`hsr-reference` bundle through the GIlore/GGStarRail provider boundary. The
-full TurnBasedGameData-derived catalog is not bundled or redistributed by this
-crate. Its manifest remains the source of the exact upstream revision and
-license-status metadata. Committed fixtures contain deliberately small,
-synthetic or sanitized test data and are rejected by production-sized live
-inventory paths.
+GOODScanner and GOODCapture embed a compact normalized snapshot generated from
+the manifest-verified GIlore/GGStarRail reference boundary at GIlore commit
+`7ef3650a63622c204b89234406c99dc221e01d85` and public source revision
+`8cdb905dc2f8e6fffa9be4eb07af3e34435d6091`. The source manifest SHA-256 is
+`9899cc8fdde578cdbd744ec9f8b2705cd2f11d43670232e871f489fc3d549b5f`;
+the deterministic embedded document SHA-256 is
+`46fdddc9252046580154823d596315fb09d88dab570ffa958787286c99d76782`.
+The snapshot contains the public identifiers, names, aliases, and gameplay
+metadata needed for strict normalization, including 1,921 public achievement
+definition IDs. It contains no icon binaries, account/session/capture data,
+server item identifiers, or packet data. The source manifest remains the
+authority for upstream revision and license-status metadata.
+
+An advanced user may explicitly select a separately generated,
+manifest-verified bundle through the same provider boundary. It must pass the
+same production completeness checks; an invalid override does not silently
+fall back to the embedded snapshot. Small synthetic or sanitized test bundles
+remain rejected by production-sized live paths.
 
 ## Optional legacy offline import interoperability
 

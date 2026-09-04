@@ -1,10 +1,12 @@
-//! Read-only packet-capture adapter for the isolated HSR experiment.
+//! Legacy optional Reliquary/Fribbels-v4 import adapter.
 //!
-//! GOODScanner does not parse game packets here. Instead, this module invokes
-//! one user-supplied, checksum-pinned Reliquary Archiver executable, imports
-//! its Fribbels-v4 JSON through a short-lived private directory. Cleanup is
-//! attempted explicitly before every return and any failure is surfaced; Drop
-//! remains a best-effort fallback. No packet-write or live import server exists
+//! The shared GOODScanner and GOODCapture applications do not require or call
+//! this helper boundary. Native completed-achievement capture lives in
+//! `achievement_capture`; existing user-owned Reliquary/Fribbels JSON can be
+//! imported offline without launching a helper. This module retains the older
+//! explicit, checksum-pinned adapter as a library compatibility surface. When
+//! called directly, it uses a short-lived private directory and attempts
+//! cleanup before every return. No packet-write or live import server exists
 //! in this boundary.
 
 use std::{
