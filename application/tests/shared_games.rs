@@ -126,6 +126,50 @@ fn switcher_gives_both_games_equal_resting_width() {
 }
 
 #[test]
+fn default_star_rail_settings_use_verified_embedded_reference_without_a_folder() {
+    let root = temp_root("embedded-reference-default");
+    let (store, warning) = ApplicationConfigStore::for_executable_dir(&root);
+    assert!(warning.is_none());
+    assert!(
+        store.config.star_rail.reference_bundle.is_empty(),
+        "blank is the durable built-in-reference selection"
+    );
+    assert!(
+        !root.join("data").join("hsr_reference").exists(),
+        "startup must not manufacture or require an external reference folder"
+    );
+
+    let references = good_tools_app::gui::star_rail_worker::load_reference_selection("  \t")
+        .expect("blank selection should load the verified embedded reference");
+    assert_eq!(references.provider(), "gilore.ggstarrail-reference");
+    assert_eq!(
+        references.revision(),
+        "8cdb905dc2f8e6fffa9be4eb07af3e34435d6091"
+    );
+    assert!(references.achievement_count() > 0);
+    references
+        .validate_live_complete_profile()
+        .expect("embedded reference should be production-complete");
+
+    remove_test_tree(&root);
+}
+
+#[test]
+fn nonblank_reference_override_fails_closed_instead_of_falling_back() {
+    let root = temp_root("missing-reference-override");
+    let missing = root.join("explicit-missing-override");
+    let error = good_tools_app::gui::star_rail_worker::load_reference_selection(
+        missing
+            .to_str()
+            .expect("test override path should be valid Unicode"),
+    )
+    .expect_err("an invalid explicit override must not silently use embedded data");
+    assert!(!error.code().is_empty());
+
+    remove_test_tree(&root);
+}
+
+#[test]
 fn navigation_defaults_to_genshin_and_restores_each_games_tab() {
     let mut navigation = GameNavigation::default();
     assert_eq!(navigation.active_game, Game::Genshin);

@@ -209,13 +209,6 @@ impl Default for StarRailSettings {
 
 impl StarRailSettings {
     fn populate_default_paths(&mut self, executable_dir: &Path) {
-        if self.reference_bundle.trim().is_empty() {
-            self.reference_bundle = executable_dir
-                .join("data")
-                .join("hsr_reference")
-                .display()
-                .to_string();
-        }
         if self.output_dir.trim().is_empty() {
             self.output_dir = executable_dir.display().to_string();
         }

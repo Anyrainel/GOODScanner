@@ -66,7 +66,6 @@ pub fn show(
             .add_enabled(
                 !game_busy
                     && !settings.manager_instructions_path.trim().is_empty()
-                    && !settings.reference_bundle.trim().is_empty()
                     && !settings.manager_journal_path.trim().is_empty(),
                 egui::Button::new(lang.t("▶ 完整重扫并生成预览", "▶ Full Rescan and Preview")),
             )
@@ -149,15 +148,15 @@ pub fn show(
                     ui.add_enabled_ui(!is_running && !game_busy, |ui| {
                         path_row(
                             ui,
-                            lang.t("参考数据", "Reference data"),
+                            lang.t("自定义参考数据（可选）", "Custom reference data (optional)"),
                             &mut settings.reference_bundle,
-                            lang.t("选择文件夹...", "Choose folder..."),
+                            lang.t("选择覆盖文件夹...", "Choose override folder..."),
                             true,
                         );
                         ui.label(
                             egui::RichText::new(lang.t(
-                                "管理器只接受与指令中版本和修订完全一致的完整 GIlore 参考数据。",
-                                "The manager accepts only a complete GIlore reference bundle whose version and revision exactly match the instructions.",
+                                "默认使用程序内置且已验证的 GIlore 参考数据，无需另行下载。自定义覆盖仍必须完整，并与指令中的版本和修订完全一致。",
+                                "The verified GIlore reference bundled with the app is used by default; no separate download is needed. A custom override must still be complete and exactly match the instructions' version and revision.",
                             ))
                             .small()
                             .color(egui::Color32::from_rgb(120, 120, 120)),

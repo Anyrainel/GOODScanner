@@ -15,7 +15,7 @@ use hsr_scanner::{
     pipeline::{
         build_achievement_only_export, build_achievement_snapshot, write_export_create_new,
     },
-    reference::{load_gilore_reference_bundle, ReferenceCache},
+    reference::ReferenceCache,
     HsrError, LocalizedText,
 };
 
@@ -308,10 +308,18 @@ pub fn show(
                         );
                         path_row(
                             ui,
-                            lang.t("参考数据", "Reference data"),
+                            lang.t("自定义参考数据（可选）", "Custom reference data (optional)"),
                             &mut settings.reference_bundle,
-                            lang.t("选择文件夹...", "Choose folder..."),
+                            lang.t("选择覆盖文件夹...", "Choose override folder..."),
                             true,
+                        );
+                        ui.label(
+                            egui::RichText::new(lang.t(
+                                "默认使用程序内置且已验证的 GIlore 参考数据，无需另行下载。仅在测试其他版本时选择自定义文件夹。",
+                                "The verified GIlore reference bundled with the app is used by default; no separate download is needed. Choose a custom folder only to test another version.",
+                            ))
+                            .small()
+                            .color(egui::Color32::from_rgb(120, 120, 120)),
                         );
                         path_row(
                             ui,
@@ -355,7 +363,6 @@ fn action_bar(
                     .add_enabled(
                         !game_busy
                             && settings.capture_include_achievements
-                            && !settings.reference_bundle.trim().is_empty()
                             && !settings.output_dir.trim().is_empty(),
                         egui::Button::new(lang.t("▶ 开始抓包", "▶ Start Capture")),
                     )
@@ -505,7 +512,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
     let native_crash = Arc::new(worker::NativeCrashState::new());
     let startup_gate = Arc::new(CaptureStartupGate::default());
     match spawn_capture_monitor(
-        PathBuf::from(settings.reference_bundle.trim()),
+        settings.reference_bundle.clone(),
         state.shared.clone(),
         state.references.clone(),
         startup_gate.clone(),
@@ -525,7 +532,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
 }
 
 fn spawn_capture_monitor(
-    reference_bundle: PathBuf,
+    reference_selection: String,
     shared: Arc<Mutex<AchievementCaptureState>>,
     references_out: Arc<Mutex<Option<ReferenceCache>>>,
     startup_gate: Arc<CaptureStartupGate>,
@@ -559,17 +566,15 @@ fn spawn_capture_monitor(
             let native_context =
                 native_guard_active.then(yas::native_crash::inherit_current_task);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let references = match load_gilore_reference_bundle(reference_bundle) {
+                let references = match star_rail_worker::load_reference_selection(
+                    &reference_selection,
+                ) {
                     Ok(references) => references,
                     Err(error) => {
                         lock_shared(&shared_for_thread).error = Some(error);
                         return;
                     },
                 };
-                if let Err(error) = references.validate_live_complete_profile() {
-                    lock_shared(&shared_for_thread).error = Some(error);
-                    return;
-                }
                 let monitor = match AchievementCaptureMonitor::new(
                     shared_for_thread.clone(),
                     references.achievement_ids(),

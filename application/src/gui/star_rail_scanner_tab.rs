@@ -157,15 +157,15 @@ pub fn show(
                     ui.add_enabled_ui(!is_running && !game_busy, |ui| {
                         path_row(
                             ui,
-                            lang.t("参考数据", "Reference data"),
+                            lang.t("自定义参考数据（可选）", "Custom reference data (optional)"),
                             &mut settings.reference_bundle,
-                            lang.t("选择文件夹...", "Choose folder..."),
+                            lang.t("选择覆盖文件夹...", "Choose override folder..."),
                             true,
                         );
                         ui.label(
                             egui::RichText::new(lang.t(
-                                "请选择包含 manifest.json 的完整 GIlore 星穹铁道参考数据文件夹。",
-                                "Choose a complete GIlore Star Rail reference folder containing manifest.json.",
+                                "默认使用程序内置且已验证的 GIlore 参考数据，无需另行下载。仅在测试其他版本时选择包含 manifest.json 的完整文件夹。",
+                                "The verified GIlore reference bundled with the app is used by default; no separate download is needed. Choose a complete folder containing manifest.json only to test another version.",
                             ))
                             .small()
                             .color(egui::Color32::from_rgb(120, 120, 120)),
