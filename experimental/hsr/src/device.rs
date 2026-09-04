@@ -56,6 +56,22 @@ pub struct WindowsHsrDevice {
 
 impl WindowsHsrDevice {
     pub fn locate(capture_method: CaptureMethod) -> HsrResult<Self> {
+        Self::locate_with_cancel(capture_method, CancelToken::new())
+    }
+
+    /// Locate the HSR client and bind the supplied per-run cancellation token
+    /// to every wait and input operation performed by the device.
+    pub fn locate_with_cancel(
+        capture_method: CaptureMethod,
+        cancel: CancelToken,
+    ) -> HsrResult<Self> {
+        if cancel.is_cancelled() {
+            return Err(HsrError::new(
+                "HSR-DEVICE-CANCELLED",
+                hints::CANCELLED,
+                "cancellation token was already active before HSR device discovery",
+            ));
+        }
         #[cfg(target_os = "windows")]
         {
             let (hwnd, title, client_rect) = locate_hsr_window()?;
@@ -79,12 +95,12 @@ impl WindowsHsrDevice {
                 verified_frame_dimensions: None,
                 capturer,
                 control: SystemControl::new(),
-                cancel: CancelToken::new(),
+                cancel,
             })
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = capture_method;
+            let _ = (capture_method, cancel);
             Err(HsrError::new(
                 "HSR-DEVICE-PLATFORM",
                 hints::DEVICE_UNAVAILABLE,
@@ -633,6 +649,22 @@ impl HsrDevice for ReplayDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yas::cancel::StopReason;
+
+    #[test]
+    fn caller_owned_token_can_cancel_before_device_discovery() {
+        let cancel = CancelToken::new();
+        cancel.cancel(StopReason::UserAbort);
+
+        let error = WindowsHsrDevice::locate_with_cancel(CaptureMethod::Wgc, cancel)
+            .err()
+            .expect("a pre-cancelled live device must not touch the game window");
+
+        assert_eq!(error.code(), "HSR-DEVICE-CANCELLED");
+        assert!(error
+            .localized_message(crate::localization::Language::En)
+            .contains("safely aborted"));
+    }
 
     #[test]
     fn aspect_validation_accepts_scaled_16_by_9() {

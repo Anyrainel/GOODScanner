@@ -1,27 +1,27 @@
-[workspace]
-resolver = "2"
-members = ["."]
-
 [package]
-name = "hsr_scanner_experimental"
+name = "hsr_scanner"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Isolated experimental Honkai: Star Rail capture, OCR scanner, and attended manager"
+description = "Honkai: Star Rail capture, OCR scanner, export, and attended manager for GOODScanner"
 license = "GPL-2.0-or-later"
 publish = false
 
 [features]
 default = []
-experimental-hsr = []
-# Internal test-only escape hatch. build.rs honors this only for debug builds,
-# so a release executable can never lose its administrator manifest.
+capture = [
+    "dep:auto-reliquary",
+    "dep:base64",
+    "dep:futures",
+    "dep:pktmon",
+    "dep:tokio",
+    "dep:tokio-util",
+]
+# Internal test-only hooks for deterministic boundary and cleanup tests.
 test-as-invoker = []
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
 enigo = "0.1"
-env_logger = "0.11"
 image = "0.24"
 log = "0.4"
 regex = "1.10"
@@ -30,14 +30,13 @@ serde_json = "1.0"
 sha2 = "0.10"
 yas = { path = "../../yas", package = "yas_core", features = ["ort", "capturer_wgc"] }
 
+# Achievement packet capture is compiled only into GOODCapture.
+auto-reliquary = { git = "https://github.com/hashblen/auto-reliquary", rev = "bc23b48cb3b1b994a5d4405cefea42eb0e1d3735", version = "1.2.0", optional = true }
+base64 = { version = "0.22", optional = true }
+futures = { version = "0.3", optional = true }
+tokio = { version = "1", features = ["macros", "rt", "sync"], optional = true }
+tokio-util = { version = "0.7", optional = true }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
-
-[build-dependencies]
-winres = "0.1"
-
-[[bin]]
-name = "HSRScannerExperimental"
-path = "src/bin/hsr_scanner_experimental.rs"
-required-features = ["experimental-hsr"]
-test = false
+pktmon = { version = "0.6", features = ["tokio"], optional = true }

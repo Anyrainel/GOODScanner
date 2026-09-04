@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use hsr_scanner_experimental::{
+use hsr_scanner::{
     build_export,
     capture::{
         import_reliquary_archive_file, parse_reliquary_archive, ArchiverInvocation,
@@ -163,11 +163,7 @@ fn synthetic_affix(group_id: u32, property_id: &str) -> RelicMainAffixReference 
     }
 }
 
-fn synthetic_gear(
-    game_id: u32,
-    group_id: u32,
-    property: &str,
-) -> hsr_scanner_experimental::GearReference {
+fn synthetic_gear(game_id: u32, group_id: u32, property: &str) -> hsr_scanner::GearReference {
     let slot = match property {
         "HPDelta" => GearSlot::Head,
         "AttackDelta" => GearSlot::Hands,
@@ -175,7 +171,7 @@ fn synthetic_gear(
         "SPRatioBase" => GearSlot::LinkRope,
         _ => GearSlot::Body,
     };
-    hsr_scanner_experimental::GearReference {
+    hsr_scanner::GearReference {
         game_id,
         key: game_id.to_string(),
         name: synthetic_name("Gear", game_id),
@@ -199,7 +195,7 @@ fn archive_value() -> Value {
 }
 
 #[test]
-fn offline_archive_normalizes_to_the_v2_account_golden() {
+fn offline_archive_normalizes_to_the_current_account_contract() {
     let references = references();
     let imported =
         import_reliquary_archive_file(fixture("capture_reliquary_archive.json"), &references)
@@ -211,11 +207,15 @@ fn offline_archive_normalizes_to_the_v2_account_golden() {
     let export = build_export(imported.into_observations(), &references)
         .expect("normalized packet observation must export");
     let actual = serde_json::to_value(export).expect("export must serialize");
-    let expected: Value = serde_json::from_slice(
+    let mut expected: Value = serde_json::from_slice(
         &fs::read(fixture("capture_expected_export.json"))
             .expect("capture golden must be readable"),
     )
     .expect("capture golden must be JSON");
+    // The committed v2 fixture remains byte-pinned for the legacy reader.
+    // New shared binaries emit the production v3 envelope.
+    expected["schema"] = Value::from("goodscanner.hsr");
+    expected["schemaVersion"] = Value::from(3);
     assert_eq!(actual, expected);
     assert_eq!(actual["source"]["kind"], "packetCapture");
     assert_eq!(actual["planarOrnaments"][0]["mainStat"]["value"], 43.2);
@@ -495,6 +495,7 @@ fn original_helper_replacement_cannot_change_the_invoked_verified_copy() {
 }
 
 #[test]
+#[cfg(feature = "test-as-invoker")]
 fn explicit_cleanup_failure_is_surfaced_and_drop_remains_fallback() {
     let references = references();
     let test_dir = TestDirectory::create("cleanup-failure");

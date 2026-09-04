@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 use image::RgbImage;
 use sha2::{Digest, Sha256};
-use yas::capture::CaptureMethod;
+use yas::{cancel::CancelToken, capture::CaptureMethod};
 
 use crate::{
     device::{HsrDevice, InputCommand, WindowsHsrDevice},
@@ -113,7 +113,17 @@ pub struct HsrScanner<D, R> {
 
 impl HsrScanner<WindowsHsrDevice, PaddleOcrReader> {
     pub fn live(references: ReferenceCache, config: ScanConfig) -> HsrResult<Self> {
-        let device = WindowsHsrDevice::locate(config.capture_method)?;
+        Self::live_with_cancel(references, config, CancelToken::new())
+    }
+
+    /// Build a live scanner whose device observes the caller-owned per-run
+    /// cancellation token. Clones of the token can stop an active GUI worker.
+    pub fn live_with_cancel(
+        references: ReferenceCache,
+        config: ScanConfig,
+        cancel: CancelToken,
+    ) -> HsrResult<Self> {
+        let device = WindowsHsrDevice::locate_with_cancel(config.capture_method, cancel)?;
         let reader = PaddleOcrReader::new()?;
         Ok(Self::new(device, reader, references, config))
     }
@@ -1564,6 +1574,7 @@ fn gold_ratio(image: &RgbImage) -> f64 {
 mod tests {
     use super::*;
     use image::Rgb;
+    use yas::cancel::StopReason;
 
     use crate::{
         device::ReplayDevice, localization::Language, model::ReferenceSnapshot,
@@ -1588,6 +1599,21 @@ mod tests {
             cell_height: 0.138 * 0.90,
             confidence: 1.0,
         }
+    }
+
+    #[test]
+    fn live_scanner_honors_caller_cancel_before_device_or_ocr_setup() {
+        let snapshot: ReferenceSnapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json")).unwrap();
+        let references = ReferenceCache::from_snapshot(snapshot).unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel(StopReason::UserAbort);
+
+        let error = HsrScanner::live_with_cancel(references, ScanConfig::default(), cancel)
+            .err()
+            .expect("a pre-cancelled live scanner must not initialize device or OCR state");
+
+        assert_eq!(error.code(), "HSR-DEVICE-CANCELLED");
     }
 
     fn page_frame(

@@ -1,8 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use hsr_scanner_experimental::{
-    GearCategory, GearSlot, Language, ReferenceCache, ReferenceSnapshot,
-};
+use hsr_scanner::{GearCategory, GearSlot, Language, ReferenceCache, ReferenceSnapshot};
 
 fn reference_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -7,15 +7,15 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hsr_scanner_experimental::localization::Language;
-use hsr_scanner_experimental::manager::{
+use hsr_scanner::localization::Language;
+use hsr_scanner::manager::{
     apply_manager_envelope, apply_manager_plan, build_manager_plan,
     validate_manager_envelope_reference, AppendOnlyJsonJournalStore, ApplyAuthorization,
     JournalEntry, JournalStatus, ManagedGearObservation, ManagedState, ManagerInstructionsEnvelope,
     ManagerJournal, ManagerJournalStore, ManagerMutationDevice, MutationScope, PlanClassification,
     VisibleGearMatcher,
 };
-use hsr_scanner_experimental::reference::{GiloreBundleReferenceProvider, ReferenceCache};
+use hsr_scanner::reference::{GiloreBundleReferenceProvider, ReferenceCache};
 
 const GOLDEN_MANAGER_INSTRUCTIONS: &str = include_str!("fixtures/manager_instructions_v1.json");
 const GOLDEN_MANAGER_PREVIEW_EN: &str = include_str!("fixtures/manager_preview_en.txt");
@@ -73,7 +73,7 @@ fn two_instruction_envelope() -> ManagerInstructionsEnvelope {
     second.matcher.key = "63015".to_owned();
     second.matcher.game_id = 63015;
     second.matcher.set_key = "301".to_owned();
-    second.matcher.slot = hsr_scanner_experimental::model::GearSlot::PlanarSphere;
+    second.matcher.slot = hsr_scanner::model::GearSlot::PlanarSphere;
     second.matcher.main_stat.key = "AttackAddedRatio".to_owned();
     second.matcher.main_stat.value = 43.2;
     envelope.instructions.push(second);
