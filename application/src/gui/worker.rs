@@ -578,7 +578,7 @@ impl TaskHandle {
     pub fn is_finished(&self) -> bool {
         self.surface_native_failure();
         lock_recover(&self.native_failure).is_some()
-            || self._handle.as_ref().map_or(true, JoinHandle::is_finished)
+            || self._handle.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     /// The native failure, if this worker was terminated by the Windows crash
@@ -653,9 +653,7 @@ impl TaskHandle {
     /// Whether the underlying cancel token has been tripped (by `stop()`
     /// or by RMB). Lets the UI distinguish "running" from "stopping".
     pub fn is_stopping(&self) -> bool {
-        self.cancel_token
-            .as_ref()
-            .map_or(false, |t| t.is_cancelled())
+        self.cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
     }
 
     /// Signal the task to shut down gracefully.
@@ -692,7 +690,7 @@ impl TaskHandle {
 }
 
 /// Store and log an ordinary task failure without flattening its inner cause.
-fn set_task_failure(status: &Arc<Mutex<TaskStatus>>, error: UiError) {
+pub(super) fn set_task_failure(status: &Arc<Mutex<TaskStatus>>, error: UiError) {
     let lang = if yas::lang::is_en() {
         Lang::En
     } else {
@@ -700,6 +698,51 @@ fn set_task_failure(status: &Arc<Mutex<TaskStatus>>, error: UiError) {
     };
     log::error!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", error.copy_text(lang));
     *lock_status_recover(status) = TaskStatus::Failed(error);
+}
+
+/// Shared cancellable worker boundary used by game-specific GUI adapters.
+/// The game adapter owns domain setup and result wording; this function owns
+/// panic/native-crash containment and the common stop handle.
+pub(super) fn spawn_cancellable_task(
+    task: TaskKind,
+    log_source: LogSource,
+    status: Arc<Mutex<TaskStatus>>,
+    initial_msg: UiText,
+    stopping_msg: UiText,
+    run: impl FnOnce(yas::cancel::CancelToken) -> Result<UiText, UiError> + Send + 'static,
+) -> TaskHandle {
+    let cancel_token = yas::cancel::CancelToken::new();
+    let worker_cancel = cancel_token.clone();
+    *lock_status_recover(&status) = TaskStatus::Running(initial_msg);
+
+    let native_crash = Arc::new(NativeCrashState::new());
+    let handle = match spawn_with_safety_net(
+        task,
+        log_source,
+        status.clone(),
+        native_crash.clone(),
+        move |status| match run(worker_cancel) {
+            Ok(message) => *lock_status_recover(&status) = TaskStatus::Completed(message),
+            Err(error) => set_task_failure(&status, error),
+        },
+    ) {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            set_task_failure(&status, error);
+            None
+        },
+    };
+
+    TaskHandle {
+        _handle: handle,
+        task,
+        native_crash,
+        native_failure: Mutex::new(None),
+        shutdown: None,
+        cancel_token: Some(cancel_token),
+        status,
+        stopping_msg,
+    }
 }
 
 fn lock_status_recover(status: &Mutex<TaskStatus>) -> std::sync::MutexGuard<'_, TaskStatus> {

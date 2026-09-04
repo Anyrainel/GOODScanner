@@ -417,6 +417,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "auto-reliquary"
+version = "1.2.0"
+source = "git+https://github.com/hashblen/auto-reliquary?rev=bc23b48cb3b1b994a5d4405cefea42eb0e1d3735#bc23b48cb3b1b994a5d4405cefea42eb0e1d3735"
+dependencies = [
+ "base64 0.22.1",
+ "etherparse",
+ "kcp",
+ "protobuf",
+ "protobuf-codegen",
+ "rand_mt",
+ "tracing",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1851,6 +1865,7 @@ dependencies = [
  "enigo",
  "env_logger",
  "genshin_scanner",
+ "hsr_scanner",
  "image 0.24.9",
  "log",
  "rand 0.8.5",
@@ -1957,6 +1972,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
 dependencies = [
  "windows-sys 0.61.1",
+]
+
+[[package]]
+name = "hsr_scanner"
+version = "0.1.0"
+dependencies = [
+ "auto-reliquary",
+ "base64 0.22.1",
+ "enigo",
+ "futures",
+ "image 0.24.9",
+ "log",
+ "pktmon",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "windows-sys 0.59.0",
+ "yas_core",
 ]
 
 [[package]]

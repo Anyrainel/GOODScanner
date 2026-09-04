@@ -9,7 +9,7 @@ test = false
 [features]
 default = []
 dev-tools = []
-capture = ["genshin_scanner/capture", "dep:tokio"]
+capture = ["genshin_scanner/capture", "hsr_scanner/capture", "dep:tokio"]
 # Internal test-only feature. build.rs honors this only for debug artifacts so
 # pure formatting tests can run without the application's elevation manifest.
 test-as-invoker = []
@@ -18,6 +18,7 @@ test-as-invoker = []
 anyhow = "1.0"
 yas = { path = "../yas" , package = "yas_core" }
 genshin_scanner = { path = "../genshin" }
+hsr_scanner = { path = "../experimental/hsr" }
 clap = { version = "4.4", features = ["derive"] }
 log = "0.4"
 enigo = "0.1"
@@ -75,6 +76,11 @@ required-features = ["dev-tools"]
 [[test]]
 name = "ui_error"
 path = "tests/ui_error.rs"
+required-features = ["test-as-invoker"]
+
+[[test]]
+name = "shared_games"
+path = "tests/shared_games.rs"
 required-features = ["test-as-invoker"]
 
 [[bin]]

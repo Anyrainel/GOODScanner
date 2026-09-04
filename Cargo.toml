@@ -4,8 +4,8 @@ members = [
     "yas",
     "genshin",
     "application",
+    "experimental/hsr",
 ]
-exclude = ["experimental/hsr"]
 
 [profile.release]
 lto = true

@@ -26,9 +26,9 @@ fn main() {
         let version = env!("CARGO_PKG_VERSION");
         let is_capture_scanner = std::env::var_os("CARGO_FEATURE_CAPTURE").is_some();
         let product_name = if is_capture_scanner {
-            "GOODCapture Scanner"
+            "GOODCapture - Genshin & Star Rail"
         } else {
-            "GOOD Scanner"
+            "GOODScanner - Genshin & Star Rail"
         };
         let original_filename = if is_capture_scanner {
             "GOODCapture.exe"
@@ -36,7 +36,10 @@ fn main() {
             "GOODScanner.exe"
         };
         res.set("ProductName", product_name);
-        res.set("FileDescription", "Genshin Impact GOOD v3 Data Scanner");
+        res.set(
+            "FileDescription",
+            "Genshin Impact and Honkai: Star Rail data scanner",
+        );
         res.set("ProductVersion", version);
         res.set("FileVersion", version);
         res.set("LegalCopyright", "GPL-2.0-or-later");
