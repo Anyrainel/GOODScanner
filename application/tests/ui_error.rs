@@ -56,10 +56,7 @@ fn raw_inner_error_is_not_parsed_as_bilingual_text() {
 fn standard_error_sources_are_preserved() {
     let failure = UiError::from_error(
         UiText::new("操作失败", "The operation failed"),
-        ChainedError(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "inner standard error",
-        )),
+        ChainedError(std::io::Error::other("inner standard error")),
     );
 
     let details = failure.technical_details(Lang::En);

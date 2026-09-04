@@ -664,7 +664,7 @@ fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
     }
 
     if tab.phase == Phase::Stopping {
-        if tab.handle.as_ref().map_or(true, CaptureHandle::is_finished) {
+        if tab.handle.as_ref().is_none_or(CaptureHandle::is_finished) {
             tab.handle = None;
             tab.phase = Phase::Idle;
         }
@@ -795,11 +795,11 @@ fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
         }
 
         // Check if monitor thread died unexpectedly
-        if tab.handle.as_ref().map_or(false, |h| h.is_finished()) {
+        if tab.handle.as_ref().is_some_and(|h| h.is_finished()) {
             let has_error = tab
                 .capture_state
                 .try_lock()
-                .map_or(false, |s| s.error.is_some());
+                .is_ok_and(|s| s.error.is_some());
             if !has_error {
                 tab.phase = Phase::Failed(UiError::from_message(
                     UiText::new(
@@ -814,32 +814,28 @@ fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
     }
 
     // Transition: Initializing → Waiting (when capture starts)
-    if tab.phase == Phase::Initializing {
-        if tab.capture_state.try_lock().map_or(false, |s| s.capturing) {
-            tab.phase = Phase::Waiting;
-        }
+    if tab.phase == Phase::Initializing && tab.capture_state.try_lock().is_ok_and(|s| s.capturing) {
+        tab.phase = Phase::Waiting;
     }
 
     // Transition: Waiting → auto-export (when capture auto-stopped with complete data)
-    if tab.phase == Phase::Waiting {
-        if tab.capture_state.try_lock().map_or(false, |s| s.complete) {
-            // Automatically trigger export
-            let settings = CaptureExportSettings {
-                include_characters: tab.include_characters,
-                include_weapons: tab.include_weapons,
-                include_artifacts: tab.include_artifacts,
-                include_achievements: tab.include_achievements,
-                ..Default::default()
-            };
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            if let Some(ref h) = tab.handle {
-                h.send(CaptureCommand::Export {
-                    settings,
-                    reply: tx,
-                });
-                tab.pending_export = Some(PendingExport { rx });
-                tab.phase = Phase::Exporting;
-            }
+    if tab.phase == Phase::Waiting && tab.capture_state.try_lock().is_ok_and(|s| s.complete) {
+        // Automatically trigger export
+        let settings = CaptureExportSettings {
+            include_characters: tab.include_characters,
+            include_weapons: tab.include_weapons,
+            include_artifacts: tab.include_artifacts,
+            include_achievements: tab.include_achievements,
+            ..Default::default()
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Some(ref h) = tab.handle {
+            h.send(CaptureCommand::Export {
+                settings,
+                reply: tx,
+            });
+            tab.pending_export = Some(PendingExport { rx });
+            tab.phase = Phase::Exporting;
         }
     }
 }

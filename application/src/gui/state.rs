@@ -79,7 +79,7 @@ pub enum Lang {
 }
 
 impl Lang {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_config_str(s: &str) -> Self {
         if s == "en" {
             Lang::En
         } else {
@@ -671,13 +671,19 @@ pub struct AppState {
     pub mappings_refresh: RefreshState,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let mut user_config = genshin_scanner::cli::load_config_or_default();
         if user_config.filter_involved_sets {
             user_config.update_inventory = false;
         }
-        let lang = Lang::from_str(&user_config.lang);
+        let lang = Lang::from_config_str(&user_config.lang);
         let config_snapshot = serde_json::to_string(&user_config).unwrap_or_default();
         Self {
             lang,

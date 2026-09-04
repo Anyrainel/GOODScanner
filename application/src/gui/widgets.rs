@@ -206,10 +206,8 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
             ui.add(egui::TextEdit::singleline(&mut state.user_config.manekina_name).desired_width(field_w));
         });
 
-        if state.names_need_attention {
-            if !state.missing_required_character_names() {
-                state.names_need_attention = false;
-            }
+        if state.names_need_attention && !state.missing_required_character_names() {
+            state.names_need_attention = false;
         }
     });
 }
