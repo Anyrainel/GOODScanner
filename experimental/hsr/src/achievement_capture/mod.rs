@@ -123,6 +123,8 @@ impl AchievementPacketDecoder {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AchievementCaptureCommand {
     StartCapture,
+    /// Terminal for this monitor instance. A later queued StartCapture is
+    /// ignored so an early UI stop cannot race native-device initialization.
     StopCapture,
 }
 
@@ -145,6 +147,7 @@ pub struct AchievementCaptureMonitor {
     state: Arc<Mutex<AchievementCaptureState>>,
     capture_cancel_token: Option<CancellationToken>,
     capture_task: Option<JoinHandle<HsrResult<()>>>,
+    terminal_stop_requested: bool,
     packet_tx: mpsc::UnboundedSender<Vec<u8>>,
     packet_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 }
@@ -164,6 +167,7 @@ impl AchievementCaptureMonitor {
             state,
             capture_cancel_token: None,
             capture_task: None,
+            terminal_stop_requested: false,
             packet_tx,
             packet_rx,
         })
@@ -192,8 +196,14 @@ impl AchievementCaptureMonitor {
 
     fn handle_command(&mut self, command: AchievementCaptureCommand) {
         match command {
-            AchievementCaptureCommand::StartCapture => self.start_capture(),
-            AchievementCaptureCommand::StopCapture => self.stop_capture(),
+            AchievementCaptureCommand::StartCapture if !self.terminal_stop_requested => {
+                self.start_capture();
+            },
+            AchievementCaptureCommand::StartCapture => {},
+            AchievementCaptureCommand::StopCapture => {
+                self.terminal_stop_requested = true;
+                self.stop_capture();
+            },
         }
     }
 
@@ -468,6 +478,25 @@ mod tests {
         monitor.stop_capture();
 
         assert!(token.is_cancelled());
+        let state = state.lock().unwrap();
+        assert!(!state.capturing);
+        assert!(!state.complete);
+    }
+
+    #[test]
+    fn stop_before_start_is_terminal_and_never_spawns_native_capture() {
+        let state = Arc::new(Mutex::new(AchievementCaptureState::default()));
+        let mut monitor = AchievementCaptureMonitor::new(
+            state.clone(),
+            [4_010_101, 4_010_102, 4_010_103, 4_010_104, 4_010_105],
+        )
+        .unwrap();
+
+        monitor.handle_command(AchievementCaptureCommand::StopCapture);
+        monitor.handle_command(AchievementCaptureCommand::StartCapture);
+
+        assert!(monitor.capture_task.is_none());
+        assert!(monitor.capture_cancel_token.is_none());
         let state = state.lock().unwrap();
         assert!(!state.capturing);
         assert!(!state.complete);
