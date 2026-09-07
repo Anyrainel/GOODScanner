@@ -42,11 +42,11 @@ Quest counters without retaining them in the completed-achievement export.
 
 GOODScanner and GOODCapture embed a compact normalized snapshot generated from
 the manifest-verified GIlore/GGStarRail reference boundary at GIlore commit
-`7ef3650a63622c204b89234406c99dc221e01d85` and public source revision
+`1ca018ee615011e61f90f11c3f47738e6ebac30b` and public source revision
 `8cdb905dc2f8e6fffa9be4eb07af3e34435d6091`. The source manifest SHA-256 is
-`9899cc8fdde578cdbd744ec9f8b2705cd2f11d43670232e871f489fc3d549b5f`;
+`5acf3567d23a9a13531a62c448d075d218e824996ca25e994cef1c322bb89eb1`;
 the deterministic embedded document SHA-256 is
-`46fdddc9252046580154823d596315fb09d88dab570ffa958787286c99d76782`.
+`e22c53293b3c2bd3cb4f90b460b699af98ef66f7df9a9f873f7b21ee148208ec`.
 The snapshot contains the public identifiers, names, aliases, and gameplay
 metadata needed for strict normalization, including 1,921 public achievement
 definition IDs. It contains no icon binaries, account/session/capture data,
@@ -85,3 +85,14 @@ manager behavior were implemented against this crate's contracts. The runtime
 reuses this repository's GPL `yas_core` capture, input, and PaddleOCR
 primitives where their contracts match; those components remain covered by the
 root project's notices and source license.
+
+## Interchange export
+
+The v4 property/path/slot mapping and character skill anchor interpretation in
+`src/scanner_export.rs` and `src/packet_capture/inventory.rs` are adapted from
+Reliquary Archiver's `src/export/fribbels/` at the revision cited above. Its MIT
+license is reproduced in `LICENSE-reliquary-archiver.txt`. The serialized v4
+contract was checked against Fribbels' public `kelzFormatParser.tsx` and
+`importConfig.ts` on 2026-09-07. Fribbels implementation code is not bundled.
+StarDB's `hsr_achievements` JSON contract was checked against
+`juliuskreutz/stardb-exporter/src/ui/achievements.rs` on the same date.

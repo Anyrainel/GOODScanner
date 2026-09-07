@@ -30,18 +30,22 @@ fn characters(tag: u32, path_tag: u32) -> Vec<u8> {
 }
 
 fn character_packet(tag: u32, path_tag: u32, get_all: bool) -> Vec<u8> {
+    character_packet_for(tag, path_tag, get_all, 1001)
+}
+
+fn character_packet_for(tag: u32, path_tag: u32, get_all: bool, character_id: u32) -> Vec<u8> {
     let base = Avatar {
-        base_avatar_id: 1001,
+        base_avatar_id: character_id,
         level: 80,
         promotion: 6,
         first_met_time_stamp: 1_700_000_000,
         ..Default::default()
     };
     let path = AvatarPathData {
-        avatar_id: 1001,
+        avatar_id: character_id,
         rank: 2,
         avatar_path_skill_tree: vec![AvatarPathSkillTree {
-            point_id: 1001001,
+            point_id: 1,
             level: 6,
             ..Default::default()
         }],
@@ -95,7 +99,7 @@ fn trailblazer_path_uses_base_progression() {
         avatar_id: 8005,
         rank: 4,
         avatar_path_skill_tree: vec![AvatarPathSkillTree {
-            point_id: 8005001,
+            point_id: 1,
             level: 6,
             ..Default::default()
         }],
@@ -122,13 +126,17 @@ fn trailblazer_path_uses_base_progression() {
 }
 
 fn bag(tag: u32, relic_tag: u32) -> Vec<u8> {
+    bag_for(tag, relic_tag, 1001)
+}
+
+fn bag_for(tag: u32, relic_tag: u32, character_id: u32) -> Vec<u8> {
     let cone = Equipment {
         tid: 23005,
         unique_id: 77,
         level: 80,
         promotion: 6,
         rank: 3,
-        equip_avatar_id: 1001,
+        equip_avatar_id: character_id,
         is_protected: true,
         ..Default::default()
     };
@@ -137,7 +145,7 @@ fn bag(tag: u32, relic_tag: u32) -> Vec<u8> {
         unique_id: 88,
         level: 15,
         main_affix_id: 1,
-        equip_avatar_id: 1001,
+        equip_avatar_id: character_id,
         is_protected: true,
         sub_affix_list: vec![RelicAffix {
             affix_id: 7,
@@ -358,4 +366,99 @@ fn no_selected_categories_is_rejected() {
         }
     )
     .is_err());
+}
+
+#[test]
+fn common_export_preserves_selected_capture_records_and_character_progression() {
+    let refs = load_embedded_gilore_reference().unwrap();
+    let mut decoder = HsrPacketDecoder::new(
+        refs.clone(),
+        CaptureTargets {
+            achievements: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    decoder.receive_command(&characters(22, 23)).unwrap();
+    decoder.receive_command(&bag(6, 7)).unwrap();
+    let state = decoder.state();
+    let common = hsr_scanner::scanner_export::build_scanner_export(
+        state.inventory.as_ref().unwrap(),
+        &refs,
+        &state.export_details,
+    )
+    .unwrap();
+    assert_eq!(common["characters"][0]["skills"]["basic"], 6);
+    assert_eq!(common["characters"][0]["ability_version"], 0);
+    assert_eq!(common["light_cones"][0]["location"], "1001");
+    assert_eq!(common["light_cones"][0]["id"], "23005");
+    assert_eq!(common["relics"][0]["set_id"], "101");
+    assert_eq!(common["relics"][0]["slot"], "Head");
+    assert_eq!(common["relics"][0]["mainstat"], "HP");
+    assert_eq!(common["relics"][0]["substats"][0]["key"], "SPD");
+    assert!(
+        common["relics"][0]["substats"][0]["value"]
+            .as_f64()
+            .unwrap()
+            > 4.0
+    );
+    assert_ne!(common["relics"][0]["_uid"], "88");
+}
+
+#[test]
+fn collaboration_roster_and_equipment_export_with_embedded_references() {
+    let refs = load_embedded_gilore_reference().unwrap();
+    for id in [1014, 1015, 1508, 1509] {
+        for bag_first in [true, false] {
+            let mut decoder = HsrPacketDecoder::new(
+                refs.clone(),
+                CaptureTargets {
+                    achievements: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let roster = character_packet_for(777, 991, true, id);
+            let bag = bag_for(37, 41, id);
+            let packets = if bag_first {
+                [&bag, &roster]
+            } else {
+                [&roster, &bag]
+            };
+            for packet in packets {
+                decoder.receive_command(packet).unwrap();
+            }
+            let state = decoder.state();
+            assert!(state.complete, "collaboration character {id}");
+            let snapshot = state.inventory.clone().unwrap();
+            let common = hsr_scanner::scanner_export::build_scanner_export(
+                &snapshot,
+                &refs,
+                &state.export_details,
+            )
+            .unwrap();
+            assert_eq!(common["characters"][0]["id"], id.to_string());
+            assert_eq!(common["light_cones"][0]["location"], id.to_string());
+            assert_eq!(common["relics"][0]["location"], id.to_string());
+            if id == 1508 && bag_first {
+                if let Ok(path) = std::env::var("HSR_COLLABORATION_FIXTURE") {
+                    std::fs::write(path, serde_json::to_vec_pretty(&common).unwrap()).unwrap();
+                }
+            }
+            let export = build_export(
+                ValidatedObservationSnapshot::from_packet_capture(snapshot).unwrap(),
+                &refs,
+            )
+            .unwrap();
+            assert_eq!(export.characters[0].game_id, id);
+            assert_eq!(
+                export.light_cones[0].location_key.as_ref(),
+                Some(&export.characters[0].key)
+            );
+            assert_eq!(
+                export.relics[0].gear.location_key.as_ref(),
+                Some(&export.characters[0].key)
+            );
+        }
+    }
 }

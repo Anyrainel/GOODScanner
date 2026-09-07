@@ -18,6 +18,7 @@ pub mod pipeline;
 mod privacy;
 pub mod reference;
 pub mod scanner;
+pub mod scanner_export;
 pub mod vision;
 
 pub use embedded_reference::{

@@ -13,7 +13,7 @@ const EMBEDDED_BYTES: &[u8] = include_bytes!("../assets/gilore_reference_v1.json
 fn embedded_reference_is_integrity_pinned_private_and_live_complete() {
     assert_eq!(
         EMBEDDED_GILORE_COMMIT,
-        "7ef3650a63622c204b89234406c99dc221e01d85"
+        "1ca018ee615011e61f90f11c3f47738e6ebac30b"
     );
     assert_eq!(
         EMBEDDED_GILORE_SOURCE_REVISION,
@@ -21,7 +21,7 @@ fn embedded_reference_is_integrity_pinned_private_and_live_complete() {
     );
     assert_eq!(
         EMBEDDED_GILORE_MANIFEST_SHA256,
-        "9899cc8fdde578cdbd744ec9f8b2705cd2f11d43670232e871f489fc3d549b5f"
+        "5acf3567d23a9a13531a62c448d075d218e824996ca25e994cef1c322bb89eb1"
     );
     assert_eq!(EMBEDDED_BYTES.len(), EMBEDDED_REFERENCE_BYTE_COUNT);
     assert_eq!(

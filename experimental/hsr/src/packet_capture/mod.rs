@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{localization::LocalizedText, HsrError, HsrResult};
 
+mod dump;
 mod inventory;
 pub mod proto;
 pub mod protocol;
@@ -109,6 +110,7 @@ pub struct HsrPacketDecoder {
     dispatch_keys: HashMap<u32, Vec<u8>>,
     sniffer: GameSniffer,
     inventory: InventoryDecoder,
+    packet_dump: Option<dump::PacketDump>,
     targets: CaptureTargets,
     state: HsrCaptureState,
     conversation: Option<u32>,
@@ -134,6 +136,7 @@ impl HsrPacketDecoder {
             dispatch_keys,
             sniffer,
             inventory: InventoryDecoder::new(references, targets)?,
+            packet_dump: None,
             targets,
             state: HsrCaptureState::default(),
             conversation: None,
@@ -193,6 +196,9 @@ impl HsrPacketDecoder {
 
     /// Decrypted-command replay; wrappers and command IDs are not assumed.
     pub fn receive_command(&mut self, bytes: &[u8]) -> HsrResult<()> {
+        if let Some(dump) = &mut self.packet_dump {
+            dump.write(bytes)?;
+        }
         self.inventory.receive(bytes)?;
         if self.targets.achievements && !self.state.has_achievements {
             for container in protocol::containers(bytes) {
@@ -218,6 +224,7 @@ impl HsrPacketDecoder {
             && (!self.targets.achievements || self.state.has_achievements);
         if self.state.complete {
             self.state.inventory = self.inventory.snapshot();
+            self.state.export_details = self.inventory.export_details.clone();
         }
         Ok(())
     }
@@ -257,6 +264,7 @@ pub struct HsrCaptureState {
     pub light_cone_count: usize,
     pub relic_count: usize,
     pub inventory: Option<ObservationSnapshot>,
+    pub export_details: crate::scanner_export::CaptureExportDetails,
     pub achievement_count: usize,
     pub completed_ids: Vec<u32>,
     pub error: Option<HsrError>,
@@ -293,6 +301,12 @@ impl HsrCaptureMonitor {
             packet_tx,
             packet_rx,
         })
+    }
+
+    /// Enabling diagnostics performs no I/O until a decrypted command arrives.
+    pub fn with_packet_dump(mut self, root: std::path::PathBuf) -> Self {
+        self.decoder.packet_dump = Some(dump::PacketDump::new(root));
+        self
     }
 
     pub async fn run(mut self, mut command_rx: mpsc::UnboundedReceiver<HsrCaptureCommand>) {

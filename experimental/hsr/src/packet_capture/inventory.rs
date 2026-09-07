@@ -39,6 +39,7 @@ pub struct InventoryDecoder {
     references: ReferenceCache,
     targets: CaptureTargets,
     affixes: PacketReferences,
+    pub export_details: crate::scanner_export::CaptureExportDetails,
     pub characters: Option<Vec<ObservedCharacter>>,
     pub light_cones: Option<Vec<ObservedLightCone>>,
     pub relics: Option<Vec<ObservedGear>>,
@@ -52,6 +53,7 @@ impl InventoryDecoder {
             references,
             targets,
             affixes,
+            export_details: Default::default(),
             characters: None,
             light_cones: None,
             relics: None,
@@ -59,6 +61,7 @@ impl InventoryDecoder {
     }
 
     pub fn reset(&mut self) {
+        self.export_details = Default::default();
         self.characters = None;
         self.light_cones = None;
         self.relics = None;
@@ -163,6 +166,9 @@ impl InventoryDecoder {
                                 path.avatar_id
                             ))
                         })?;
+                        self.export_details
+                            .characters
+                            .insert(path.avatar_id, character_details(&path));
                         characters.push(ObservedCharacter {
                             character_id: path.avatar_id,
                             level: base.level as u8,
@@ -324,4 +330,65 @@ fn invalid(detail: impl Into<String>) -> HsrError {
     HsrError::new("HSR-CAPTURE-INVENTORY", LocalizedText::new(
         "无法识别完整的星穹铁道库存。请更新 GOODCapture 后重新登录抓包。",
         "The complete Star Rail inventory could not be decoded. Update GOODCapture and capture a new login."), detail)
+}
+
+// Current AvatarPathSkillTree uses public point anchors 1-22 (Reliquary v23).
+fn character_details(path: &AvatarPathData) -> crate::scanner_export::CharacterDetails {
+    let mut result = crate::scanner_export::CharacterDetails {
+        ability_version: path.skilltree_version,
+        ..Default::default()
+    };
+    for name in ["basic", "skill", "ult", "talent"] {
+        result.skills.insert(name.into(), 0);
+    }
+    for i in 1..=3 {
+        result.traces.insert(format!("ability_{i}"), false);
+    }
+    for i in 1..=10 {
+        result.traces.insert(format!("stat_{i}"), false);
+    }
+    result.traces.insert("special".into(), false);
+    let mut memosprite = BTreeMap::new();
+    for point in &path.avatar_path_skill_tree {
+        match point.point_id {
+            1..=4 => {
+                result.skills.insert(
+                    ["basic", "skill", "ult", "talent"][(point.point_id - 1) as usize].into(),
+                    point.level,
+                );
+            },
+            6..=8 => {
+                result
+                    .traces
+                    .insert(format!("ability_{}", point.point_id - 5), point.level > 0);
+            },
+            9..=18 => {
+                result
+                    .traces
+                    .insert(format!("stat_{}", point.point_id - 8), point.level > 0);
+            },
+            19 | 20 => {
+                memosprite.insert(
+                    if point.point_id == 19 {
+                        "skill"
+                    } else {
+                        "talent"
+                    }
+                    .into(),
+                    point.level,
+                );
+            },
+            21 => {
+                result.traces.insert("special".into(), point.level > 0);
+            },
+            22 => {
+                result.skills.insert("elation".into(), point.level);
+            },
+            _ => {},
+        }
+    }
+    if !memosprite.is_empty() {
+        result.memosprite = Some(memosprite);
+    }
+    result
 }

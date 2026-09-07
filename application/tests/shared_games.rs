@@ -456,6 +456,37 @@ fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
     );
     assert_eq!(export["achievements"]["entries"][0]["status"], "completed");
 
+    let stamp = exported_path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .strip_prefix("star_rail_export_")
+        .unwrap();
+    let common: serde_json::Value = serde_json::from_slice(
+        &fs::read(output_dir.join(format!("star_rail_fribbels_{stamp}"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(common["source"], "HSR-Scanner");
+    assert_eq!(common["version"], 4);
+    assert_eq!(common["generator"]["name"], "GOODScanner");
+    assert!(common["metadata"]["uid"].is_null());
+    assert_eq!(
+        common["relics"].as_array().unwrap().len(),
+        export["relics"].as_array().unwrap().len()
+            + export["planarOrnaments"].as_array().unwrap().len()
+    );
+    let stardb: serde_json::Value = serde_json::from_slice(
+        &fs::read(output_dir.join(format!("star_rail_achievements_{stamp}"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        stardb,
+        serde_json::json!({"hsr_achievements": [achievement_id]})
+    );
+    if let Ok(path) = std::env::var("HSR_INTEROP_FIXTURE") {
+        fs::write(path, serde_json::to_vec_pretty(&common).unwrap()).unwrap();
+    }
     remove_test_tree(&root);
 }
 
@@ -471,6 +502,9 @@ fn capture_selection_defaults_and_saved_choices_are_independent_of_ocr() {
             && settings.capture_include_relics
     );
     assert!(!settings.capture_include_achievements);
+    assert!(!settings.capture_dump_packets && !settings.capture_only_keep_latest_export);
+    settings.capture_dump_packets = true;
+    settings.capture_only_keep_latest_export = true;
     settings.capture_include_characters = false;
     settings.capture_include_relics = false;
     let restored: good_tools_app::config::StarRailSettings =
@@ -482,4 +516,5 @@ fn capture_selection_defaults_and_saved_choices_are_independent_of_ocr() {
             && !restored.capture_include_achievements
     );
     assert!(restored.scan_light_cones && restored.scan_relics_and_ornaments);
+    assert!(restored.capture_dump_packets && restored.capture_only_keep_latest_export);
 }

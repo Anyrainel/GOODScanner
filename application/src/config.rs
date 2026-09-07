@@ -186,6 +186,10 @@ pub struct StarRailSettings {
     pub capture_include_light_cones: bool,
     #[serde(default = "default_true")]
     pub capture_include_relics: bool,
+    #[serde(default)]
+    pub capture_dump_packets: bool,
+    #[serde(default)]
+    pub capture_only_keep_latest_export: bool,
 }
 
 impl Default for StarRailSettings {
@@ -209,6 +213,8 @@ impl Default for StarRailSettings {
             capture_include_characters: true,
             capture_include_light_cones: true,
             capture_include_relics: true,
+            capture_dump_packets: false,
+            capture_only_keep_latest_export: false,
         }
     }
 }

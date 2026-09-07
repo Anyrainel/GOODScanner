@@ -11,10 +11,7 @@ use hsr_scanner::{
     packet_capture::{
         CaptureTargets, HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState, HSR_CAPTURE_REVISION,
     },
-    pipeline::{
-        build_achievement_snapshot, build_export, build_export_with_achievements,
-        write_export_create_new,
-    },
+    pipeline::{build_achievement_snapshot, build_export, build_export_with_achievements},
     reference::ReferenceCache,
     HsrError, LocalizedText, ValidatedObservationSnapshot,
 };
@@ -130,9 +127,9 @@ pub fn stop_before_worker_start_suppresses_start_for_test() -> bool {
 }
 
 struct PendingExport {
-    receiver: mpsc::Receiver<Result<PathBuf, UiError>>,
+    receiver: mpsc::Receiver<Result<super::star_rail_exports::CaptureFiles, UiError>>,
     thread: std::thread::JoinHandle<()>,
-    result: Option<Result<PathBuf, UiError>>,
+    result: Option<Result<super::star_rail_exports::CaptureFiles, UiError>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +150,7 @@ pub struct StarRailCaptureState {
     pending_export: Option<PendingExport>,
     phase: CapturePhase,
     output_dir: String,
+    only_keep_latest_export: bool,
 }
 
 impl StarRailCaptureState {
@@ -164,6 +162,7 @@ impl StarRailCaptureState {
             pending_export: None,
             phase: CapturePhase::Idle,
             output_dir,
+            only_keep_latest_export: false,
         }
     }
 
@@ -252,7 +251,9 @@ impl StarRailCaptureState {
     #[doc(hidden)]
     pub fn completed_export_path_for_test(&self) -> Option<&str> {
         match &self.phase {
-            CapturePhase::Done { path, .. } => Some(path),
+            CapturePhase::Done { path, .. } => {
+                path.split("\n→ ").find(|p| p.contains("star_rail_export_"))
+            },
             CapturePhase::Failed(error) => panic!("capture export failed: {error:?}"),
             _ => None,
         }
@@ -372,6 +373,20 @@ pub fn show(
                         });
                     });
                 });
+
+            egui::CollapsingHeader::new(lang.t("高级设置", "Advanced"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!state.is_busy() && !game_busy, |ui| {
+                        ui.checkbox(&mut settings.capture_dump_packets,
+                            lang.t("保存所有数据包 → debug_capture/hsr/", "Dump decrypted packets → debug_capture/hsr/"));
+                        ui.checkbox(&mut settings.capture_only_keep_latest_export,
+                            lang.t("仅保留最新导出", "Only keep latest export"));
+                    });
+                });
+            ui.label(lang.t(
+                "库存：Fribbels / HSR-Scanner v4；成就：StarDB。另存 GGStarRail 文件。",
+                "Inventory: Fribbels / HSR-Scanner v4. Achievements: StarDB. A GGStarRail file is also saved."));
 
             egui::CollapsingHeader::new(lang.t("使用说明", "How to Use"))
                 .default_open(true)
@@ -531,6 +546,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
     // Freeze export destination at Start. Shared settings are disabled while
     // any Star Rail task runs, but this snapshot also protects future callers.
     state.output_dir.clone_from(&settings.output_dir);
+    state.only_keep_latest_export = settings.capture_only_keep_latest_export;
     *lock_shared(&state.shared) = HsrCaptureState::default();
     *lock_shared(&state.references) = None;
     state.pending_export = None;
@@ -539,6 +555,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
     let startup_gate = Arc::new(CaptureStartupGate::default());
     match spawn_capture_monitor(
         capture_targets(settings),
+        settings.capture_dump_packets,
         state.shared.clone(),
         state.references.clone(),
         startup_gate.clone(),
@@ -559,6 +576,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
 
 fn spawn_capture_monitor(
     targets: CaptureTargets,
+    dump_packets: bool,
     shared: Arc<Mutex<HsrCaptureState>>,
     references_out: Arc<Mutex<Option<ReferenceCache>>>,
     startup_gate: Arc<CaptureStartupGate>,
@@ -610,6 +628,9 @@ fn spawn_capture_monitor(
                         return;
                     },
                 };
+                let monitor = if dump_packets {
+                    monitor.with_packet_dump(genshin_scanner::cli::exe_dir().join("debug_capture").join("hsr"))
+                } else { monitor };
                 *lock_shared(&references_out) = Some(references);
 
                 let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -725,11 +746,16 @@ fn update_phase(state: &mut StarRailCaptureState) {
                 .expect("finished retained export must have a result");
             let _ = pending.thread.join();
             match result {
-                Ok(path) => {
+                Ok(files) => {
                     let summary = UiText::new("已导出所选数据。", "Selected data exported.");
                     state.phase = CapturePhase::Done {
                         summary,
-                        path: path.display().to_string(),
+                        path: files
+                            .paths
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n→ "),
                     };
                 },
                 Err(error) => state.phase = CapturePhase::Failed(error),
@@ -767,7 +793,12 @@ fn update_phase(state: &mut StarRailCaptureState) {
             ));
             return;
         };
-        match spawn_export(shared, references, PathBuf::from(state.output_dir.trim())) {
+        match spawn_export(
+            shared,
+            references,
+            PathBuf::from(state.output_dir.trim()),
+            state.only_keep_latest_export,
+        ) {
             Ok(pending) => {
                 state.pending_export = Some(pending);
                 state.phase = CapturePhase::Exporting;
@@ -783,6 +814,7 @@ fn spawn_export(
     captured: HsrCaptureState,
     references: ReferenceCache,
     output_dir: PathBuf,
+    only_latest: bool,
 ) -> Result<PendingExport, UiError> {
     std::fs::create_dir_all(&output_dir).map_err(|error| {
         UiError::from_error(
@@ -793,7 +825,6 @@ fn spawn_export(
             error,
         )
     })?;
-    let path = star_rail_worker::next_export_path(&output_dir);
     let (sender, receiver) = mpsc::sync_channel(1);
     let thread = std::thread::Builder::new()
         .name("star-rail-export".to_owned())
@@ -802,6 +833,12 @@ fn spawn_export(
                 let inventory = captured.inventory.ok_or_else(|| UiError::from_message(
                     UiText::new("库存数据缺失，请重新抓包。", "Inventory data is missing. Capture again."),
                     "completed capture has no inventory snapshot"))?;
+                let scanner = if inventory.evidence.coverage.characters != hsr_scanner::CoverageLevel::Unknown
+                    || inventory.evidence.coverage.light_cones != hsr_scanner::CoverageLevel::Unknown
+                    || inventory.evidence.coverage.relics != hsr_scanner::CoverageLevel::Unknown {
+                    Some(hsr_scanner::scanner_export::build_scanner_export(&inventory, &references, &captured.export_details)
+                        .map_err(|e| star_rail_worker::hsr_ui_error(UiText::new("无法生成通用库存导出。", "Could not build the inventory interchange export."), e))?)
+                } else { None };
                 let observations = ValidatedObservationSnapshot::from_packet_capture(inventory)
                     .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("库存数据校验失败。", "Inventory validation failed."), error))?;
                 let export = if captured.has_achievements {
@@ -809,16 +846,11 @@ fn spawn_export(
                         .and_then(|achievements| build_export_with_achievements(observations, achievements, &references))
                 } else { build_export(observations, &references) }
                 .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("无法生成星穹铁道导出文件。", "The Star Rail export could not be built."), error))?;
-                write_export_create_new(&path, &export).map_err(|error| {
-                    star_rail_worker::hsr_ui_error(
-                        UiText::new(
-                            "星穹铁道数据导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
-                            "The Star Rail data export could not be written. Check the output folder, disk space, and file permissions.",
-                        ),
-                        error,
-                    )
-                })?;
-                Ok(path)
+                super::star_rail_exports::write_capture_files(&output_dir, &export, scanner.as_ref(), only_latest)
+                    .map_err(|e| star_rail_worker::hsr_ui_error(UiText::new(
+                        "导出文件保存或旧文件清理失败。请查看完整错误中的文件路径。",
+                        "Saving exports or removing older files failed. See the file paths in the full error."), e))
+
             })();
             let _ = sender.send(result);
         })
