@@ -2,8 +2,10 @@
 
 Select **Star Rail → Capture**, start capture as administrator, then log in
 from the game's title screen. Characters, Light Cones, and Relics (including
-Planar Ornaments) are captured together. Completed achievements are enabled
-by default and can be unchecked. Capture stops and writes the GGStarRail v3
+Planar Ornaments), and Achievements each have a checkbox, matching the Genshin
+export settings. All four default to selected; selections persist independently
+of OCR settings. Unchecked categories are excluded from the export and completion
+requirements. Capture stops and writes the GGStarRail v3
 JSON after the requested data arrives. The default destination is beside the
 executable; existing saved output destinations are retained. The result shows
 the actual file path.

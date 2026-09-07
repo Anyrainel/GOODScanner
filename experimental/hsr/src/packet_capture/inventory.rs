@@ -9,7 +9,7 @@ use serde::Deserialize;
 use super::{
     proto::{Avatar::Avatar, AvatarPathData::AvatarPathData, Equipment::Equipment, Relic::Relic},
     protocol::{containers, parse_message, WireValue},
-    HSR_CAPTURE_REVISION,
+    CaptureTargets, HSR_CAPTURE_REVISION,
 };
 use crate::{model::*, reference::ReferenceCache, HsrError, HsrResult, LocalizedText};
 
@@ -37,6 +37,7 @@ struct PacketReferences {
 
 pub struct InventoryDecoder {
     references: ReferenceCache,
+    targets: CaptureTargets,
     affixes: PacketReferences,
     pub characters: Option<Vec<ObservedCharacter>>,
     pub light_cones: Option<Vec<ObservedLightCone>>,
@@ -44,11 +45,12 @@ pub struct InventoryDecoder {
 }
 
 impl InventoryDecoder {
-    pub fn new(references: ReferenceCache) -> HsrResult<Self> {
+    pub fn new(references: ReferenceCache, targets: CaptureTargets) -> HsrResult<Self> {
         let affixes = serde_json::from_str(include_str!("../../assets/packet_affixes.json"))
             .map_err(|error| invalid(format!("bundled packet affixes: {error}")))?;
         Ok(Self {
             references,
+            targets,
             affixes,
             characters: None,
             light_cones: None,
@@ -63,24 +65,41 @@ impl InventoryDecoder {
     }
 
     pub fn complete(&self) -> bool {
-        self.characters.is_some() && self.light_cones.is_some() && self.relics.is_some()
+        (!self.targets.characters || self.characters.is_some())
+            && (!self.targets.light_cones || self.light_cones.is_some())
+            && (!self.targets.relics || self.relics.is_some())
     }
 
     pub fn snapshot(&self) -> Option<ObservationSnapshot> {
+        if !self.complete() {
+            return None;
+        }
         Some(ObservationSnapshot {
             schema_version: OBSERVATION_SCHEMA_VERSION,
             evidence: ObservationEvidence {
                 kind: EvidenceKind::PacketCapture,
                 revision: HSR_CAPTURE_REVISION.to_owned(),
                 coverage: InventoryCoverage {
-                    characters: CoverageLevel::Complete,
-                    light_cones: CoverageLevel::Complete,
-                    relics: CoverageLevel::Complete,
+                    characters: if self.targets.characters {
+                        CoverageLevel::Complete
+                    } else {
+                        CoverageLevel::Unknown
+                    },
+                    light_cones: if self.targets.light_cones {
+                        CoverageLevel::Complete
+                    } else {
+                        CoverageLevel::Unknown
+                    },
+                    relics: if self.targets.relics {
+                        CoverageLevel::Complete
+                    } else {
+                        CoverageLevel::Unknown
+                    },
                 },
             },
-            characters: self.characters.clone()?,
-            light_cones: self.light_cones.clone()?,
-            gear: self.relics.clone()?,
+            characters: self.characters.clone().unwrap_or_default(),
+            light_cones: self.light_cones.clone().unwrap_or_default(),
+            gear: self.relics.clone().unwrap_or_default(),
         })
     }
 
@@ -122,7 +141,7 @@ impl InventoryDecoder {
                         .all(|s| s.point_id > 0 && s.level <= 20))
                 .then_some(value)
             });
-            if self.characters.is_none() && has_get_all {
+            if self.targets.characters && self.characters.is_none() && has_get_all {
                 if let (Some((_, bases)), Some((_, paths))) = (bases, paths) {
                     let bases: BTreeMap<_, _> =
                         bases.into_iter().map(|b| (b.base_avatar_id, b)).collect();
@@ -157,7 +176,9 @@ impl InventoryDecoder {
             }
             // Require both inventory record families in the same container.
             // Missing collections are never reported as captured empty data.
-            if self.light_cones.is_none() || self.relics.is_none() {
+            if (self.targets.light_cones && self.light_cones.is_none())
+                || (self.targets.relics && self.relics.is_none())
+            {
                 let cones = unique_group(&groups, |bytes| {
                     let value = Equipment::parse_from_bytes(bytes).ok()?;
                     (self.references.light_cone(value.tid).is_some()
@@ -182,7 +203,7 @@ impl InventoryDecoder {
                     }
                     let mut ids = BTreeSet::new();
                     let mut normalized_cones = Vec::new();
-                    for cone in cones {
+                    for cone in cones.into_iter().filter(|_| self.targets.light_cones) {
                         if !ids.insert(cone.unique_id) {
                             return Err(invalid("duplicate light cone instance"));
                         }
@@ -197,14 +218,18 @@ impl InventoryDecoder {
                     }
                     ids.clear();
                     let mut normalized_relics = Vec::new();
-                    for relic in relics {
+                    for relic in relics.into_iter().filter(|_| self.targets.relics) {
                         if !ids.insert(relic.unique_id) {
                             return Err(invalid("duplicate relic instance"));
                         }
                         normalized_relics.push(self.relic(relic)?);
                     }
-                    self.light_cones = Some(normalized_cones);
-                    self.relics = Some(normalized_relics);
+                    if self.targets.light_cones {
+                        self.light_cones = Some(normalized_cones);
+                    }
+                    if self.targets.relics {
+                        self.relics = Some(normalized_relics);
+                    }
                 }
             }
         }

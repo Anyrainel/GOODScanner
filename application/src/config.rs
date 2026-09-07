@@ -180,6 +180,12 @@ pub struct StarRailSettings {
     pub manager_journal_path: String,
     #[serde(default = "default_true")]
     pub capture_include_achievements: bool,
+    #[serde(default = "default_true")]
+    pub capture_include_characters: bool,
+    #[serde(default = "default_true")]
+    pub capture_include_light_cones: bool,
+    #[serde(default = "default_true")]
+    pub capture_include_relics: bool,
 }
 
 impl Default for StarRailSettings {
@@ -200,6 +206,9 @@ impl Default for StarRailSettings {
             manager_instructions_path: String::new(),
             manager_journal_path: String::new(),
             capture_include_achievements: true,
+            capture_include_characters: true,
+            capture_include_light_cones: true,
+            capture_include_relics: true,
         }
     }
 }

@@ -76,6 +76,32 @@ impl DecodedAchievementSnapshot {
     }
 }
 
+/// Categories selected before starting a capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureTargets {
+    pub characters: bool,
+    pub light_cones: bool,
+    pub relics: bool,
+    pub achievements: bool,
+}
+
+impl Default for CaptureTargets {
+    fn default() -> Self {
+        Self {
+            characters: true,
+            light_cones: true,
+            relics: true,
+            achievements: true,
+        }
+    }
+}
+
+impl CaptureTargets {
+    pub fn any(self) -> bool {
+        self.characters || self.light_cones || self.relics || self.achievements
+    }
+}
+
 /// Stateful Ethernet/IP/UDP/KCP/session-key decoder used by both native
 /// capture and deterministic packet replay.
 pub struct HsrPacketDecoder {
@@ -83,13 +109,23 @@ pub struct HsrPacketDecoder {
     dispatch_keys: HashMap<u32, Vec<u8>>,
     sniffer: GameSniffer,
     inventory: InventoryDecoder,
-    include_achievements: bool,
+    targets: CaptureTargets,
     state: HsrCaptureState,
     conversation: Option<u32>,
 }
 
 impl HsrPacketDecoder {
-    pub fn new(references: ReferenceCache, include_achievements: bool) -> HsrResult<Self> {
+    pub fn new(references: ReferenceCache, targets: CaptureTargets) -> HsrResult<Self> {
+        if !targets.any() {
+            return Err(HsrError::new(
+                "HSR-CAPTURE-TARGETS",
+                LocalizedText::new(
+                    "请至少选择一项导出内容。",
+                    "Select at least one category to export.",
+                ),
+                "capture requires at least one selected category",
+            ));
+        }
         let known_ids = protocol::collect_known_ids(references.achievement_ids())?;
         let dispatch_keys = load_embedded_dispatch_keys()?;
         let sniffer = GameSniffer::new().set_initial_keys(dispatch_keys.clone());
@@ -97,8 +133,8 @@ impl HsrPacketDecoder {
             known_ids,
             dispatch_keys,
             sniffer,
-            inventory: InventoryDecoder::new(references)?,
-            include_achievements,
+            inventory: InventoryDecoder::new(references, targets)?,
+            targets,
             state: HsrCaptureState::default(),
             conversation: None,
         })
@@ -133,7 +169,8 @@ impl HsrPacketDecoder {
                     self.state.command_count += 1;
                     self.receive_command(&command.proto_data)?;
                     if self.state.has_characters
-                        || self.state.has_items
+                        || self.state.has_light_cones
+                        || self.state.has_relics
                         || self.state.has_achievements
                     {
                         self.conversation = Some(conv_id);
@@ -157,7 +194,7 @@ impl HsrPacketDecoder {
     /// Decrypted-command replay; wrappers and command IDs are not assumed.
     pub fn receive_command(&mut self, bytes: &[u8]) -> HsrResult<()> {
         self.inventory.receive(bytes)?;
-        if self.include_achievements && !self.state.has_achievements {
+        if self.targets.achievements && !self.state.has_achievements {
             for container in protocol::containers(bytes) {
                 if let Some(snapshot) =
                     protocol::decode_achievement_command(container, &self.known_ids)?
@@ -173,10 +210,12 @@ impl HsrPacketDecoder {
         self.state.light_cone_count = self.inventory.light_cones.as_ref().map_or(0, Vec::len);
         self.state.relic_count = self.inventory.relics.as_ref().map_or(0, Vec::len);
         self.state.has_characters = self.inventory.characters.is_some();
+        self.state.has_light_cones = self.inventory.light_cones.is_some();
+        self.state.has_relics = self.inventory.relics.is_some();
         self.state.has_items =
             self.inventory.light_cones.is_some() && self.inventory.relics.is_some();
         self.state.complete = self.inventory.complete()
-            && (!self.include_achievements || self.state.has_achievements);
+            && (!self.targets.achievements || self.state.has_achievements);
         if self.state.complete {
             self.state.inventory = self.inventory.snapshot();
         }
@@ -204,13 +243,15 @@ pub enum HsrCaptureCommand {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HsrCaptureState {
     pub capturing: bool,
-    /// True only after inventory and all requested optional data arrive.
+    /// True only after all selected categories arrive.
     pub complete: bool,
     pub packet_count: usize,
     pub command_count: usize,
     pub last_transport_error: Option<String>,
     pub has_characters: bool,
     pub has_items: bool,
+    pub has_light_cones: bool,
+    pub has_relics: bool,
     pub has_achievements: bool,
     pub character_count: usize,
     pub light_cone_count: usize,
@@ -238,9 +279,9 @@ impl HsrCaptureMonitor {
     pub fn new(
         state: Arc<Mutex<HsrCaptureState>>,
         references: ReferenceCache,
-        include_achievements: bool,
+        targets: CaptureTargets,
     ) -> HsrResult<Self> {
-        let decoder = HsrPacketDecoder::new(references, include_achievements)?;
+        let decoder = HsrPacketDecoder::new(references, targets)?;
         let (packet_tx, packet_rx) = mpsc::unbounded_channel();
         Ok(Self {
             decoder,
@@ -581,7 +622,7 @@ mod tests {
         let mut monitor = HsrCaptureMonitor::new(
             state.clone(),
             crate::load_embedded_gilore_reference().unwrap(),
-            true,
+            CaptureTargets::default(),
         )
         .unwrap();
         let token = CancellationToken::new();
@@ -601,7 +642,7 @@ mod tests {
         let mut monitor = HsrCaptureMonitor::new(
             state.clone(),
             crate::load_embedded_gilore_reference().unwrap(),
-            true,
+            CaptureTargets::default(),
         )
         .unwrap();
 
@@ -629,7 +670,7 @@ mod tests {
         let mut monitor = HsrCaptureMonitor::new(
             state.clone(),
             crate::load_embedded_gilore_reference().unwrap(),
-            true,
+            CaptureTargets::default(),
         )
         .unwrap();
         monitor.decoder.state.packet_count = 12;

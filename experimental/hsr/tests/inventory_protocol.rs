@@ -8,7 +8,7 @@ use hsr_scanner::{
             AvatarPathSkillTree::AvatarPathSkillTree, Equipment::Equipment, Relic::Relic,
             RelicAffix::RelicAffix,
         },
-        HsrPacketDecoder,
+        CaptureTargets, HsrPacketDecoder,
     },
     ValidatedObservationSnapshot,
 };
@@ -58,8 +58,14 @@ fn character_packet(tag: u32, path_tag: u32, get_all: bool) -> Vec<u8> {
 
 #[test]
 fn character_sync_is_not_a_complete_roster() {
-    let mut decoder =
-        HsrPacketDecoder::new(load_embedded_gilore_reference().unwrap(), false).unwrap();
+    let mut decoder = HsrPacketDecoder::new(
+        load_embedded_gilore_reference().unwrap(),
+        CaptureTargets {
+            achievements: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     decoder
         .receive_command(&character_packet(13, 77, false))
         .unwrap();
@@ -70,8 +76,14 @@ fn character_sync_is_not_a_complete_roster() {
 
 #[test]
 fn trailblazer_path_uses_base_progression() {
-    let mut decoder =
-        HsrPacketDecoder::new(load_embedded_gilore_reference().unwrap(), false).unwrap();
+    let mut decoder = HsrPacketDecoder::new(
+        load_embedded_gilore_reference().unwrap(),
+        CaptureTargets {
+            achievements: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let base = Avatar {
         base_avatar_id: 8001,
         level: 70,
@@ -144,7 +156,14 @@ fn bag(tag: u32, relic_tag: u32) -> Vec<u8> {
 fn rotated_outer_fields_and_nested_wrappers_export_inventory() {
     let references = load_embedded_gilore_reference().unwrap();
     for (a, b) in [(1, 2), (777, 991), (31, 42)] {
-        let mut decoder = HsrPacketDecoder::new(references.clone(), false).unwrap();
+        let mut decoder = HsrPacketDecoder::new(
+            references.clone(),
+            CaptureTargets {
+                achievements: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         decoder
             .receive_command(&group(63, &[characters(a, b)]))
             .unwrap();
@@ -179,7 +198,7 @@ fn rotated_outer_fields_and_nested_wrappers_export_inventory() {
 #[test]
 fn achievements_are_optional_but_cannot_complete_inventory_capture_alone() {
     let refs = load_embedded_gilore_reference().unwrap();
-    let mut decoder = HsrPacketDecoder::new(refs.clone(), true).unwrap();
+    let mut decoder = HsrPacketDecoder::new(refs.clone(), CaptureTargets::default()).unwrap();
     let records = refs
         .achievement_ids()
         .take(6)
@@ -199,6 +218,36 @@ fn achievements_are_optional_but_cannot_complete_inventory_capture_alone() {
     decoder
         .receive_command(&group(67, &[group(456, &records)]))
         .unwrap();
+    let mut only = HsrPacketDecoder::new(
+        refs.clone(),
+        CaptureTargets {
+            characters: false,
+            light_cones: false,
+            relics: false,
+            achievements: true,
+        },
+    )
+    .unwrap();
+    only.receive_command(&group(67, &[group(456, &records)]))
+        .unwrap();
+    assert!(only.state().complete);
+    let inventory = only.state().inventory.clone().unwrap();
+    assert!(
+        inventory.characters.is_empty()
+            && inventory.light_cones.is_empty()
+            && inventory.gear.is_empty()
+    );
+    hsr_scanner::pipeline::build_export_with_achievements(
+        ValidatedObservationSnapshot::from_packet_capture(inventory).unwrap(),
+        hsr_scanner::pipeline::build_achievement_snapshot(
+            only.state().completed_ids.clone(),
+            "test",
+            &refs,
+        )
+        .unwrap(),
+        &refs,
+    )
+    .unwrap();
     assert!(decoder.state().has_achievements);
     assert_eq!(decoder.state().achievement_count, 6);
     assert!(!decoder.state().complete);
@@ -211,7 +260,14 @@ fn achievements_are_optional_but_cannot_complete_inventory_capture_alone() {
 #[test]
 fn malformed_and_ambiguous_records_do_not_claim_complete_data() {
     let refs = load_embedded_gilore_reference().unwrap();
-    let mut decoder = HsrPacketDecoder::new(refs, false).unwrap();
+    let mut decoder = HsrPacketDecoder::new(
+        refs,
+        CaptureTargets {
+            achievements: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     for bytes in [&[0xff; 8][..], &[0x12, 0xff], &[]] {
         decoder.receive_command(bytes).unwrap();
         assert!(!decoder.state().complete);
@@ -228,4 +284,78 @@ fn malformed_and_ambiguous_records_do_not_claim_complete_data() {
     ambiguous.extend(group(8, &[base.write_to_bytes().unwrap()]));
     decoder.receive_command(&ambiguous).unwrap();
     assert!(!decoder.state().has_characters);
+}
+
+#[test]
+fn each_inventory_selection_completes_without_other_categories_and_exports_only_selected_data() {
+    use hsr_scanner::model::CoverageLevel;
+    let refs = load_embedded_gilore_reference().unwrap();
+    for index in 0..3 {
+        let targets = CaptureTargets {
+            characters: index == 0,
+            light_cones: index == 1,
+            relics: index == 2,
+            achievements: false,
+        };
+        let mut decoder = HsrPacketDecoder::new(refs.clone(), targets).unwrap();
+        // Do not supply an unrequested roster or achievement response.
+        decoder
+            .receive_command(&if index == 0 {
+                characters(22, 23)
+            } else {
+                bag(6, 7)
+            })
+            .unwrap();
+        assert!(
+            decoder.state().complete,
+            "selection {index} did not complete"
+        );
+        let snapshot = decoder.state().inventory.clone().unwrap();
+        assert_eq!(snapshot.characters.len(), usize::from(targets.characters));
+        assert_eq!(snapshot.light_cones.len(), usize::from(targets.light_cones));
+        assert_eq!(snapshot.gear.len(), usize::from(targets.relics));
+        let coverage = &snapshot.evidence.coverage;
+        for (selected, actual) in [
+            (targets.characters, coverage.characters),
+            (targets.light_cones, coverage.light_cones),
+            (targets.relics, coverage.relics),
+        ] {
+            assert_eq!(
+                actual,
+                if selected {
+                    CoverageLevel::Complete
+                } else {
+                    CoverageLevel::Unknown
+                }
+            );
+        }
+        let export = build_export(
+            ValidatedObservationSnapshot::from_packet_capture(snapshot).unwrap(),
+            &refs,
+        )
+        .unwrap();
+        let json = serde_json::to_value(export).unwrap();
+        assert_eq!(
+            json["characters"].as_array().unwrap().len(),
+            usize::from(targets.characters)
+        );
+        assert_eq!(
+            json["lightCones"].as_array().unwrap().len(),
+            usize::from(targets.light_cones)
+        );
+    }
+}
+
+#[test]
+fn no_selected_categories_is_rejected() {
+    assert!(HsrPacketDecoder::new(
+        load_embedded_gilore_reference().unwrap(),
+        CaptureTargets {
+            characters: false,
+            light_cones: false,
+            relics: false,
+            achievements: false,
+        }
+    )
+    .is_err());
 }

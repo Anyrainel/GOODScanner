@@ -161,6 +161,10 @@ fn obsolete_custom_reference_path_is_ignored_when_loading_old_settings() {
     assert_eq!(store.config.schema_version, 2);
     let settings = &store.config.star_rail;
     assert!(!settings.scan_characters);
+    assert!(settings.capture_include_characters);
+    assert!(settings.capture_include_light_cones);
+    assert!(settings.capture_include_relics);
+    assert!(settings.capture_include_achievements);
     assert_eq!(settings.output_dir, r"D:\exports");
     assert!(!serde_json::to_string(&settings)
         .unwrap()
@@ -453,4 +457,29 @@ fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
     assert_eq!(export["achievements"]["entries"][0]["status"], "completed");
 
     remove_test_tree(&root);
+}
+
+#[test]
+fn capture_selection_defaults_and_saved_choices_are_independent_of_ocr() {
+    // Older schema-2 settings always captured inventory and had only the achievement toggle.
+    let mut settings: good_tools_app::config::StarRailSettings =
+        serde_json::from_str(r#"{"captureIncludeAchievements":false,"scanCharacters":false}"#)
+            .unwrap();
+    assert!(
+        settings.capture_include_characters
+            && settings.capture_include_light_cones
+            && settings.capture_include_relics
+    );
+    assert!(!settings.capture_include_achievements);
+    settings.capture_include_characters = false;
+    settings.capture_include_relics = false;
+    let restored: good_tools_app::config::StarRailSettings =
+        serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+    assert!(
+        !restored.capture_include_characters
+            && restored.capture_include_light_cones
+            && !restored.capture_include_relics
+            && !restored.capture_include_achievements
+    );
+    assert!(restored.scan_light_cones && restored.scan_relics_and_ornaments);
 }

@@ -8,7 +8,9 @@ use std::{
 
 use eframe::egui;
 use hsr_scanner::{
-    packet_capture::{HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState, HSR_CAPTURE_REVISION},
+    packet_capture::{
+        CaptureTargets, HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState, HSR_CAPTURE_REVISION,
+    },
     pipeline::{
         build_achievement_snapshot, build_export, build_export_with_achievements,
         write_export_create_new,
@@ -128,9 +130,9 @@ pub fn stop_before_worker_start_suppresses_start_for_test() -> bool {
 }
 
 struct PendingExport {
-    receiver: mpsc::Receiver<Result<(PathBuf, usize), UiError>>,
+    receiver: mpsc::Receiver<Result<PathBuf, UiError>>,
     thread: std::thread::JoinHandle<()>,
-    result: Option<Result<(PathBuf, usize), UiError>>,
+    result: Option<Result<PathBuf, UiError>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -205,16 +207,17 @@ impl StarRailCaptureState {
                 "Initializing Star Rail capture",
             )),
             CapturePhase::Waiting => Some(UiText::new(
-                "正在等待星穹铁道成就数据",
+                "正在等待星穹铁道数据",
                 "Waiting for Star Rail data",
             )),
             CapturePhase::Stopping => Some(UiText::new(
                 "正在停止星穹铁道抓包",
                 "Stopping Star Rail capture",
             )),
-            CapturePhase::Exporting => {
-                Some(UiText::new("正在导出星穹铁道成就", "Exporting Star Rails"))
-            },
+            CapturePhase::Exporting => Some(UiText::new(
+                "正在导出星穹铁道数据",
+                "Exporting Star Rail data",
+            )),
             CapturePhase::Idle | CapturePhase::Done { .. } | CapturePhase::Failed(_) => None,
         };
         self.handle.as_ref().and_then(|handle| {
@@ -287,28 +290,35 @@ pub fn show(
     action_bar(ui, lang, settings, state, game_busy);
     let progress = shared_snapshot(&state.shared);
     ui.horizontal_wrapped(|ui| {
-        for (label, ready, count) in [
+        for (label, selected, ready, count) in [
             (
                 lang.t("角色", "Characters"),
+                settings.capture_include_characters,
                 progress.has_characters,
                 progress.character_count,
             ),
             (
                 lang.t("光锥", "Light Cones"),
-                progress.has_items,
+                settings.capture_include_light_cones,
+                progress.has_light_cones,
                 progress.light_cone_count,
             ),
             (
                 lang.t("遗器", "Relics"),
-                progress.has_items,
+                settings.capture_include_relics,
+                progress.has_relics,
                 progress.relic_count,
             ),
             (
                 lang.t("成就", "Achievements"),
+                settings.capture_include_achievements,
                 progress.has_achievements,
                 progress.achievement_count,
             ),
         ] {
+            if !selected {
+                continue;
+            }
             let value = if ready {
                 count.to_string()
             } else if !progress.capturing {
@@ -351,11 +361,15 @@ pub fn show(
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!state.is_busy() && !game_busy, |ui| {
-                        ui.checkbox(
-                            &mut settings.capture_include_achievements,
-                            lang.t("已完成成就", "Completed achievements"),
-                        );
-                        ui.label(lang.t("角色、光锥、遗器：全部捕获", "Characters, Light Cones, and Relics: capture all"));
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut settings.capture_include_characters, lang.t("角色", "Characters"));
+                            ui.add_space(12.0);
+                            ui.checkbox(&mut settings.capture_include_light_cones, lang.t("光锥", "Light Cones"));
+                            ui.add_space(12.0);
+                            ui.checkbox(&mut settings.capture_include_relics, lang.t("遗器", "Relics"));
+                            ui.add_space(12.0);
+                            ui.checkbox(&mut settings.capture_include_achievements, lang.t("成就", "Achievements"));
+                        });
                     });
                 });
 
@@ -363,8 +377,8 @@ pub fn show(
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.label(lang.t(
-                        "1. 关闭星穹铁道。\n2. 点击“开始抓包”。\n3. 启动游戏并登录，直至进入列车或当前场景。\n4. 角色和库存数据读取完成后会自动停止并导出；勾选成就时也会等待成就数据。",
-                        "1. Close Star Rail.\n2. Select Start Capture.\n3. Launch and log in until the Astral Express or current scene appears.\n4. Capture stops and exports after character and inventory data arrive, including achievements when selected.",
+                        "1. 关闭星穹铁道。\n2. 点击“开始抓包”。\n3. 启动游戏并登录，直至进入列车或当前场景。\n4. 所选数据读取完成后会自动停止并导出。",
+                        "1. Close Star Rail.\n2. Select Start Capture.\n3. Launch and log in until the Astral Express or current scene appears.\n4. Capture stops and exports after all selected data arrive.",
                     ));
                 });
         });
@@ -382,14 +396,16 @@ fn action_bar(
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !game_busy && !settings.output_dir.trim().is_empty(),
+                        !game_busy
+                            && capture_targets(settings).any()
+                            && !settings.output_dir.trim().is_empty(),
                         egui::Button::new(lang.t("▶ 开始抓包", "▶ Start Capture")),
                     )
                     .clicked()
                 {
                     start_capture(settings, state);
                 }
-                readiness_label(ui, lang, Readiness::NotRequested, 0);
+                readiness_label(ui, lang, Readiness::NotRequested);
             });
             if game_busy {
                 ui.colored_label(
@@ -402,7 +418,6 @@ fn action_bar(
             }
         },
         CapturePhase::Initializing | CapturePhase::Waiting => {
-            let count = shared_snapshot(&state.shared).achievement_count;
             ui.horizontal(|ui| {
                 if ui.button(lang.t("■ 停止抓包", "■ Stop Capture")).clicked() {
                     if let Some(handle) = &state.handle {
@@ -411,7 +426,7 @@ fn action_bar(
                     state.phase = CapturePhase::Stopping;
                 }
                 ui.spinner();
-                readiness_label(ui, lang, Readiness::Waiting, count);
+                readiness_label(ui, lang, Readiness::Waiting);
             });
         },
         CapturePhase::Stopping => {
@@ -421,10 +436,9 @@ fn action_bar(
             });
         },
         CapturePhase::Exporting => {
-            let count = shared_snapshot(&state.shared).achievement_count;
             ui.horizontal(|ui| {
                 ui.spinner();
-                readiness_label(ui, lang, Readiness::Complete, count);
+                readiness_label(ui, lang, Readiness::Complete);
                 ui.label(lang.t("正在导出...", "Exporting..."));
             });
         },
@@ -446,8 +460,7 @@ fn action_bar(
                 if cleanup_busy {
                     ui.spinner();
                 }
-                let count = shared_snapshot(&state.shared).achievement_count;
-                readiness_label(ui, lang, Readiness::Complete, count);
+                readiness_label(ui, lang, Readiness::Complete);
             });
             ui.colored_label(egui::Color32::from_rgb(100, 200, 100), summary.text(lang));
             ui.label(egui::RichText::new(format!("→ {path}")).small().weak());
@@ -486,7 +499,7 @@ enum Readiness {
     Complete,
 }
 
-fn readiness_label(ui: &mut egui::Ui, lang: Lang, readiness: Readiness, count: usize) {
+fn readiness_label(ui: &mut egui::Ui, lang: Lang, readiness: Readiness) {
     let (color, text) = match readiness {
         Readiness::NotRequested => (
             egui::Color32::from_rgb(120, 120, 120),
@@ -499,13 +512,19 @@ fn readiness_label(ui: &mut egui::Ui, lang: Lang, readiness: Readiness, count: u
         ),
         Readiness::Complete => (
             egui::Color32::from_rgb(100, 200, 100),
-            match lang {
-                Lang::Zh => format!("数据读取完成（{count} 项成就）"),
-                Lang::En => format!("Capture complete ({count} achievements)"),
-            },
+            lang.t("数据读取完成", "Capture complete").to_owned(),
         ),
     };
     ui.colored_label(color, text);
+}
+
+fn capture_targets(settings: &StarRailSettings) -> CaptureTargets {
+    CaptureTargets {
+        characters: settings.capture_include_characters,
+        light_cones: settings.capture_include_light_cones,
+        relics: settings.capture_include_relics,
+        achievements: settings.capture_include_achievements,
+    }
 }
 
 fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) {
@@ -519,7 +538,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
     let native_crash = Arc::new(worker::NativeCrashState::new());
     let startup_gate = Arc::new(CaptureStartupGate::default());
     match spawn_capture_monitor(
-        settings.capture_include_achievements,
+        capture_targets(settings),
         state.shared.clone(),
         state.references.clone(),
         startup_gate.clone(),
@@ -539,7 +558,7 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
 }
 
 fn spawn_capture_monitor(
-    include_achievements: bool,
+    targets: CaptureTargets,
     shared: Arc<Mutex<HsrCaptureState>>,
     references_out: Arc<Mutex<Option<ReferenceCache>>>,
     startup_gate: Arc<CaptureStartupGate>,
@@ -583,7 +602,7 @@ fn spawn_capture_monitor(
                 let monitor = match HsrCaptureMonitor::new(
                     shared_for_thread.clone(),
                     references.clone(),
-                    include_achievements,
+                    targets,
                 ) {
                     Ok(monitor) => monitor,
                     Err(error) => {
@@ -706,16 +725,8 @@ fn update_phase(state: &mut StarRailCaptureState) {
                 .expect("finished retained export must have a result");
             let _ = pending.thread.join();
             match result {
-                Ok((path, count)) => {
-                    let summary = UiText::new(
-                        format!(
-                            "已导出角色、光锥、遗器和 {} 项已完成成就。",
-                            count
-                        ),
-                        format!(
-                            "Exported characters, Light Cones, Relics, and {count} completed achievement(s)."
-                        ),
-                    );
+                Ok(path) => {
+                    let summary = UiText::new("已导出所选数据。", "Selected data exported.");
                     state.phase = CapturePhase::Done {
                         summary,
                         path: path.display().to_string(),
@@ -793,7 +804,6 @@ fn spawn_export(
                     "completed capture has no inventory snapshot"))?;
                 let observations = ValidatedObservationSnapshot::from_packet_capture(inventory)
                     .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("库存数据校验失败。", "Inventory validation failed."), error))?;
-                let count = captured.achievement_count;
                 let export = if captured.has_achievements {
                     build_achievement_snapshot(captured.completed_ids, HSR_CAPTURE_REVISION, &references)
                         .and_then(|achievements| build_export_with_achievements(observations, achievements, &references))
@@ -808,7 +818,7 @@ fn spawn_export(
                         error,
                     )
                 })?;
-                Ok((path, count))
+                Ok(path)
             })();
             let _ = sender.send(result);
         })
