@@ -112,6 +112,9 @@ pub fn show(
         ))
         .color(egui::Color32::from_rgb(120, 120, 120)),
     );
+    ui.add_enabled_ui(!is_running && !game_busy, |ui| {
+        widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
+    });
     ui.add_space(4.0);
     ui.separator();
 

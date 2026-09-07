@@ -8,7 +8,7 @@ use std::{
 
 use hsr_scanner::{
     capture::import_reliquary_archive_file,
-    load_embedded_gilore_reference,
+    data_cache::load_data_cache,
     manager::{
         apply_manager_envelope, build_manager_plan, load_manager_recovery_plan,
         validate_manager_envelope_reference, AppendOnlyJsonJournalStore, ApplyAuthorization,
@@ -153,9 +153,9 @@ fn ensure_output_dir(settings: &StarRailSettings) -> Result<PathBuf, UiError> {
     Ok(output_dir)
 }
 
-/// All app flows use the bundled reference data without user configuration.
+/// All app flows share the hosted HSR reference and its validated local cache.
 pub fn load_references() -> Result<ReferenceCache, HsrError> {
-    let references = load_embedded_gilore_reference()?;
+    let references = load_data_cache()?;
     references.validate_live_complete_profile()?;
     Ok(references)
 }

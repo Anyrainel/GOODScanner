@@ -317,7 +317,7 @@ impl ApplicationConfigStore {
             ApplicationUiConfig::default()
         };
         // v1 had starRail.referenceBundle: an optional developer-owned folder
-        // path. App flows now always load bundled data. Serde discards that
+        // path. App flows now load hosted data with a local cache. Serde discards that
         // obsolete key while retaining all scan, navigation and output settings.
         if config.schema_version == 1 {
             config.schema_version = APPLICATION_CONFIG_SCHEMA_VERSION;

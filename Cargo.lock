@@ -1984,6 +1984,7 @@ dependencies = [
  "protobuf",
  "rand_mt 5.0.0",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

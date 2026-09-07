@@ -9,13 +9,26 @@ requirements. Capture stops and saves the selected export files after the reques
 executable; existing saved output destinations are retained. The result shows
 the actual file path.
 
-All HSR app flows load the bundled game reference automatically. The application
-does not download reference data from `ggartifact.com` or `hsr.ggartifact.com`;
-`hsr.ggartifact.com` is the HSR website. The embedded 4.5 reference includes all
-97 characters, including collaboration IDs 1014, 1015, 1508, and 1509. GIlore
-merges the separate `*LD.json` character, progression, skill, trace, and item tables.
-Updating the website alone does not update an already installed executable. There is no
-reference-folder selection or separate HSR output-folder setup in the UI.
+All HSR app flows download the current reference from
+`https://hsr.ggartifact.com/good/hsr_data_cache.json`. Like Genshin, the app
+checks again after two hours and keeps a validated local cache, separately at
+`data/hsr/hsr_data_cache.json`. A network failure uses the last valid cache;
+a first download failure reports an error. No installed game-reference bundle
+is used as a fallback. There is no reference-folder or domain setting.
+
+**Refresh game data** bypasses the two-hour cache in Capture's Advanced section,
+and is also available in the HSR Scanner and Manager. Failed or malformed refreshes
+preserve the previous cache and report the error. Character, Light Cone, Relic,
+achievement, affix, and character-form mapping updates all arrive together.
+
+GIlore's normal `hsr_data reference` command generates `capture_data_cache.json`
+from the same validated source and normalized bundle. GGStarRail's normal
+`npm run data:update` copies it to `public/good/hsr_data_cache.json`; the website
+build checks its revision and catalog coverage against the website data. Publishing
+that file updates installed clients without rebuilding GOODCapture. Protocol code
+changes can still require an application update. The old embedded reference API
+remains only for deterministic offline fixtures and historical build tooling.
+
 Application config v1 migrates to v2 by dropping the obsolete developer
 reference path while preserving scan preferences, output path, and navigation.
 

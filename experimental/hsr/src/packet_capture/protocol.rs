@@ -20,12 +20,12 @@ const MAX_RECORD_FIELDS: usize = 8;
 const MAX_PROTOBUF_FIELD_NUMBER: u64 = (1 << 29) - 1;
 
 const REFERENCE_HINT: LocalizedText = LocalizedText::new(
-    "抓包中出现当前版本尚未收录的成就。请更新 GOODCapture 后重新抓包。",
-    "Capture found an achievement missing from this build's game data. Update GOODCapture and capture again.",
+    "抓包中出现尚未收录的成就。请刷新游戏数据后重新抓包。",
+    "Capture found an achievement missing from the cached game data. Refresh game data and capture again.",
 );
 const REFERENCE_SET_HINT: LocalizedText = LocalizedText::new(
-    "星穹铁道成就数据缺失或无效。请重新下载最新版 GOODCapture 后重试。",
-    "Star Rail achievement data is missing or invalid. Download the latest GOODCapture build and retry.",
+    "星穹铁道成就数据缺失或无效。请刷新游戏数据后重试。",
+    "Star Rail achievement data is missing or invalid. Refresh game data and retry.",
 );
 
 /// Decode one decrypted HSR command payload.

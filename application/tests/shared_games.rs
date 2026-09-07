@@ -123,7 +123,7 @@ fn switcher_gives_both_games_equal_resting_width() {
 }
 
 #[test]
-fn default_star_rail_settings_use_verified_embedded_reference_without_a_folder() {
+fn default_star_rail_settings_use_automatic_hosted_reference_without_a_folder() {
     let root = temp_root("embedded-reference-default");
     let (_store, warning) = ApplicationConfigStore::for_executable_dir(&root);
     assert!(warning.is_none());
@@ -132,17 +132,11 @@ fn default_star_rail_settings_use_verified_embedded_reference_without_a_folder()
         "startup must not manufacture or require an external reference folder"
     );
 
-    let references = good_tools_app::gui::star_rail_worker::load_references()
-        .expect("blank selection should load the verified embedded reference");
-    assert_eq!(references.provider(), "gilore.ggstarrail-reference");
     assert_eq!(
-        references.revision(),
-        "8cdb905dc2f8e6fffa9be4eb07af3e34435d6091"
+        hsr_scanner::data_cache::DATA_CACHE_URL,
+        "https://hsr.ggartifact.com/good/hsr_data_cache.json"
     );
-    assert!(references.achievement_count() > 0);
-    references
-        .validate_live_complete_profile()
-        .expect("embedded reference should be production-complete");
+    assert_eq!(hsr_scanner::data_cache::DATA_CACHE_DIRECTORY, "data/hsr");
 
     remove_test_tree(&root);
 }

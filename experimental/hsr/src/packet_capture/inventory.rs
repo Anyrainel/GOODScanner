@@ -1,10 +1,10 @@
 //! Login inventory recognition follows Reliquary's record types, but searches
 //! every repeated protobuf field instead of command IDs or outer field tags.
-//! Inner records are validated against bundled public data before acceptance.
+//! Inner records are validated against downloaded public data before acceptance.
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::packet_reference::PacketReferences;
 use protobuf::Message;
-use serde::Deserialize;
 
 use super::{
     proto::{Avatar::Avatar, AvatarPathData::AvatarPathData, Equipment::Equipment, Relic::Relic},
@@ -12,28 +12,6 @@ use super::{
     CaptureTargets, HSR_CAPTURE_REVISION,
 };
 use crate::{model::*, reference::ReferenceCache, HsrError, HsrResult, LocalizedText};
-
-#[derive(Deserialize)]
-struct MainAffix {
-    group: u32,
-    id: u32,
-    property: String,
-}
-#[derive(Deserialize)]
-struct SubAffix {
-    group: u32,
-    id: u32,
-    property: String,
-    base: f64,
-    step: f64,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PacketReferences {
-    main: Vec<MainAffix>,
-    sub: Vec<SubAffix>,
-    base_avatars: BTreeMap<u32, u32>,
-}
 
 pub struct InventoryDecoder {
     references: ReferenceCache,
@@ -47,8 +25,10 @@ pub struct InventoryDecoder {
 
 impl InventoryDecoder {
     pub fn new(references: ReferenceCache, targets: CaptureTargets) -> HsrResult<Self> {
-        let affixes = serde_json::from_str(include_str!("../../assets/packet_affixes.json"))
-            .map_err(|error| invalid(format!("bundled packet affixes: {error}")))?;
+        let affixes = references
+            .packet_references()
+            .cloned()
+            .ok_or_else(|| invalid("capture reference has no packet tables"))?;
         Ok(Self {
             references,
             targets,
@@ -328,8 +308,8 @@ fn unique_group<'a, T>(
 
 fn invalid(detail: impl Into<String>) -> HsrError {
     HsrError::new("HSR-CAPTURE-INVENTORY", LocalizedText::new(
-        "无法识别完整的星穹铁道库存。请更新 GOODCapture 后重新登录抓包。",
-        "The complete Star Rail inventory could not be decoded. Update GOODCapture and capture a new login."), detail)
+        "无法识别完整的星穹铁道库存。请刷新游戏数据后重新登录抓包；若仍失败，请更新 GOODCapture。",
+        "The complete Star Rail inventory could not be decoded. Refresh game data and capture a new login; if it still fails, update GOODCapture."), detail)
 }
 
 // Current AvatarPathSkillTree uses public point anchors 1-22 (Reliquary v23).

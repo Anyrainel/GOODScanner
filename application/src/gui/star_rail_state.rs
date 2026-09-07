@@ -17,6 +17,7 @@ pub struct ManagerPreview {
 }
 
 pub struct StarRailState {
+    pub data_cache_refresh: super::state::RefreshState,
     pub scan_status: Arc<Mutex<TaskStatus>>,
     pub manager_status: Arc<Mutex<TaskStatus>>,
     pub scan_handle: Option<TaskHandle>,
@@ -36,6 +37,7 @@ impl StarRailState {
         #[cfg(not(feature = "capture"))]
         let _ = output_dir;
         Self {
+            data_cache_refresh: super::state::RefreshState::Idle,
             scan_status: Arc::new(Mutex::new(TaskStatus::Idle)),
             manager_status: Arc::new(Mutex::new(TaskStatus::Idle)),
             scan_handle: None,

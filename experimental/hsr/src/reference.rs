@@ -701,6 +701,7 @@ pub struct ReferenceCache {
     stats: BTreeMap<String, StatReference>,
     relic_main_affixes: BTreeMap<(u32, String), RelicMainAffixReference>,
     achievement_ids: BTreeSet<u32>,
+    packet_references: Option<crate::packet_reference::PacketReferences>,
 }
 
 impl ReferenceCache {
@@ -798,7 +799,21 @@ impl ReferenceCache {
             stats,
             relic_main_affixes,
             achievement_ids,
+            packet_references: None,
         })
+    }
+
+    pub fn with_packet_references(
+        mut self,
+        packet: crate::packet_reference::PacketReferences,
+    ) -> HsrResult<Self> {
+        packet.validate(&self)?;
+        self.packet_references = Some(packet);
+        Ok(self)
+    }
+
+    pub fn packet_references(&self) -> Option<&crate::packet_reference::PacketReferences> {
+        self.packet_references.as_ref()
     }
 
     pub fn schema_version(&self) -> u32 {

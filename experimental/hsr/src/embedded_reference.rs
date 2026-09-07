@@ -64,7 +64,10 @@ pub fn load_embedded_gilore_reference() -> HsrResult<ReferenceCache> {
     )?;
 
     let document = parse_embedded_document(EMBEDDED_REFERENCE_BYTES)?;
-    validate_embedded_document(&document)
+    validate_embedded_document(&document)?.with_packet_references(
+        serde_json::from_str(include_str!("../assets/packet_affixes.json"))
+            .map_err(|error| embedded_error("HSR-REF-FIXTURE-PACKET", error.to_string()))?,
+    )
 }
 
 /// Deterministically normalize the exact audited GIlore bundle into the
