@@ -20,12 +20,12 @@ const MAX_RECORD_FIELDS: usize = 8;
 const MAX_PROTOBUF_FIELD_NUMBER: u64 = (1 << 29) - 1;
 
 const REFERENCE_HINT: LocalizedText = LocalizedText::new(
-    "抓包中出现当前 HSR 参考数据未包含的成就。请刷新参考数据后重新抓包。",
-    "Capture found an HSR achievement missing from the current reference data. Refresh reference data, then capture again.",
+    "抓包中出现当前版本尚未收录的成就。请更新 GOODCapture 后重新抓包。",
+    "Capture found an achievement missing from this build's game data. Update GOODCapture and capture again.",
 );
 const REFERENCE_SET_HINT: LocalizedText = LocalizedText::new(
-    "HSR 成就参考数据缺失或无效。请刷新参考数据后重试。",
-    "HSR achievement reference data is missing or invalid. Refresh reference data, then retry.",
+    "星穹铁道成就数据缺失或无效。请重新下载最新版 GOODCapture 后重试。",
+    "Star Rail achievement data is missing or invalid. Download the latest GOODCapture build and retry.",
 );
 
 /// Decode one decrypted HSR command payload.
@@ -43,19 +43,24 @@ pub fn decode_achievement_command(
         return Ok(None);
     };
 
-    let mut groups: BTreeMap<u32, Vec<BTreeMap<u32, u64>>> = BTreeMap::new();
+    let mut groups: BTreeMap<u32, Vec<&[u8]>> = BTreeMap::new();
     for field in fields {
         let WireValue::Bytes(bytes) = field.value else {
             continue;
         };
-        if let Some(record) = parse_scalar_record(bytes) {
-            groups.entry(field.number).or_default().push(record);
-        }
+        groups.entry(field.number).or_default().push(bytes);
     }
 
     let mut decoded = None;
-    for records in groups.values() {
-        let Some(candidate) = decode_candidate(records, known_achievement_ids)? else {
+    for entries in groups.values() {
+        let Some(records) = entries
+            .iter()
+            .map(|bytes| parse_scalar_record(bytes))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let Some(candidate) = decode_candidate(&records, known_achievement_ids)? else {
             continue;
         };
 
@@ -269,8 +274,18 @@ fn parse_scalar_record(bytes: &[u8]) -> Option<BTreeMap<u32, u64>> {
 
     let mut record = BTreeMap::new();
     for field in fields {
-        let WireValue::Varint(value) = field.value else {
-            return None;
+        let value = match field.value {
+            WireValue::Varint(value) => value,
+            // Quest also contains packed progress counters. They are not
+            // candidates for the achievement ID or status field.
+            WireValue::Bytes(bytes) => {
+                let mut cursor = 0;
+                while cursor < bytes.len() {
+                    read_varint(bytes, &mut cursor)?;
+                }
+                continue;
+            },
+            _ => return None,
         };
         if record.insert(field.number, value).is_some() {
             return None;
@@ -279,21 +294,61 @@ fn parse_scalar_record(bytes: &[u8]) -> Option<BTreeMap<u32, u64>> {
     Some(record)
 }
 
-#[derive(Clone, Copy)]
-struct WireField<'a> {
-    number: u32,
-    value: WireValue<'a>,
+/// Token responses contain one 64-bit seed alongside public-size integers
+/// and strings. Infer its tag only during dispatch decryption; never use a
+/// command ID or rotate the session key on later gameplay packets.
+pub(crate) fn infer_session_seed(bytes: &[u8]) -> Option<u64> {
+    let fields = parse_message(bytes)?;
+    if fields.len() > 8 {
+        return None;
+    }
+    let mut seeds = fields.iter().filter_map(|field| match field.value {
+        WireValue::Varint(value) if value > u32::MAX as u64 => Some(value),
+        _ => None,
+    });
+    let seed = seeds.next()?;
+    seeds.next().is_none().then_some(seed)
+}
+
+/// Walk well-formed protobuf wrappers, bounded by depth and total input size.
+/// Each candidate stays intact so a rejected entry cannot silently disappear.
+pub(crate) fn containers(bytes: &[u8]) -> Vec<&[u8]> {
+    fn visit<'a>(bytes: &'a [u8], depth: usize, out: &mut Vec<&'a [u8]>) {
+        if depth > 4 || out.len() >= 4096 {
+            return;
+        }
+        let Some(fields) = parse_message(bytes) else {
+            return;
+        };
+        out.push(bytes);
+        for field in fields {
+            if let WireValue::Bytes(child) = field.value {
+                visit(child, depth + 1, out);
+            }
+        }
+    }
+    let mut result = Vec::new();
+    if bytes.len() <= 16 * 1024 * 1024 {
+        visit(bytes, 0, &mut result);
+    }
+    result
 }
 
 #[derive(Clone, Copy)]
-enum WireValue<'a> {
+pub(crate) struct WireField<'a> {
+    pub number: u32,
+    pub value: WireValue<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WireValue<'a> {
     Varint(u64),
     Fixed64,
     Bytes(&'a [u8]),
     Fixed32,
 }
 
-fn parse_message(bytes: &[u8]) -> Option<Vec<WireField<'_>>> {
+pub(crate) fn parse_message(bytes: &[u8]) -> Option<Vec<WireField<'_>>> {
     let mut cursor = 0usize;
     let mut fields = Vec::new();
     while cursor < bytes.len() {

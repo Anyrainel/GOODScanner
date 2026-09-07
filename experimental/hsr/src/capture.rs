@@ -2,7 +2,7 @@
 //!
 //! The shared GOODScanner and GOODCapture applications do not require or call
 //! this helper boundary. Native completed-achievement capture lives in
-//! `achievement_capture`; existing user-owned Reliquary/Fribbels JSON can be
+//! `packet_capture`; existing user-owned Reliquary/Fribbels JSON can be
 //! imported offline without launching a helper. This module retains the older
 //! explicit, checksum-pinned adapter as a library compatibility surface. When
 //! called directly, it uses a short-lived private directory and attempts

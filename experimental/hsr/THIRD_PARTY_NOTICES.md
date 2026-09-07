@@ -4,32 +4,41 @@ The `hsr_scanner` library is licensed under GPL-2.0-or-later, as declared in
 this crate's `Cargo.toml`. It is linked into the shared GOODScanner application
 targets and does not produce a separate HSR executable.
 
-## Native achievement packet boundary
+## Native inventory and achievement packet boundary
 
-- [auto-reliquary](https://github.com/hashblen/auto-reliquary/tree/bc23b48cb3b1b994a5d4405cefea42eb0e1d3735),
-  version 1.2.0 at revision
-  `bc23b48cb3b1b994a5d4405cefea42eb0e1d3735`, MIT License, Copyright (c)
-  2024 IceDynamix. The dependency is pinned to this revision in `Cargo.toml`.
-- [stardb-exporter](https://github.com/juliuskreutz/stardb-exporter/tree/50c04597d37cf366290de6e316aaca98dd57acfc)
-  was used as a pinned interoperability reference for the Windows pktmon ports,
-  completed-status behavior, and dispatch-key file shape. At that revision its
-  package manifest and repository root do not declare a project license, so no
-  license is inferred here.
+The transport under `src/network/` and the seven inventory record types under
+`src/packet_capture/proto/` are adapted from
+[IceDynamix/reliquary](https://github.com/IceDynamix/reliquary/tree/d5cf3b7e7e66470d2d8efff6676aa18762b21d3b),
+v23.0.0, commit `d5cf3b7e7e66470d2d8efff6676aa18762b21d3b` (2026-08-28,
+HSR 4.5). Its MIT license is reproduced in `LICENSE-reliquary.txt`.
 
-The embedded `keys/hsr.json` interoperability dataset was copied byte-for-byte
-from `stardb-exporter/keys/hsr.json` at revision
-`50c04597d37cf366290de6e316aaca98dd57acfc`. Its SHA-256 is
-`85a98f5abf9b4041d6752e8f60b6db760d5a9753ad73874a9d5744f9c1d7944a`.
-It contains only version-indexed protocol dispatch keys: no account, player,
-session, achievement, or captured packet data.
+The local adaptation preserves independent KCP conversations, removes raw
+packet/seed trace logging, bounds malformed frames, and infers the login seed
+from the protobuf shape instead of the upstream token command ID/field tag.
+Inventory classification searches repeated fields inside bounded protobuf
+wrappers and validates candidates against bundled public definitions. No
+executable offsets, memory reads, injected code, or external helper process
+are used. The inner inventory record schemas still have explicit protobuf tags;
+this does not promise compatibility with arbitrary inner-schema changes.
 
-This project uses auto-reliquary's transport/session decoder but independently
-decodes the decrypted achievement command. In particular, it does not use the
-upstream single-achievement sentinel matcher. Repeated fields are inferred
-against the complete public achievement-ID set supplied through the GIlore
-reference bundle, and only normalized completed IDs leave the capture boundary.
+[reliquary-archiver](https://github.com/IceDynamix/reliquary-archiver/tree/cb109f17a4a15b7604cfe9d078a8735e7735cd25),
+v0.18.0, was used to verify base/path character joining, equipment fields, and
+relic main/sub-affix conversion. `assets/packet_affixes.json` is a compact
+projection of RelicMainAffixConfig, RelicSubAffixConfig, and
+MultiplePathAvatarConfig from the same public GIlore source revision
+`8cdb905dc2f8e6fffa9be4eb07af3e34435d6091` used by the bundled reference.
+The substat calculation is `count * base + step * stepValue`, with ratios
+converted to percentage points like the existing HSR observation contract.
 
-## Embedded normalized reference and optional override
+The unchanged `keys/hsr.json` public interoperability dataset comes from
+[stardb-exporter](https://github.com/juliuskreutz/stardb-exporter/tree/50c04597d37cf366290de6e316aaca98dd57acfc).
+SHA-256: `85a98f5abf9b4041d6752e8f60b6db760d5a9753ad73874a9d5744f9c1d7944a`.
+It contains version-indexed dispatch keys, never account/session data.
+The prior auto-reliquary dependency has been replaced by the local audited
+transport. Achievement classification remains independent and accepts packed
+Quest counters without retaining them in the completed-achievement export.
+
+## Embedded normalized reference
 
 GOODScanner and GOODCapture embed a compact normalized snapshot generated from
 the manifest-verified GIlore/GGStarRail reference boundary at GIlore commit
@@ -44,11 +53,9 @@ definition IDs. It contains no icon binaries, account/session/capture data,
 server item identifiers, or packet data. The source manifest remains the
 authority for upstream revision and license-status metadata.
 
-An advanced user may explicitly select a separately generated,
-manifest-verified bundle through the same provider boundary. It must pass the
-same production completeness checks; an invalid override does not silently
-fall back to the embedded snapshot. Small synthetic or sanitized test bundles
-remain rejected by production-sized live paths.
+All application flows use the bundled reference automatically. The library's
+manifest-verified file provider remains available to offline tooling and tests;
+it is not a setting that app users need to configure.
 
 ## Optional legacy offline import interoperability
 
@@ -60,7 +67,7 @@ remain rejected by production-sized live paths.
   revision `df630a0488a64eeb740e4e0c14f265d96b9f6f8f`, MIT.
 
 The library can normalize an existing Reliquary/Fribbels v4 JSON document.
-This optional legacy import code is not part of the normal native achievement
+This optional legacy import code is not part of the normal native
 capture flow. GOODScanner and GOODCapture do not download, require, or invoke a
 Reliquary Archiver helper.
 

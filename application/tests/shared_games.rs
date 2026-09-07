@@ -13,9 +13,6 @@ use hsr_scanner::manager::{
     ManagerInstructionsEnvelope, ManagerJournal, ManagerJournalStore, ManagerPlan,
     MANAGER_JOURNAL_SCHEMA, MANAGER_JOURNAL_SCHEMA_VERSION,
 };
-#[cfg(feature = "capture")]
-use hsr_scanner::{ReferenceCache, ReferenceSnapshot};
-
 const MANAGER_INSTRUCTIONS: &str =
     include_str!("../../experimental/hsr/tests/fixtures/manager_instructions_v1.json");
 
@@ -128,18 +125,14 @@ fn switcher_gives_both_games_equal_resting_width() {
 #[test]
 fn default_star_rail_settings_use_verified_embedded_reference_without_a_folder() {
     let root = temp_root("embedded-reference-default");
-    let (store, warning) = ApplicationConfigStore::for_executable_dir(&root);
+    let (_store, warning) = ApplicationConfigStore::for_executable_dir(&root);
     assert!(warning.is_none());
-    assert!(
-        store.config.star_rail.reference_bundle.is_empty(),
-        "blank is the durable built-in-reference selection"
-    );
     assert!(
         !root.join("data").join("hsr_reference").exists(),
         "startup must not manufacture or require an external reference folder"
     );
 
-    let references = good_tools_app::gui::star_rail_worker::load_reference_selection("  \t")
+    let references = good_tools_app::gui::star_rail_worker::load_references()
         .expect("blank selection should load the verified embedded reference");
     assert_eq!(references.provider(), "gilore.ggstarrail-reference");
     assert_eq!(
@@ -155,17 +148,23 @@ fn default_star_rail_settings_use_verified_embedded_reference_without_a_folder()
 }
 
 #[test]
-fn nonblank_reference_override_fails_closed_instead_of_falling_back() {
-    let root = temp_root("missing-reference-override");
-    let missing = root.join("explicit-missing-override");
-    let error = good_tools_app::gui::star_rail_worker::load_reference_selection(
-        missing
-            .to_str()
-            .expect("test override path should be valid Unicode"),
-    )
-    .expect_err("an invalid explicit override must not silently use embedded data");
-    assert!(!error.code().is_empty());
-
+fn obsolete_custom_reference_path_is_ignored_when_loading_old_settings() {
+    // Version 1 serialized an optional developer referenceBundle path. Its
+    // removal discards only that setting; player scan preferences survive.
+    let root = temp_root("v1-reference-removal");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    fs::write(&path,
+        r#"{"schemaVersion":1,"starRail":{"referenceBundle":"C:\\missing-data","scanCharacters":false,"outputDir":"D:\\exports"}}"#
+    ).unwrap();
+    let store = ApplicationConfigStore::load(&path).unwrap();
+    assert_eq!(store.config.schema_version, 2);
+    let settings = &store.config.star_rail;
+    assert!(!settings.scan_characters);
+    assert_eq!(settings.output_dir, r"D:\exports");
+    assert!(!serde_json::to_string(&settings)
+        .unwrap()
+        .contains("referenceBundle"));
     remove_test_tree(&root);
 }
 
@@ -228,7 +227,6 @@ fn star_rail_settings_and_per_game_navigation_round_trip_separately() {
     store.config.navigation.active_game = Game::StarRail;
     store.config.navigation.genshin_tab = ToolTab::Manager;
     store.config.navigation.star_rail_tab = ToolTab::Capture;
-    store.config.star_rail.reference_bundle = "C:\\fixtures\\gilore".to_owned();
     store.config.star_rail.output_dir = "D:\\exports\\star-rail".to_owned();
     store.config.star_rail.scan_characters = false;
     store.config.star_rail.max_inventory_items = 789;
@@ -247,10 +245,6 @@ fn star_rail_settings_and_per_game_navigation_round_trip_separately() {
     assert_eq!(reloaded.config.navigation.active_game, Game::StarRail);
     assert_eq!(reloaded.config.navigation.genshin_tab, ToolTab::Manager);
     assert_eq!(reloaded.config.navigation.star_rail_tab, ToolTab::Capture);
-    assert_eq!(
-        reloaded.config.star_rail.reference_bundle,
-        "C:\\fixtures\\gilore"
-    );
     assert_eq!(
         reloaded.config.star_rail.output_dir,
         "D:\\exports\\star-rail"
@@ -405,25 +399,27 @@ fn stop_before_worker_start_never_opens_capture_boundary() {
 fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
     let root = temp_root("inactive-capture-completion");
     let output_dir = root.join("exports");
-    let snapshot_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("experimental")
-        .join("hsr")
-        .join("tests")
-        .join("fixtures")
-        .join("reference_cache.json");
-    let mut snapshot: ReferenceSnapshot = serde_json::from_str(
-        &fs::read_to_string(snapshot_path).expect("reference snapshot fixture should be readable"),
-    )
-    .expect("reference snapshot fixture should parse");
-    snapshot.achievement_ids.push(42);
-    let references =
-        ReferenceCache::from_snapshot(snapshot).expect("test reference cache should be valid");
+    let references = hsr_scanner::load_embedded_gilore_reference().unwrap();
+    let achievement_id = references.achievement_ids().next().unwrap();
 
     let mut capture = good_tools_app::gui::star_rail_capture_tab::StarRailCaptureState::new(
         output_dir.display().to_string(),
     );
-    capture.inject_completed_for_test(references, vec![42]);
+    let mut inventory: hsr_scanner::ObservationSnapshot = serde_json::from_str(include_str!(
+        "../../experimental/hsr/tests/fixtures/observations.json"
+    ))
+    .unwrap();
+    inventory.evidence.kind = hsr_scanner::EvidenceKind::PacketCapture;
+    for gear in &mut inventory.gear {
+        gear.main_stat_value = references
+            .relic_main_stat_value_for_piece(
+                references.gear(gear.piece_id).unwrap(),
+                &gear.main_stat_key,
+                gear.level,
+            )
+            .unwrap();
+    }
+    capture.inject_completed_for_test(references, vec![achievement_id], inventory);
 
     // Deliberately never render the Capture tab. GuiApp's unconditional tick
     // must still advance completion, stop cleanup, and export delivery.
@@ -443,11 +439,17 @@ fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
 
     assert_eq!(export["schema"], "goodscanner.hsr");
     assert_eq!(export["schemaVersion"], 3);
-    assert_eq!(export["source"]["coverage"]["characters"], "unknown");
-    assert_eq!(export["source"]["coverage"]["lightCones"], "unknown");
-    assert_eq!(export["source"]["coverage"]["relics"], "unknown");
+    assert_eq!(export["source"]["coverage"]["characters"], "complete");
+    assert_eq!(export["source"]["coverage"]["lightCones"], "complete");
+    assert_eq!(export["source"]["coverage"]["relics"], "complete");
+    assert!(!export["characters"].as_array().unwrap().is_empty());
+    assert!(!export["lightCones"].as_array().unwrap().is_empty());
+    assert!(!export["relics"].as_array().unwrap().is_empty());
     assert_eq!(export["achievements"]["coverage"], "complete");
-    assert_eq!(export["achievements"]["entries"][0]["achievementId"], 42);
+    assert_eq!(
+        export["achievements"]["entries"][0]["achievementId"],
+        achievement_id
+    );
     assert_eq!(export["achievements"]["entries"][0]["status"], "completed");
 
     remove_test_tree(&root);

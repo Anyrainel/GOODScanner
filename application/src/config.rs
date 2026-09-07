@@ -7,7 +7,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 2;
 pub const APPLICATION_CONFIG_FILE_REL: &str = "data/good_app_config.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,8 +149,6 @@ fn default_next_character_key() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct StarRailSettings {
     #[serde(default)]
-    pub reference_bundle: String,
-    #[serde(default)]
     pub output_dir: String,
     #[serde(default = "default_true")]
     pub scan_characters: bool,
@@ -187,7 +185,6 @@ pub struct StarRailSettings {
 impl Default for StarRailSettings {
     fn default() -> Self {
         Self {
-            reference_bundle: String::new(),
             output_dir: String::new(),
             scan_characters: true,
             scan_light_cones: true,
@@ -296,7 +293,7 @@ impl ApplicationConfigStore {
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let config = if path.exists() {
+        let mut config = if path.exists() {
             let json = fs::read_to_string(&path)
                 .with_context(|| format!("could not read {}", path.display()))?;
             serde_json::from_str::<ApplicationUiConfig>(&json)
@@ -304,6 +301,12 @@ impl ApplicationConfigStore {
         } else {
             ApplicationUiConfig::default()
         };
+        // v1 had starRail.referenceBundle: an optional developer-owned folder
+        // path. App flows now always load bundled data. Serde discards that
+        // obsolete key while retaining all scan, navigation and output settings.
+        if config.schema_version == 1 {
+            config.schema_version = APPLICATION_CONFIG_SCHEMA_VERSION;
+        }
         config.validate_version()?;
         let snapshot = serde_json::to_string(&config)?;
         Ok(Self {

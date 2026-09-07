@@ -1,7 +1,7 @@
-//! In-process, read-only capture of completed Honkai: Star Rail achievements.
+//! In-process, read-only capture of Honkai: Star Rail inventory and achievements.
 //!
 //! The native boundary captures only HSR UDP traffic on the two established
-//! game ports. [`AchievementPacketDecoder`] can replay the same packet bytes
+//! game ports. [`HsrPacketDecoder`] can replay the same packet bytes
 //! without a live device, while [`protocol`] is a pure decoder for sanitized
 //! decrypted-command fixtures.
 
@@ -12,9 +12,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use auto_reliquary::{GamePacket, GameSniffer};
+use crate::network::{GamePacket, GameSniffer};
+use crate::{model::ObservationSnapshot, reference::ReferenceCache};
 use base64::prelude::*;
 use futures::{stream::FusedStream, StreamExt};
+use inventory::InventoryDecoder;
 use pktmon::{
     filter::{PktMonFilter, TransportProtocol},
     Capture, Packet,
@@ -27,10 +29,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{localization::LocalizedText, HsrError, HsrResult};
 
+mod inventory;
+pub mod proto;
 pub mod protocol;
 
-/// Stable privacy-safe source revision written into HSR achievement exports.
-pub const ACHIEVEMENT_CAPTURE_REVISION: &str = "auto-reliquary-1.2.0";
+/// Decoder revision written into HSR exports.
+pub const HSR_CAPTURE_REVISION: &str = "reliquary-shape-4.5-v1";
 
 /// HSR's two UDP gateway ports. Kept public for build-time regression tests.
 pub const HSR_PACKET_PORTS: [u16; 2] = [23301, 23302];
@@ -44,8 +48,8 @@ const KEYS_HINT: LocalizedText = LocalizedText::new(
     "The bundled HSR protocol data could not be loaded. Download the current GOODCapture build again.",
 );
 const WORKER_HINT: LocalizedText = LocalizedText::new(
-    "HSR 成就抓包任务意外停止。请重新抓包；若问题再次出现，请复制完整错误。",
-    "The HSR achievement capture task stopped unexpectedly. Capture again; if it recurs, copy the full error.",
+    "HSR 抓包任务意外停止。请重新抓包；若问题再次出现，请复制完整错误。",
+    "The HSR capture task stopped unexpectedly. Capture again; if it recurs, copy the full error.",
 );
 
 /// A successfully recognized complete achievement response.
@@ -74,54 +78,122 @@ impl DecodedAchievementSnapshot {
 
 /// Stateful Ethernet/IP/UDP/KCP/session-key decoder used by both native
 /// capture and deterministic packet replay.
-pub struct AchievementPacketDecoder {
+pub struct HsrPacketDecoder {
     known_ids: BTreeSet<u32>,
     dispatch_keys: HashMap<u32, Vec<u8>>,
     sniffer: GameSniffer,
+    inventory: InventoryDecoder,
+    include_achievements: bool,
+    state: HsrCaptureState,
+    conversation: Option<u32>,
 }
 
-impl AchievementPacketDecoder {
-    pub fn new<I>(known_achievement_ids: I) -> HsrResult<Self>
-    where
-        I: IntoIterator<Item = u32>,
-    {
-        let known_ids = protocol::collect_known_ids(known_achievement_ids)?;
+impl HsrPacketDecoder {
+    pub fn new(references: ReferenceCache, include_achievements: bool) -> HsrResult<Self> {
+        let known_ids = protocol::collect_known_ids(references.achievement_ids())?;
         let dispatch_keys = load_embedded_dispatch_keys()?;
         let sniffer = GameSniffer::new().set_initial_keys(dispatch_keys.clone());
         Ok(Self {
             known_ids,
             dispatch_keys,
             sniffer,
+            inventory: InventoryDecoder::new(references)?,
+            include_achievements,
+            state: HsrCaptureState::default(),
+            conversation: None,
         })
     }
 
-    /// Feed one full packet frame. Packet and command IDs are never retained.
-    pub fn receive_packet(
-        &mut self,
-        packet: Vec<u8>,
-    ) -> HsrResult<Option<DecodedAchievementSnapshot>> {
-        let Some(GamePacket::Commands(commands)) = self.sniffer.receive_packet(packet) else {
-            return Ok(None);
-        };
+    pub fn state(&self) -> &HsrCaptureState {
+        &self.state
+    }
 
-        for command in commands {
-            if let Some(snapshot) =
-                protocol::decode_achievement_command(&command.proto_data, &self.known_ids)?
-            {
-                return Ok(Some(snapshot));
+    /// Full packet replay and live capture use exactly the same transport.
+    pub fn receive_packet(&mut self, packet: Vec<u8>) -> HsrResult<()> {
+        self.state.packet_count += 1;
+        let packets = match self.sniffer.receive_packet(packet) {
+            Ok(packets) => packets,
+            Err(error) => {
+                self.state.last_transport_error = Some(error.to_string());
+                return Ok(());
+            },
+        };
+        for packet in packets {
+            match packet {
+                GamePacket::Commands {
+                    conv_id,
+                    result: Ok(command),
+                } => {
+                    if self
+                        .conversation
+                        .is_some_and(|selected| selected != conv_id)
+                    {
+                        continue;
+                    }
+                    self.state.command_count += 1;
+                    self.receive_command(&command.proto_data)?;
+                    if self.state.has_characters
+                        || self.state.has_items
+                        || self.state.has_achievements
+                    {
+                        self.conversation = Some(conv_id);
+                    }
+                },
+                GamePacket::Commands {
+                    result: Err(error), ..
+                } => {
+                    self.state.last_transport_error = Some(error.to_string());
+                },
+                GamePacket::Connection(connection) => {
+                    if matches!(connection, crate::network::ConnectionPacket::Disconnected) {
+                        self.state.last_transport_error = Some("game connection closed".to_owned());
+                    }
+                },
             }
         }
-        Ok(None)
+        Ok(())
+    }
+
+    /// Decrypted-command replay; wrappers and command IDs are not assumed.
+    pub fn receive_command(&mut self, bytes: &[u8]) -> HsrResult<()> {
+        self.inventory.receive(bytes)?;
+        if self.include_achievements && !self.state.has_achievements {
+            for container in protocol::containers(bytes) {
+                if let Some(snapshot) =
+                    protocol::decode_achievement_command(container, &self.known_ids)?
+                {
+                    self.state.completed_ids = snapshot.into_completed_ids();
+                    self.state.achievement_count = self.state.completed_ids.len();
+                    self.state.has_achievements = true;
+                    break;
+                }
+            }
+        }
+        self.state.character_count = self.inventory.characters.as_ref().map_or(0, Vec::len);
+        self.state.light_cone_count = self.inventory.light_cones.as_ref().map_or(0, Vec::len);
+        self.state.relic_count = self.inventory.relics.as_ref().map_or(0, Vec::len);
+        self.state.has_characters = self.inventory.characters.is_some();
+        self.state.has_items =
+            self.inventory.light_cones.is_some() && self.inventory.relics.is_some();
+        self.state.complete = self.inventory.complete()
+            && (!self.include_achievements || self.state.has_achievements);
+        if self.state.complete {
+            self.state.inventory = self.inventory.snapshot();
+        }
+        Ok(())
     }
 
     fn reset(&mut self) {
         self.sniffer = GameSniffer::new().set_initial_keys(self.dispatch_keys.clone());
+        self.inventory.reset();
+        self.conversation = None;
+        self.state = HsrCaptureState::default();
     }
 }
 
 /// Commands sent by the application to the background capture monitor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AchievementCaptureCommand {
+pub enum HsrCaptureCommand {
     StartCapture,
     /// Terminal for this monitor instance. A later queued StartCapture is
     /// ignored so an early UI stop cannot race native-device initialization.
@@ -129,38 +201,46 @@ pub enum AchievementCaptureCommand {
 }
 
 /// Privacy-safe state shared with the UI.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AchievementCaptureState {
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HsrCaptureState {
     pub capturing: bool,
-    /// True only after a structurally valid complete achievement response.
-    /// This remains true when `achievement_count == 0`.
+    /// True only after inventory and all requested optional data arrive.
     pub complete: bool,
+    pub packet_count: usize,
+    pub command_count: usize,
+    pub last_transport_error: Option<String>,
+    pub has_characters: bool,
+    pub has_items: bool,
+    pub has_achievements: bool,
+    pub character_count: usize,
+    pub light_cone_count: usize,
+    pub relic_count: usize,
+    pub inventory: Option<ObservationSnapshot>,
     pub achievement_count: usize,
     pub completed_ids: Vec<u32>,
     pub error: Option<HsrError>,
 }
 
 /// Cancelable capture monitor. Constructing it does not access a native
-/// capture device; the device opens only after [`StartCapture`](AchievementCaptureCommand::StartCapture).
-pub struct AchievementCaptureMonitor {
-    decoder: AchievementPacketDecoder,
-    state: Arc<Mutex<AchievementCaptureState>>,
+/// capture device; the device opens only after [`StartCapture`](HsrCaptureCommand::StartCapture).
+pub struct HsrCaptureMonitor {
+    decoder: HsrPacketDecoder,
+    state: Arc<Mutex<HsrCaptureState>>,
     capture_cancel_token: Option<CancellationToken>,
     capture_task: Option<JoinHandle<HsrResult<()>>>,
     terminal_stop_requested: bool,
+    started: Option<tokio::time::Instant>,
     packet_tx: mpsc::UnboundedSender<Vec<u8>>,
     packet_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
-impl AchievementCaptureMonitor {
-    pub fn new<I>(
-        state: Arc<Mutex<AchievementCaptureState>>,
-        known_achievement_ids: I,
-    ) -> HsrResult<Self>
-    where
-        I: IntoIterator<Item = u32>,
-    {
-        let decoder = AchievementPacketDecoder::new(known_achievement_ids)?;
+impl HsrCaptureMonitor {
+    pub fn new(
+        state: Arc<Mutex<HsrCaptureState>>,
+        references: ReferenceCache,
+        include_achievements: bool,
+    ) -> HsrResult<Self> {
+        let decoder = HsrPacketDecoder::new(references, include_achievements)?;
         let (packet_tx, packet_rx) = mpsc::unbounded_channel();
         Ok(Self {
             decoder,
@@ -168,14 +248,17 @@ impl AchievementCaptureMonitor {
             capture_cancel_token: None,
             capture_task: None,
             terminal_stop_requested: false,
+            started: None,
             packet_tx,
             packet_rx,
         })
     }
 
-    pub async fn run(mut self, mut command_rx: mpsc::UnboundedReceiver<AchievementCaptureCommand>) {
+    pub async fn run(mut self, mut command_rx: mpsc::UnboundedReceiver<HsrCaptureCommand>) {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             tokio::select! {
+                _ = timer.tick() => self.check_timeout(),
                 Some(packet) = self.packet_rx.recv() => self.handle_packet(packet),
                 command = command_rx.recv() => match command {
                     Some(command) => self.handle_command(command),
@@ -194,13 +277,13 @@ impl AchievementCaptureMonitor {
         }
     }
 
-    fn handle_command(&mut self, command: AchievementCaptureCommand) {
+    fn handle_command(&mut self, command: HsrCaptureCommand) {
         match command {
-            AchievementCaptureCommand::StartCapture if !self.terminal_stop_requested => {
+            HsrCaptureCommand::StartCapture if !self.terminal_stop_requested => {
                 self.start_capture();
             },
-            AchievementCaptureCommand::StartCapture => {},
-            AchievementCaptureCommand::StopCapture => {
+            HsrCaptureCommand::StartCapture => {},
+            HsrCaptureCommand::StopCapture => {
                 self.terminal_stop_requested = true;
                 self.stop_capture();
             },
@@ -213,10 +296,11 @@ impl AchievementCaptureMonitor {
         }
 
         self.decoder.reset();
+        self.started = Some(tokio::time::Instant::now());
         if let Ok(mut state) = self.state.lock() {
-            *state = AchievementCaptureState {
+            *state = HsrCaptureState {
                 capturing: true,
-                ..AchievementCaptureState::default()
+                ..HsrCaptureState::default()
             };
         }
 
@@ -229,6 +313,7 @@ impl AchievementCaptureMonitor {
     }
 
     fn stop_capture(&mut self) {
+        self.started = None;
         if let Some(token) = &self.capture_cancel_token {
             token.cancel();
         }
@@ -238,18 +323,44 @@ impl AchievementCaptureMonitor {
     }
 
     fn handle_packet(&mut self, packet: Vec<u8>) {
+        if self.started.is_none() {
+            return;
+        }
         match self.decoder.receive_packet(packet) {
-            Ok(Some(snapshot)) => {
-                self.stop_capture();
+            Ok(()) => {
+                let mut snapshot = self.decoder.state().clone();
+                snapshot.capturing = !snapshot.complete;
+                if snapshot.complete {
+                    self.stop_capture();
+                }
                 if let Ok(mut state) = self.state.lock() {
-                    state.achievement_count = snapshot.completed_ids().len();
-                    state.completed_ids = snapshot.into_completed_ids();
-                    state.complete = true;
-                    state.error = None;
+                    *state = snapshot;
                 }
             },
-            Ok(None) => {},
             Err(error) => self.fail(error),
+        }
+    }
+
+    fn check_timeout(&mut self) {
+        if self
+            .started
+            .is_some_and(|start| start.elapsed().as_secs() >= 120)
+        {
+            let state = self.decoder.state();
+            let detail = format!("capture timed out after 120 seconds; packets={}; decryptedCommands={}; characters={}; lightCones={}; relics={}; achievements={}; lastTransportError={}",
+                state.packet_count, state.command_count, state.character_count, state.light_cone_count,
+                state.relic_count, state.achievement_count, state.last_transport_error.as_deref().unwrap_or("none"));
+            let hint = if state.packet_count == 0 {
+                LocalizedText::new("未收到星穹铁道流量。请确认游戏正在本机运行，重新抓包后再登录。",
+                    "No Star Rail traffic was received. Check that the game is running on this PC, then start capture before logging in.")
+            } else if state.command_count == 0 {
+                LocalizedText::new("已收到网络流量，但未能解密登录数据。请更新 GOODCapture，并在登录前开始抓包。",
+                    "Traffic was received, but login data could not be decrypted. Update GOODCapture and start capture before logging in.")
+            } else {
+                LocalizedText::new("已读取游戏流量，但数据尚不完整。请重新登录抓包；若仍失败，请复制完整错误。",
+                    "Game traffic was decoded, but some data is missing. Capture a new login; if it fails again, copy the full error.")
+            };
+            self.fail(HsrError::new("HSR-CAPTURE-TIMEOUT", hint, detail));
         }
     }
 
@@ -264,15 +375,15 @@ impl AchievementCaptureMonitor {
         match result {
             Ok(Ok(())) if expected_stop => {},
             Ok(Ok(())) => self.fail(HsrError::new(
-                "HSR-ACHIEVEMENT-CAPTURE-CLOSED",
+                "HSR-CAPTURE-CLOSED",
                 WORKER_HINT,
-                "pktmon capture stream ended before an achievement response was decoded",
+                "pktmon capture stream ended before all requested data was decoded",
             )),
             Ok(Err(_)) if expected_stop => {},
             Ok(Err(error)) => self.fail(error),
             Err(error) if expected_stop && error.is_cancelled() => {},
             Err(error) => self.fail(HsrError::new(
-                "HSR-ACHIEVEMENT-CAPTURE-WORKER",
+                "HSR-CAPTURE-WORKER",
                 WORKER_HINT,
                 format!("capture task join failed; cause={error}"),
             )),
@@ -288,7 +399,7 @@ impl AchievementCaptureMonitor {
     }
 }
 
-impl Drop for AchievementCaptureMonitor {
+impl Drop for HsrCaptureMonitor {
     fn drop(&mut self) {
         if let Some(token) = &self.capture_cancel_token {
             token.cancel();
@@ -344,7 +455,7 @@ impl NativePacketSource {
         #[cfg(target_os = "windows")]
         yas::utils::ensure_admin().map_err(|error| {
             HsrError::new(
-                "HSR-ACHIEVEMENT-CAPTURE-ADMIN",
+                "HSR-CAPTURE-ADMIN",
                 CAPTURE_HINT,
                 format!("administrator check failed; cause={error:#}"),
             )
@@ -352,7 +463,7 @@ impl NativePacketSource {
 
         let mut capture = Capture::new().map_err(|error| {
             HsrError::new(
-                "HSR-ACHIEVEMENT-CAPTURE-OPEN",
+                "HSR-CAPTURE-OPEN",
                 CAPTURE_HINT,
                 format!("pktmon capture could not be created; cause={error}"),
             )
@@ -367,7 +478,7 @@ impl NativePacketSource {
                 })
                 .map_err(|error| {
                     HsrError::new(
-                        "HSR-ACHIEVEMENT-CAPTURE-FILTER",
+                        "HSR-CAPTURE-FILTER",
                         CAPTURE_HINT,
                         format!("pktmon UDP port {port} filter failed; cause={error}"),
                     )
@@ -376,7 +487,7 @@ impl NativePacketSource {
 
         let stream = capture.stream().map_err(|error| {
             HsrError::new(
-                "HSR-ACHIEVEMENT-CAPTURE-STREAM",
+                "HSR-CAPTURE-STREAM",
                 CAPTURE_HINT,
                 format!("pktmon packet stream could not be started; cause={error}"),
             )
@@ -393,7 +504,7 @@ impl PacketSource for NativePacketSource {
             match self.stream.next().await {
                 Some(packet) => Ok(packet.payload.to_vec().clone()),
                 None => Err(HsrError::new(
-                    "HSR-ACHIEVEMENT-CAPTURE-CLOSED",
+                    "HSR-CAPTURE-CLOSED",
                     WORKER_HINT,
                     "pktmon packet stream closed",
                 )),
@@ -406,14 +517,14 @@ fn load_embedded_dispatch_keys() -> HsrResult<HashMap<u32, Vec<u8>>> {
     let encoded: HashMap<u32, String> =
         serde_json::from_slice(include_bytes!("../../keys/hsr.json")).map_err(|error| {
             HsrError::new(
-                "HSR-ACHIEVEMENT-KEYS-JSON",
+                "HSR-KEYS-JSON",
                 KEYS_HINT,
                 format!("embedded keys/hsr.json is invalid; cause={error}"),
             )
         })?;
     if encoded.is_empty() {
         return Err(HsrError::new(
-            "HSR-ACHIEVEMENT-KEYS-EMPTY",
+            "HSR-KEYS-EMPTY",
             KEYS_HINT,
             "embedded keys/hsr.json contains no dispatch keys",
         ));
@@ -427,7 +538,7 @@ fn load_embedded_dispatch_keys() -> HsrResult<HashMap<u32, Vec<u8>>> {
                 .map(|key| (version, key))
                 .map_err(|error| {
                     HsrError::new(
-                        "HSR-ACHIEVEMENT-KEYS-BASE64",
+                        "HSR-KEYS-BASE64",
                         KEYS_HINT,
                         format!("dispatch key {version} is invalid base64; cause={error}"),
                     )
@@ -463,13 +574,14 @@ mod tests {
 
     #[test]
     fn monitor_stop_cancels_the_owned_token_and_is_not_complete() {
-        let state = Arc::new(Mutex::new(AchievementCaptureState {
+        let state = Arc::new(Mutex::new(HsrCaptureState {
             capturing: true,
-            ..AchievementCaptureState::default()
+            ..HsrCaptureState::default()
         }));
-        let mut monitor = AchievementCaptureMonitor::new(
+        let mut monitor = HsrCaptureMonitor::new(
             state.clone(),
-            [4_010_101, 4_010_102, 4_010_103, 4_010_104, 4_010_105],
+            crate::load_embedded_gilore_reference().unwrap(),
+            true,
         )
         .unwrap();
         let token = CancellationToken::new();
@@ -485,15 +597,16 @@ mod tests {
 
     #[test]
     fn stop_before_start_is_terminal_and_never_spawns_native_capture() {
-        let state = Arc::new(Mutex::new(AchievementCaptureState::default()));
-        let mut monitor = AchievementCaptureMonitor::new(
+        let state = Arc::new(Mutex::new(HsrCaptureState::default()));
+        let mut monitor = HsrCaptureMonitor::new(
             state.clone(),
-            [4_010_101, 4_010_102, 4_010_103, 4_010_104, 4_010_105],
+            crate::load_embedded_gilore_reference().unwrap(),
+            true,
         )
         .unwrap();
 
-        monitor.handle_command(AchievementCaptureCommand::StopCapture);
-        monitor.handle_command(AchievementCaptureCommand::StartCapture);
+        monitor.handle_command(HsrCaptureCommand::StopCapture);
+        monitor.handle_command(HsrCaptureCommand::StartCapture);
 
         assert!(monitor.capture_task.is_none());
         assert!(monitor.capture_cancel_token.is_none());
@@ -508,5 +621,29 @@ mod tests {
         assert_eq!(keys.len(), 30);
         assert!(keys.values().all(|key| key.len() >= 4_096));
         assert_eq!(HSR_PACKET_PORTS, [23301, 23302]);
+    }
+
+    #[test]
+    fn timeout_reports_transport_progress_and_stops_without_claiming_success() {
+        let state = Arc::new(Mutex::new(HsrCaptureState::default()));
+        let mut monitor = HsrCaptureMonitor::new(
+            state.clone(),
+            crate::load_embedded_gilore_reference().unwrap(),
+            true,
+        )
+        .unwrap();
+        monitor.decoder.state.packet_count = 12;
+        monitor.decoder.state.last_transport_error =
+            Some("decryption key is missing for command".to_owned());
+        monitor.started = Some(tokio::time::Instant::now() - std::time::Duration::from_secs(121));
+        monitor.check_timeout();
+        let state = state.lock().unwrap();
+        assert!(!state.capturing);
+        assert!(!state.complete);
+        let error = state.error.as_ref().unwrap();
+        assert_eq!(error.code(), "HSR-CAPTURE-TIMEOUT");
+        let message = error.localized_message(crate::Language::En);
+        assert!(message.contains("packets=12"));
+        assert!(message.contains("decryptedCommands=0"));
     }
 }

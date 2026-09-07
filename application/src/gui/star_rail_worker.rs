@@ -16,7 +16,7 @@ use hsr_scanner::{
         MutationScope,
     },
     pipeline::{build_export, write_export_create_new},
-    reference::{load_gilore_reference_bundle, ReferenceCache},
+    reference::ReferenceCache,
     scanner::{HsrScanner, ScanConfig, ScanTargets},
     HsrError, Language,
 };
@@ -153,17 +153,9 @@ fn ensure_output_dir(settings: &StarRailSettings) -> Result<PathBuf, UiError> {
     Ok(output_dir)
 }
 
-/// Resolve the single Star Rail reference-data boundary used by every app
-/// flow. An empty selection uses the SHA-verified bundle compiled into the
-/// shared binaries; a nonempty path is an explicit advanced override. Both
-/// sources must pass the production-sized live profile before use.
-pub fn load_reference_selection(selection: &str) -> Result<ReferenceCache, HsrError> {
-    let selection = selection.trim();
-    let references = if selection.is_empty() {
-        load_embedded_gilore_reference()?
-    } else {
-        load_gilore_reference_bundle(Path::new(selection))?
-    };
+/// All app flows use the bundled reference data without user configuration.
+pub fn load_references() -> Result<ReferenceCache, HsrError> {
+    let references = load_embedded_gilore_reference()?;
     references.validate_live_complete_profile()?;
     Ok(references)
 }
@@ -244,11 +236,11 @@ pub fn spawn_scan(settings: &StarRailSettings, status: Arc<Mutex<TaskStatus>>) -
             };
             let config = scanner_config(&settings, targets)?;
             let output_dir = ensure_output_dir(&settings)?;
-            let references = load_reference_selection(&settings.reference_bundle).map_err(|error| {
+            let references = load_references().map_err(|error| {
                 hsr_ui_error(
                     UiText::new(
-                        "无法验证星穹铁道参考数据。若未设置自定义覆盖，请重新下载本程序；若已设置，请选择完整的 GIlore 文件夹。",
-                        "Star Rail reference data could not be verified. If no custom override is set, download the app again; otherwise choose a complete GIlore folder.",
+                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
+                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
                     ),
                     error,
                 )
@@ -369,11 +361,11 @@ pub fn spawn_offline_import(
                     "starRail.offlineImportPath is empty",
                 ));
             }
-            let references = load_reference_selection(&settings.reference_bundle).map_err(|error| {
+            let references = load_references().map_err(|error| {
                 hsr_ui_error(
                     UiText::new(
-                        "无法验证星穹铁道参考数据。若未设置自定义覆盖，请重新下载本程序；若已设置，请选择完整的 GIlore 文件夹。",
-                        "Star Rail reference data could not be verified. If no custom override is set, download the app again; otherwise choose a complete GIlore folder.",
+                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
+                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
                     ),
                     error,
                 )
@@ -602,11 +594,11 @@ pub fn spawn_manager_preview(
                     "starRail.managerJournalPath is empty",
                 ));
             }
-            let references = load_reference_selection(&settings.reference_bundle).map_err(|error| {
+            let references = load_references().map_err(|error| {
                 hsr_ui_error(
                     UiText::new(
-                        "无法验证内置或自定义的星穹铁道参考数据；不会执行任何游戏操作。",
-                        "The built-in or custom Star Rail reference data could not be verified; no game action was performed.",
+                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
+                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
                     ),
                     error,
                 )
@@ -763,11 +755,11 @@ pub fn spawn_manager_apply(
                 ));
             }
 
-            let references = load_reference_selection(&settings.reference_bundle).map_err(|error| {
+            let references = load_references().map_err(|error| {
                 hsr_ui_error(
                     UiText::new(
-                        "无法验证内置或自定义的星穹铁道参考数据；不会执行任何游戏操作。",
-                        "The built-in or custom Star Rail reference data could not be verified; no game action was performed.",
+                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
+                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
                     ),
                     error,
                 )

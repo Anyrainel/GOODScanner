@@ -8,21 +8,18 @@ use std::{
 
 use eframe::egui;
 use hsr_scanner::{
-    achievement_capture::{
-        AchievementCaptureCommand, AchievementCaptureMonitor, AchievementCaptureState,
-        ACHIEVEMENT_CAPTURE_REVISION,
-    },
+    packet_capture::{HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState, HSR_CAPTURE_REVISION},
     pipeline::{
-        build_achievement_only_export, build_achievement_snapshot, write_export_create_new,
+        build_achievement_snapshot, build_export, build_export_with_achievements,
+        write_export_create_new,
     },
     reference::ReferenceCache,
-    HsrError, LocalizedText,
+    HsrError, LocalizedText, ValidatedObservationSnapshot,
 };
 
 use crate::config::StarRailSettings;
 
 use super::{
-    star_rail_scanner_tab::path_row,
     star_rail_worker,
     state::{Lang, TaskKind, UiError, UiText},
     widgets, worker,
@@ -30,7 +27,7 @@ use super::{
 
 pub struct StarRailCaptureHandle {
     thread: std::thread::JoinHandle<()>,
-    command_tx: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AchievementCaptureCommand>>>,
+    command_tx: Mutex<Option<tokio::sync::mpsc::UnboundedSender<HsrCaptureCommand>>>,
     startup_gate: Arc<CaptureStartupGate>,
     native_crash: Arc<worker::NativeCrashState>,
     native_failure: Mutex<Option<UiError>>,
@@ -42,13 +39,13 @@ impl StarRailCaptureHandle {
             .request_stop(|| match self.command_tx.lock() {
                 Ok(mut sender) => {
                     if let Some(sender) = sender.take() {
-                        let _ = sender.send(AchievementCaptureCommand::StopCapture);
+                        let _ = sender.send(HsrCaptureCommand::StopCapture);
                     }
                 },
                 Err(poisoned) => {
                     self.command_tx.clear_poison();
                     if let Some(sender) = poisoned.into_inner().take() {
-                        let _ = sender.send(AchievementCaptureCommand::StopCapture);
+                        let _ = sender.send(HsrCaptureCommand::StopCapture);
                     }
                 },
             });
@@ -149,7 +146,7 @@ enum CapturePhase {
 
 pub struct StarRailCaptureState {
     handle: Option<StarRailCaptureHandle>,
-    shared: Arc<Mutex<AchievementCaptureState>>,
+    shared: Arc<Mutex<HsrCaptureState>>,
     references: Arc<Mutex<Option<ReferenceCache>>>,
     pending_export: Option<PendingExport>,
     phase: CapturePhase,
@@ -160,7 +157,7 @@ impl StarRailCaptureState {
     pub fn new(output_dir: String) -> Self {
         Self {
             handle: None,
-            shared: Arc::new(Mutex::new(AchievementCaptureState::default())),
+            shared: Arc::new(Mutex::new(HsrCaptureState::default())),
             references: Arc::new(Mutex::new(None)),
             pending_export: None,
             phase: CapturePhase::Idle,
@@ -204,21 +201,20 @@ impl StarRailCaptureState {
     fn native_failure(&self) -> Option<UiError> {
         let phase = match self.phase {
             CapturePhase::Initializing => Some(UiText::new(
-                "正在初始化星穹铁道成就抓包",
-                "Initializing Star Rail achievement capture",
+                "正在初始化星穹铁道抓包",
+                "Initializing Star Rail capture",
             )),
             CapturePhase::Waiting => Some(UiText::new(
                 "正在等待星穹铁道成就数据",
-                "Waiting for Star Rail achievement data",
+                "Waiting for Star Rail data",
             )),
             CapturePhase::Stopping => Some(UiText::new(
-                "正在停止星穹铁道成就抓包",
-                "Stopping Star Rail achievement capture",
+                "正在停止星穹铁道抓包",
+                "Stopping Star Rail capture",
             )),
-            CapturePhase::Exporting => Some(UiText::new(
-                "正在导出星穹铁道成就",
-                "Exporting Star Rail achievements",
-            )),
+            CapturePhase::Exporting => {
+                Some(UiText::new("正在导出星穹铁道成就", "Exporting Star Rails"))
+            },
             CapturePhase::Idle | CapturePhase::Done { .. } | CapturePhase::Failed(_) => None,
         };
         self.handle.as_ref().and_then(|handle| {
@@ -233,14 +229,17 @@ impl StarRailCaptureState {
         &mut self,
         references: ReferenceCache,
         completed_ids: Vec<u32>,
+        inventory: hsr_scanner::ObservationSnapshot,
     ) {
         let achievement_count = completed_ids.len();
-        *lock_shared(&self.shared) = AchievementCaptureState {
+        *lock_shared(&self.shared) = HsrCaptureState {
             capturing: false,
             complete: true,
             achievement_count,
             completed_ids,
-            error: None,
+            inventory: Some(inventory),
+            has_achievements: true,
+            ..HsrCaptureState::default()
         };
         *lock_shared(&self.references) = Some(references);
         self.phase = CapturePhase::Initializing;
@@ -251,6 +250,7 @@ impl StarRailCaptureState {
     pub fn completed_export_path_for_test(&self) -> Option<&str> {
         match &self.phase {
             CapturePhase::Done { path, .. } => Some(path),
+            CapturePhase::Failed(error) => panic!("capture export failed: {error:?}"),
             _ => None,
         }
     }
@@ -285,10 +285,59 @@ pub fn show(
     }
 
     action_bar(ui, lang, settings, state, game_busy);
+    let progress = shared_snapshot(&state.shared);
+    ui.horizontal_wrapped(|ui| {
+        for (label, ready, count) in [
+            (
+                lang.t("角色", "Characters"),
+                progress.has_characters,
+                progress.character_count,
+            ),
+            (
+                lang.t("光锥", "Light Cones"),
+                progress.has_items,
+                progress.light_cone_count,
+            ),
+            (
+                lang.t("遗器", "Relics"),
+                progress.has_items,
+                progress.relic_count,
+            ),
+            (
+                lang.t("成就", "Achievements"),
+                progress.has_achievements,
+                progress.achievement_count,
+            ),
+        ] {
+            let value = if ready {
+                count.to_string()
+            } else if !progress.capturing {
+                "—".to_owned()
+            } else {
+                lang.t("等待中", "Waiting").to_owned()
+            };
+            ui.label(format!("{label}: {value}"));
+        }
+    });
+    if progress.capturing {
+        ui.label(if progress.packet_count == 0 {
+            lang.t("等待游戏连接…", "Waiting for the game connection…")
+                .to_owned()
+        } else if progress.command_count == 0 {
+            lang.t(
+                "已收到流量，等待登录解密…",
+                "Traffic received; waiting for login decryption…",
+            )
+            .to_owned()
+        } else {
+            lang.t("已连接，正在读取游戏数据…", "Connected; reading game data…")
+                .to_owned()
+        });
+    }
     ui.label(
         egui::RichText::new(lang.t(
-            "从游戏登录流量中只读取已完成成就，并导出隐私安全的 GGStarRail 成就快照。不会保存原始数据包、账号、设备或会话标识。",
-            "Read completed achievements from game login traffic and export a privacy-safe GGStarRail achievement snapshot. Raw packets and account, device, or session identifiers are never saved.",
+            "登录游戏即可读取角色、光锥、遗器和已完成成就，完成后自动保存导出文件。",
+            "Log in to capture characters, Light Cones, Relics, and completed achievements. The export is saved automatically.",
         ))
         .color(egui::Color32::from_rgb(120, 120, 120)),
     );
@@ -306,28 +355,7 @@ pub fn show(
                             &mut settings.capture_include_achievements,
                             lang.t("已完成成就", "Completed achievements"),
                         );
-                        path_row(
-                            ui,
-                            lang.t("自定义参考数据（可选）", "Custom reference data (optional)"),
-                            &mut settings.reference_bundle,
-                            lang.t("选择覆盖文件夹...", "Choose override folder..."),
-                            true,
-                        );
-                        ui.label(
-                            egui::RichText::new(lang.t(
-                                "默认使用程序内置且已验证的 GIlore 参考数据，无需另行下载。仅在测试其他版本时选择自定义文件夹。",
-                                "The verified GIlore reference bundled with the app is used by default; no separate download is needed. Choose a custom folder only to test another version.",
-                            ))
-                            .small()
-                            .color(egui::Color32::from_rgb(120, 120, 120)),
-                        );
-                        path_row(
-                            ui,
-                            lang.t("输出文件夹", "Output folder"),
-                            &mut settings.output_dir,
-                            lang.t("选择文件夹...", "Choose folder..."),
-                            true,
-                        );
+                        ui.label(lang.t("角色、光锥、遗器：全部捕获", "Characters, Light Cones, and Relics: capture all"));
                     });
                 });
 
@@ -335,16 +363,9 @@ pub fn show(
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.label(lang.t(
-                        "1. 关闭星穹铁道。\n2. 点击“开始抓包”。\n3. 启动游戏并登录，直至进入列车或当前场景。\n4. 识别到完整成就响应后会自动停止并导出。",
-                        "1. Close Star Rail.\n2. Select Start Capture.\n3. Launch and log in until the Astral Express or current scene appears.\n4. Capture stops and exports automatically after a complete achievement response is recognized.",
+                        "1. 关闭星穹铁道。\n2. 点击“开始抓包”。\n3. 启动游戏并登录，直至进入列车或当前场景。\n4. 角色和库存数据读取完成后会自动停止并导出；勾选成就时也会等待成就数据。",
+                        "1. Close Star Rail.\n2. Select Start Capture.\n3. Launch and log in until the Astral Express or current scene appears.\n4. Capture stops and exports after character and inventory data arrive, including achievements when selected.",
                     ));
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 200, 50),
-                        lang.t(
-                            "夹具回放只能验证协议解析，不能证明当前游戏客户端可实机抓包。",
-                            "Fixture replay validates protocol parsing only; it does not prove live capture against the current game client.",
-                        ),
-                    );
                 });
         });
 }
@@ -361,9 +382,7 @@ fn action_bar(
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !game_busy
-                            && settings.capture_include_achievements
-                            && !settings.output_dir.trim().is_empty(),
+                        !game_busy && !settings.output_dir.trim().is_empty(),
                         egui::Button::new(lang.t("▶ 开始抓包", "▶ Start Capture")),
                     )
                     .clicked()
@@ -378,14 +397,6 @@ fn action_bar(
                     lang.t(
                         "另一个游戏数据任务正在运行，请等待完成。",
                         "Another game-data task is running. Wait for it to finish.",
-                    ),
-                );
-            } else if !settings.capture_include_achievements {
-                ui.colored_label(
-                    egui::Color32::from_rgb(255, 200, 50),
-                    lang.t(
-                        "请选择“已完成成就”后开始抓包。",
-                        "Select Completed achievements before starting capture.",
                     ),
                 );
             }
@@ -479,22 +490,18 @@ fn readiness_label(ui: &mut egui::Ui, lang: Lang, readiness: Readiness, count: u
     let (color, text) = match readiness {
         Readiness::NotRequested => (
             egui::Color32::from_rgb(120, 120, 120),
-            lang.t("成就：尚未请求", "Achievements: not requested")
-                .to_owned(),
+            lang.t("等待开始", "Ready to capture").to_owned(),
         ),
         Readiness::Waiting => (
             egui::Color32::from_rgb(255, 200, 50),
-            lang.t(
-                "成就：等待完整响应",
-                "Achievements: waiting for a complete response",
-            )
-            .to_owned(),
+            lang.t("正在等待游戏数据", "Waiting for game data")
+                .to_owned(),
         ),
         Readiness::Complete => (
             egui::Color32::from_rgb(100, 200, 100),
             match lang {
-                Lang::Zh => format!("成就：已完整读取（{} 项已完成）", count),
-                Lang::En => format!("Achievements: complete ({count} completed)"),
+                Lang::Zh => format!("数据读取完成（{count} 项成就）"),
+                Lang::En => format!("Capture complete ({count} achievements)"),
             },
         ),
     };
@@ -505,14 +512,14 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
     // Freeze export destination at Start. Shared settings are disabled while
     // any Star Rail task runs, but this snapshot also protects future callers.
     state.output_dir.clone_from(&settings.output_dir);
-    *lock_shared(&state.shared) = AchievementCaptureState::default();
+    *lock_shared(&state.shared) = HsrCaptureState::default();
     *lock_shared(&state.references) = None;
     state.pending_export = None;
     state.phase = CapturePhase::Initializing;
     let native_crash = Arc::new(worker::NativeCrashState::new());
     let startup_gate = Arc::new(CaptureStartupGate::default());
     match spawn_capture_monitor(
-        settings.reference_bundle.clone(),
+        settings.capture_include_achievements,
         state.shared.clone(),
         state.references.clone(),
         startup_gate.clone(),
@@ -532,15 +539,15 @@ fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) 
 }
 
 fn spawn_capture_monitor(
-    reference_selection: String,
-    shared: Arc<Mutex<AchievementCaptureState>>,
+    include_achievements: bool,
+    shared: Arc<Mutex<HsrCaptureState>>,
     references_out: Arc<Mutex<Option<ReferenceCache>>>,
     startup_gate: Arc<CaptureStartupGate>,
     native_crash: Arc<worker::NativeCrashState>,
 ) -> Result<
     (
         std::thread::JoinHandle<()>,
-        tokio::sync::mpsc::UnboundedSender<AchievementCaptureCommand>,
+        tokio::sync::mpsc::UnboundedSender<HsrCaptureCommand>,
     ),
     UiError,
 > {
@@ -549,7 +556,7 @@ fn spawn_capture_monitor(
     let shared_for_thread = shared.clone();
     let thread_crash = native_crash.clone();
     let thread = std::thread::Builder::new()
-        .name("star-rail-achievement-capture".to_owned())
+        .name("star-rail-capture".to_owned())
         .spawn(move || {
             let native_guard_active = worker::activate_native_crash(&thread_crash);
             if !native_guard_active {
@@ -566,18 +573,17 @@ fn spawn_capture_monitor(
             let native_context =
                 native_guard_active.then(yas::native_crash::inherit_current_task);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let references = match star_rail_worker::load_reference_selection(
-                    &reference_selection,
-                ) {
+                let references = match star_rail_worker::load_references() {
                     Ok(references) => references,
                     Err(error) => {
                         lock_shared(&shared_for_thread).error = Some(error);
                         return;
                     },
                 };
-                let monitor = match AchievementCaptureMonitor::new(
+                let monitor = match HsrCaptureMonitor::new(
                     shared_for_thread.clone(),
-                    references.achievement_ids(),
+                    references.clone(),
+                    include_achievements,
                 ) {
                     Ok(monitor) => monitor,
                     Err(error) => {
@@ -596,8 +602,8 @@ fn spawn_capture_monitor(
                         lock_shared(&shared_for_thread).error = Some(HsrError::new(
                             "HSR-ACHIEVEMENT-CAPTURE-RUNTIME",
                             LocalizedText::new(
-                                "成就抓包运行环境无法启动。请检查系统资源后重试。",
-                                "The achievement-capture runtime could not start. Check system resources, then retry.",
+                                "抓包运行环境无法启动。请检查系统资源后重试。",
+                                "The capture runtime could not start. Check system resources, then retry.",
                             ),
                             format!("tokio runtime construction failed; cause={error}"),
                         ));
@@ -606,7 +612,7 @@ fn spawn_capture_monitor(
                 };
                 let start_sent = startup_gate.start_if_allowed(|| {
                     command_tx
-                        .send(AchievementCaptureCommand::StartCapture)
+                        .send(HsrCaptureCommand::StartCapture)
                         .is_ok()
                 });
                 drop(command_tx);
@@ -626,8 +632,8 @@ fn spawn_capture_monitor(
                 lock_shared(&shared_for_thread).error = Some(HsrError::new(
                     "HSR-ACHIEVEMENT-CAPTURE-PANIC",
                     LocalizedText::new(
-                        "成就抓包任务意外停止。请重试，并在问题再次出现时复制完整错误。",
-                        "The achievement-capture task stopped unexpectedly. Retry, and copy the full error if it happens again.",
+                        "抓包任务意外停止。请重试，并在问题再次出现时复制完整错误。",
+                        "The capture task stopped unexpectedly. Retry, and copy the full error if it happens again.",
                     ),
                     format!("capture monitor panicked; cause={details}"),
                 ));
@@ -640,8 +646,8 @@ fn spawn_capture_monitor(
         .map_err(|error| {
             UiError::from_error(
                 UiText::new(
-                    "成就抓包后台任务无法启动。请检查系统资源后重试。",
-                    "The achievement-capture background task could not start. Check system resources, then retry.",
+                    "抓包后台任务无法启动。请检查系统资源后重试。",
+                    "The capture background task could not start. Check system resources, then retry.",
                 ),
                 error,
             )
@@ -675,10 +681,10 @@ fn update_phase(state: &mut StarRailCaptureState) {
                     Err(mpsc::TryRecvError::Disconnected) if pending.thread.is_finished() => {
                         pending.result = Some(Err(UiError::from_message(
                             UiText::new(
-                                "成就导出任务意外停止。请复制完整错误并报告问题。",
-                                "The achievement export task stopped unexpectedly. Copy the full error and report the problem.",
+                                "数据导出任务意外停止。请复制完整错误并报告问题。",
+                                "The data export task stopped unexpectedly. Copy the full error and report the problem.",
                             ),
-                            "achievement export worker disconnected without returning a result",
+                            "data export worker disconnected without returning a result",
                         )));
                     },
                     Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {},
@@ -703,11 +709,11 @@ fn update_phase(state: &mut StarRailCaptureState) {
                 Ok((path, count)) => {
                     let summary = UiText::new(
                         format!(
-                            "已导出 {} 项已完成成就；此文件不包含角色、光锥或遗器库存。",
+                            "已导出角色、光锥、遗器和 {} 项已完成成就。",
                             count
                         ),
                         format!(
-                            "Exported {count} completed achievement(s); this file does not contain Character, Light Cone, or Relic inventory data."
+                            "Exported characters, Light Cones, Relics, and {count} completed achievement(s)."
                         ),
                     );
                     state.phase = CapturePhase::Done {
@@ -725,8 +731,8 @@ fn update_phase(state: &mut StarRailCaptureState) {
     if let Some(error) = shared.error {
         state.phase = CapturePhase::Failed(star_rail_worker::hsr_ui_error(
             UiText::new(
-                "星穹铁道成就抓包未能完成。请复制完整错误以搜索或寻求帮助。",
-                "Star Rail achievement capture could not finish. Copy the full error to search or ask for help.",
+                "星穹铁道抓包未能完成。请复制完整错误以搜索或寻求帮助。",
+                "Star Rail capture could not finish. Copy the full error to search or ask for help.",
             ),
             error,
         ));
@@ -743,18 +749,14 @@ fn update_phase(state: &mut StarRailCaptureState) {
         let Some(references) = references else {
             state.phase = CapturePhase::Failed(UiError::from_message(
                 UiText::new(
-                    "成就数据已读取，但参考数据状态丢失，无法安全导出。请重新抓包。",
-                    "Achievement data was read, but reference state was lost and cannot be exported safely. Capture again.",
+                    "游戏数据已读取，但参考数据状态丢失，无法安全导出。请重新抓包。",
+                    "Game data was read, but reference state was lost and cannot be exported safely. Capture again.",
                 ),
                 "complete achievement state has no retained ReferenceCache",
             ));
             return;
         };
-        match spawn_export(
-            shared.completed_ids,
-            references,
-            PathBuf::from(state.output_dir.trim()),
-        ) {
+        match spawn_export(shared, references, PathBuf::from(state.output_dir.trim())) {
             Ok(pending) => {
                 state.pending_export = Some(pending);
                 state.phase = CapturePhase::Exporting;
@@ -767,7 +769,7 @@ fn update_phase(state: &mut StarRailCaptureState) {
 }
 
 fn spawn_export(
-    completed_ids: Vec<u32>,
+    captured: HsrCaptureState,
     references: ReferenceCache,
     output_dir: PathBuf,
 ) -> Result<PendingExport, UiError> {
@@ -783,40 +785,25 @@ fn spawn_export(
     let path = star_rail_worker::next_export_path(&output_dir);
     let (sender, receiver) = mpsc::sync_channel(1);
     let thread = std::thread::Builder::new()
-        .name("star-rail-achievement-export".to_owned())
+        .name("star-rail-export".to_owned())
         .spawn(move || {
             let result = (|| {
-                let snapshot = build_achievement_snapshot(
-                    completed_ids,
-                    ACHIEVEMENT_CAPTURE_REVISION,
-                    &references,
-                )
-                .map_err(|error| {
-                    star_rail_worker::hsr_ui_error(
-                        UiText::new(
-                            "已读取的成就无法通过参考数据校验，因此没有导出。",
-                            "The captured achievements did not pass reference validation and were not exported.",
-                        ),
-                        error,
-                    )
-                })?;
-                let count = snapshot.entries.len();
-                let export = build_achievement_only_export(snapshot, &references).map_err(
-                    |error| {
-                        star_rail_worker::hsr_ui_error(
-                            UiText::new(
-                                "无法生成 GGStarRail 成就导出文件。",
-                                "The GGStarRail achievement export could not be built.",
-                            ),
-                            error,
-                        )
-                    },
-                )?;
+                let inventory = captured.inventory.ok_or_else(|| UiError::from_message(
+                    UiText::new("库存数据缺失，请重新抓包。", "Inventory data is missing. Capture again."),
+                    "completed capture has no inventory snapshot"))?;
+                let observations = ValidatedObservationSnapshot::from_packet_capture(inventory)
+                    .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("库存数据校验失败。", "Inventory validation failed."), error))?;
+                let count = captured.achievement_count;
+                let export = if captured.has_achievements {
+                    build_achievement_snapshot(captured.completed_ids, HSR_CAPTURE_REVISION, &references)
+                        .and_then(|achievements| build_export_with_achievements(observations, achievements, &references))
+                } else { build_export(observations, &references) }
+                .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("无法生成星穹铁道导出文件。", "The Star Rail export could not be built."), error))?;
                 write_export_create_new(&path, &export).map_err(|error| {
                     star_rail_worker::hsr_ui_error(
                         UiText::new(
-                            "星穹铁道成就导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
-                            "The Star Rail achievement export could not be written. Check the output folder, disk space, and file permissions.",
+                            "星穹铁道数据导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
+                            "The Star Rail data export could not be written. Check the output folder, disk space, and file permissions.",
                         ),
                         error,
                     )
@@ -828,8 +815,8 @@ fn spawn_export(
         .map_err(|error| {
             UiError::from_error(
                 UiText::new(
-                    "成就导出后台任务无法启动。请检查系统资源后重试。",
-                    "The achievement-export background task could not start. Check system resources, then retry.",
+                    "数据导出后台任务无法启动。请检查系统资源后重试。",
+                    "The export background task could not start. Check system resources, then retry.",
                 ),
                 error,
             )

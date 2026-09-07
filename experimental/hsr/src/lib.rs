@@ -1,8 +1,6 @@
 //! Honkai: Star Rail capture, screenshot scanner, export, and attended
 //! reversible status manager used by the shared GOODScanner applications.
 
-#[cfg(feature = "capture")]
-pub mod achievement_capture;
 pub mod capture;
 pub mod device;
 mod embedded_reference;
@@ -10,19 +8,18 @@ pub mod error;
 pub mod localization;
 pub mod manager;
 pub mod model;
+#[cfg(feature = "capture")]
+mod network;
 pub mod observation;
 pub mod ocr;
+#[cfg(feature = "capture")]
+pub mod packet_capture;
 pub mod pipeline;
 mod privacy;
 pub mod reference;
 pub mod scanner;
 pub mod vision;
 
-#[cfg(feature = "capture")]
-pub use achievement_capture::{
-    AchievementCaptureCommand, AchievementCaptureMonitor, AchievementCaptureState,
-    AchievementPacketDecoder, DecodedAchievementSnapshot, ACHIEVEMENT_CAPTURE_REVISION,
-};
 pub use embedded_reference::{
     generate_embedded_gilore_reference, load_embedded_gilore_reference, EMBEDDED_GILORE_COMMIT,
     EMBEDDED_GILORE_MANIFEST_SHA256, EMBEDDED_GILORE_SOURCE_REVISION,
@@ -36,6 +33,11 @@ pub use model::*;
 pub use observation::{
     parse_sanitized_fixture, FixtureObservationSource, ObservationSource,
     ValidatedObservationSnapshot,
+};
+#[cfg(feature = "capture")]
+pub use packet_capture::{
+    DecodedAchievementSnapshot, HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState,
+    HsrPacketDecoder, HSR_CAPTURE_REVISION,
 };
 pub use pipeline::{
     build_achievement_only_export, build_achievement_snapshot, build_export,

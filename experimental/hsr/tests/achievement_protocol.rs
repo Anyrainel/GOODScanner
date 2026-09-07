@@ -3,9 +3,7 @@
 use std::collections::BTreeSet;
 
 use base64::prelude::*;
-use hsr_scanner::achievement_capture::{
-    protocol::decode_achievement_command, ACHIEVEMENT_CAPTURE_REVISION,
-};
+use hsr_scanner::packet_capture::{protocol::decode_achievement_command, HSR_CAPTURE_REVISION};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -41,7 +39,7 @@ fn synthetic_fixture_is_explicitly_privacy_safe() {
     assert_eq!(fixture.fixture_kind, "syntheticDecryptedCommand");
     assert!(fixture.description.contains("no account identifiers"));
     assert!(fixture.description.contains("no raw captured packets"));
-    assert_eq!(ACHIEVEMENT_CAPTURE_REVISION, "auto-reliquary-1.2.0");
+    assert_eq!(HSR_CAPTURE_REVISION, "reliquary-shape-4.5-v1");
 }
 
 #[test]

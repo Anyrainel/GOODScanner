@@ -1,0 +1,942 @@
+{
+  "sourceRevision": "8cdb905dc2f8e6fffa9be4eb07af3e34435d6091",
+  "main": [
+    {
+      "group": 21,
+      "id": 1,
+      "property": "HPDelta"
+    },
+    {
+      "group": 22,
+      "id": 1,
+      "property": "AttackDelta"
+    },
+    {
+      "group": 23,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 23,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 23,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 23,
+      "id": 4,
+      "property": "CriticalChanceBase"
+    },
+    {
+      "group": 23,
+      "id": 5,
+      "property": "CriticalDamageBase"
+    },
+    {
+      "group": 23,
+      "id": 6,
+      "property": "HealRatioBase"
+    },
+    {
+      "group": 23,
+      "id": 7,
+      "property": "StatusProbabilityBase"
+    },
+    {
+      "group": 24,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 24,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 24,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 24,
+      "id": 4,
+      "property": "SpeedDelta"
+    },
+    {
+      "group": 25,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 4,
+      "property": "PhysicalAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 5,
+      "property": "FireAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 6,
+      "property": "IceAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 7,
+      "property": "ThunderAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 8,
+      "property": "WindAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 9,
+      "property": "QuantumAddedRatio"
+    },
+    {
+      "group": 25,
+      "id": 10,
+      "property": "ImaginaryAddedRatio"
+    },
+    {
+      "group": 26,
+      "id": 1,
+      "property": "BreakDamageAddedRatioBase"
+    },
+    {
+      "group": 26,
+      "id": 2,
+      "property": "SPRatioBase"
+    },
+    {
+      "group": 26,
+      "id": 3,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 26,
+      "id": 4,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 26,
+      "id": 5,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 31,
+      "id": 1,
+      "property": "HPDelta"
+    },
+    {
+      "group": 32,
+      "id": 1,
+      "property": "AttackDelta"
+    },
+    {
+      "group": 33,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 33,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 33,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 33,
+      "id": 4,
+      "property": "CriticalChanceBase"
+    },
+    {
+      "group": 33,
+      "id": 5,
+      "property": "CriticalDamageBase"
+    },
+    {
+      "group": 33,
+      "id": 6,
+      "property": "HealRatioBase"
+    },
+    {
+      "group": 33,
+      "id": 7,
+      "property": "StatusProbabilityBase"
+    },
+    {
+      "group": 34,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 34,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 34,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 34,
+      "id": 4,
+      "property": "SpeedDelta"
+    },
+    {
+      "group": 35,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 4,
+      "property": "PhysicalAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 5,
+      "property": "FireAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 6,
+      "property": "IceAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 7,
+      "property": "ThunderAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 8,
+      "property": "WindAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 9,
+      "property": "QuantumAddedRatio"
+    },
+    {
+      "group": 35,
+      "id": 10,
+      "property": "ImaginaryAddedRatio"
+    },
+    {
+      "group": 36,
+      "id": 1,
+      "property": "BreakDamageAddedRatioBase"
+    },
+    {
+      "group": 36,
+      "id": 2,
+      "property": "SPRatioBase"
+    },
+    {
+      "group": 36,
+      "id": 3,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 36,
+      "id": 4,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 36,
+      "id": 5,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 41,
+      "id": 1,
+      "property": "HPDelta"
+    },
+    {
+      "group": 42,
+      "id": 1,
+      "property": "AttackDelta"
+    },
+    {
+      "group": 43,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 43,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 43,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 43,
+      "id": 4,
+      "property": "CriticalChanceBase"
+    },
+    {
+      "group": 43,
+      "id": 5,
+      "property": "CriticalDamageBase"
+    },
+    {
+      "group": 43,
+      "id": 6,
+      "property": "HealRatioBase"
+    },
+    {
+      "group": 43,
+      "id": 7,
+      "property": "StatusProbabilityBase"
+    },
+    {
+      "group": 44,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 44,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 44,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 44,
+      "id": 4,
+      "property": "SpeedDelta"
+    },
+    {
+      "group": 45,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 4,
+      "property": "PhysicalAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 5,
+      "property": "FireAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 6,
+      "property": "IceAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 7,
+      "property": "ThunderAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 8,
+      "property": "WindAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 9,
+      "property": "QuantumAddedRatio"
+    },
+    {
+      "group": 45,
+      "id": 10,
+      "property": "ImaginaryAddedRatio"
+    },
+    {
+      "group": 46,
+      "id": 1,
+      "property": "BreakDamageAddedRatioBase"
+    },
+    {
+      "group": 46,
+      "id": 2,
+      "property": "SPRatioBase"
+    },
+    {
+      "group": 46,
+      "id": 3,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 46,
+      "id": 4,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 46,
+      "id": 5,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 51,
+      "id": 1,
+      "property": "HPDelta"
+    },
+    {
+      "group": 52,
+      "id": 1,
+      "property": "AttackDelta"
+    },
+    {
+      "group": 53,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 53,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 53,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 53,
+      "id": 4,
+      "property": "CriticalChanceBase"
+    },
+    {
+      "group": 53,
+      "id": 5,
+      "property": "CriticalDamageBase"
+    },
+    {
+      "group": 53,
+      "id": 6,
+      "property": "HealRatioBase"
+    },
+    {
+      "group": 53,
+      "id": 7,
+      "property": "StatusProbabilityBase"
+    },
+    {
+      "group": 54,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 54,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 54,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 54,
+      "id": 4,
+      "property": "SpeedDelta"
+    },
+    {
+      "group": 55,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 2,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 3,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 4,
+      "property": "PhysicalAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 5,
+      "property": "FireAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 6,
+      "property": "IceAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 7,
+      "property": "ThunderAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 8,
+      "property": "WindAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 9,
+      "property": "QuantumAddedRatio"
+    },
+    {
+      "group": 55,
+      "id": 10,
+      "property": "ImaginaryAddedRatio"
+    },
+    {
+      "group": 56,
+      "id": 1,
+      "property": "BreakDamageAddedRatioBase"
+    },
+    {
+      "group": 56,
+      "id": 2,
+      "property": "SPRatioBase"
+    },
+    {
+      "group": 56,
+      "id": 3,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 56,
+      "id": 4,
+      "property": "AttackAddedRatio"
+    },
+    {
+      "group": 56,
+      "id": 5,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 433,
+      "id": 1,
+      "property": "DefenceAddedRatio"
+    },
+    {
+      "group": 434,
+      "id": 1,
+      "property": "CriticalChanceBase"
+    },
+    {
+      "group": 436,
+      "id": 1,
+      "property": "HealRatioBase"
+    },
+    {
+      "group": 441,
+      "id": 1,
+      "property": "HPAddedRatio"
+    },
+    {
+      "group": 443,
+      "id": 1,
+      "property": "DefenceAddedRatio"
+    }
+  ],
+  "sub": [
+    {
+      "group": 2,
+      "id": 1,
+      "property": "HPDelta",
+      "base": 13.548016,
+      "step": 1.693502
+    },
+    {
+      "group": 2,
+      "id": 2,
+      "property": "AttackDelta",
+      "base": 6.774008,
+      "step": 0.846751
+    },
+    {
+      "group": 2,
+      "id": 3,
+      "property": "DefenceDelta",
+      "base": 6.774008,
+      "step": 0.846751
+    },
+    {
+      "group": 2,
+      "id": 4,
+      "property": "HPAddedRatio",
+      "base": 0.013824001,
+      "step": 0.0017280006
+    },
+    {
+      "group": 2,
+      "id": 5,
+      "property": "AttackAddedRatio",
+      "base": 0.013824001,
+      "step": 0.0017280006
+    },
+    {
+      "group": 2,
+      "id": 6,
+      "property": "DefenceAddedRatio",
+      "base": 0.017280001,
+      "step": 0.0021600004
+    },
+    {
+      "group": 2,
+      "id": 7,
+      "property": "SpeedDelta",
+      "base": 1,
+      "step": 0.1
+    },
+    {
+      "group": 2,
+      "id": 8,
+      "property": "CriticalChanceBase",
+      "base": 0.010368001,
+      "step": 0.0012960008
+    },
+    {
+      "group": 2,
+      "id": 9,
+      "property": "CriticalDamageBase",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 2,
+      "id": 10,
+      "property": "StatusProbabilityBase",
+      "base": 0.013824001,
+      "step": 0.0017280006
+    },
+    {
+      "group": 2,
+      "id": 11,
+      "property": "StatusResistanceBase",
+      "base": 0.013824001,
+      "step": 0.0017280006
+    },
+    {
+      "group": 2,
+      "id": 12,
+      "property": "BreakDamageAddedRatioBase",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 3,
+      "id": 1,
+      "property": "HPDelta",
+      "base": 20.322023,
+      "step": 2.540253
+    },
+    {
+      "group": 3,
+      "id": 2,
+      "property": "AttackDelta",
+      "base": 10.161012,
+      "step": 1.270126
+    },
+    {
+      "group": 3,
+      "id": 3,
+      "property": "DefenceDelta",
+      "base": 10.161012,
+      "step": 1.270126
+    },
+    {
+      "group": 3,
+      "id": 4,
+      "property": "HPAddedRatio",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 3,
+      "id": 5,
+      "property": "AttackAddedRatio",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 3,
+      "id": 6,
+      "property": "DefenceAddedRatio",
+      "base": 0.02592,
+      "step": 0.0032400002
+    },
+    {
+      "group": 3,
+      "id": 7,
+      "property": "SpeedDelta",
+      "base": 1.2,
+      "step": 0.1
+    },
+    {
+      "group": 3,
+      "id": 8,
+      "property": "CriticalChanceBase",
+      "base": 0.015552,
+      "step": 0.0019440008
+    },
+    {
+      "group": 3,
+      "id": 9,
+      "property": "CriticalDamageBase",
+      "base": 0.031104,
+      "step": 0.003888001
+    },
+    {
+      "group": 3,
+      "id": 10,
+      "property": "StatusProbabilityBase",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 3,
+      "id": 11,
+      "property": "StatusResistanceBase",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 3,
+      "id": 12,
+      "property": "BreakDamageAddedRatioBase",
+      "base": 0.031104,
+      "step": 0.003888001
+    },
+    {
+      "group": 4,
+      "id": 1,
+      "property": "HPDelta",
+      "base": 27.096031,
+      "step": 3.387004
+    },
+    {
+      "group": 4,
+      "id": 2,
+      "property": "AttackDelta",
+      "base": 13.548016,
+      "step": 1.693502
+    },
+    {
+      "group": 4,
+      "id": 3,
+      "property": "DefenceDelta",
+      "base": 13.548016,
+      "step": 1.693502
+    },
+    {
+      "group": 4,
+      "id": 4,
+      "property": "HPAddedRatio",
+      "base": 0.027648,
+      "step": 0.0034560005
+    },
+    {
+      "group": 4,
+      "id": 5,
+      "property": "AttackAddedRatio",
+      "base": 0.027648,
+      "step": 0.0034560005
+    },
+    {
+      "group": 4,
+      "id": 6,
+      "property": "DefenceAddedRatio",
+      "base": 0.034560002,
+      "step": 0.0043200003
+    },
+    {
+      "group": 4,
+      "id": 7,
+      "property": "SpeedDelta",
+      "base": 1.6,
+      "step": 0.2
+    },
+    {
+      "group": 4,
+      "id": 8,
+      "property": "CriticalChanceBase",
+      "base": 0.020736001,
+      "step": 0.0025920009
+    },
+    {
+      "group": 4,
+      "id": 9,
+      "property": "CriticalDamageBase",
+      "base": 0.041472,
+      "step": 0.0051840004
+    },
+    {
+      "group": 4,
+      "id": 10,
+      "property": "StatusProbabilityBase",
+      "base": 0.027648,
+      "step": 0.0034560005
+    },
+    {
+      "group": 4,
+      "id": 11,
+      "property": "StatusResistanceBase",
+      "base": 0.027648,
+      "step": 0.0034560005
+    },
+    {
+      "group": 4,
+      "id": 12,
+      "property": "BreakDamageAddedRatioBase",
+      "base": 0.041472,
+      "step": 0.0051840004
+    },
+    {
+      "group": 5,
+      "id": 1,
+      "property": "HPDelta",
+      "base": 33.87004,
+      "step": 4.233755
+    },
+    {
+      "group": 5,
+      "id": 2,
+      "property": "AttackDelta",
+      "base": 16.935019,
+      "step": 2.116877
+    },
+    {
+      "group": 5,
+      "id": 3,
+      "property": "DefenceDelta",
+      "base": 16.935019,
+      "step": 2.116877
+    },
+    {
+      "group": 5,
+      "id": 4,
+      "property": "HPAddedRatio",
+      "base": 0.034560002,
+      "step": 0.0043200003
+    },
+    {
+      "group": 5,
+      "id": 5,
+      "property": "AttackAddedRatio",
+      "base": 0.034560002,
+      "step": 0.0043200003
+    },
+    {
+      "group": 5,
+      "id": 6,
+      "property": "DefenceAddedRatio",
+      "base": 0.0432,
+      "step": 0.0054
+    },
+    {
+      "group": 5,
+      "id": 7,
+      "property": "SpeedDelta",
+      "base": 2,
+      "step": 0.3
+    },
+    {
+      "group": 5,
+      "id": 8,
+      "property": "CriticalChanceBase",
+      "base": 0.02592,
+      "step": 0.0032400002
+    },
+    {
+      "group": 5,
+      "id": 9,
+      "property": "CriticalDamageBase",
+      "base": 0.05184,
+      "step": 0.0064800004
+    },
+    {
+      "group": 5,
+      "id": 10,
+      "property": "StatusProbabilityBase",
+      "base": 0.034560002,
+      "step": 0.0043200003
+    },
+    {
+      "group": 5,
+      "id": 11,
+      "property": "StatusResistanceBase",
+      "base": 0.034560002,
+      "step": 0.0043200003
+    },
+    {
+      "group": 5,
+      "id": 12,
+      "property": "BreakDamageAddedRatioBase",
+      "base": 0.05184,
+      "step": 0.0064800004
+    }
+  ],
+  "baseAvatars": {
+    "8001": 8001,
+    "8002": 8001,
+    "8003": 8001,
+    "8004": 8001,
+    "8005": 8001,
+    "8006": 8001,
+    "8007": 8001,
+    "8008": 8001,
+    "8009": 8001,
+    "8010": 8001,
+    "1001": 1001,
+    "1224": 1001
+  }
+}

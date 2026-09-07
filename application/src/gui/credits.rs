@@ -100,12 +100,12 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
             entry(
                 ui,
                 l,
-                "auto-reliquary",
-                "Hashblen contributors",
-                "https://github.com/hashblen/auto-reliquary",
+                "Reliquary",
+                "IceDynamix contributors",
+                "https://github.com/IceDynamix/reliquary",
                 l.t(
-                    "星穹铁道成就数据包解密与协议解析",
-                    "Star Rail achievement packet decryption and protocol parsing",
+                    "星穹铁道网络数据解密与角色、库存协议类型",
+                    "Star Rail network decryption and character/inventory protocol types",
                 ),
             );
             entry(

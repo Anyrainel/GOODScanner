@@ -18,6 +18,7 @@ use hsr_scanner::{
 };
 use serde_json::Value;
 
+// Historical v3 export fixture remains readable after decoder replacement.
 const CAPTURE_REVISION: &str = "auto-reliquary-1.2.0";
 
 fn fixture(name: &str) -> PathBuf {
