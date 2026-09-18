@@ -10,7 +10,7 @@
 ///   when the caller doesn't track per-item ids.
 /// - `phase`: human-readable phase label. For scan jobs this doubles as the
 ///   category key — callers MUST pass one of `"characters"`, `"weapons"`,
-///   `"artifacts"` so the server can route the update to the right per-category
+///   `"artifacts"`, `"achievements"` so the server can route the update to the right per-category
 ///   `PhaseProgress` slot. For manage/equip the phase is a free-form label.
 ///
 /// The `'a` lifetime lets callers pass closures that borrow from their scope;

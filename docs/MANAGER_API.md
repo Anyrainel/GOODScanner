@@ -286,7 +286,7 @@ When equipping an artifact that is currently equipped on another character, the 
 
 ### `POST /scan` (async)
 
-Initiate a remote OCR scan of characters, weapons, and/or artifacts. Uses the same scanner pipeline as the CLI/GUI scanner. Returns immediately — poll `GET /status` for progress, then fetch results from the per-type data endpoints.
+Initiate a remote OCR scan of characters, weapons, artifacts, and/or achievements. Uses the same scanner pipeline as the CLI/GUI scanner. Returns immediately — poll `GET /status` for progress, then fetch results from the per-type data endpoints.
 
 After accepting a job, the server waits 1 second before focusing the game window and starting execution (same as other job types).
 
@@ -297,6 +297,7 @@ After accepting a job, the server waits 1 second before focusing the game window
   "characters": true,
   "weapons": true,
   "artifacts": true,
+  "achievements": false,
   "artifactMode": "all",
   "artifactLimit": null
 }
@@ -309,11 +310,12 @@ turns the in-game 5-star acquired-time filter on before scanning. `artifactLimit
 caps the number of artifacts scanned and is required for `"recent"` mode.
 
 The user must navigate to the appropriate in-game screen before submitting:
+- **Achievements**: open the achievement screen to any category (this phase runs first)
 - **Characters**: open character screen (press C)
 - **Weapons**: open backpack → weapon tab
 - **Artifacts**: open backpack → artifact tab (if also scanning weapons, the scanner navigates from weapon tab automatically)
 
-When scanning multiple targets, they execute in order: characters → weapons → artifacts.
+When scanning multiple targets, they execute in order: achievements → characters → weapons → artifacts. `--all` and a request that omits `achievements` do **not** imply achievements; that category is opt-in because it uses a different UI (left category column + right card list, not the backpack grid).
 
 Recent artifact scan example:
 
@@ -353,16 +355,17 @@ After the job completes, fetch results from the per-type data endpoints:
 - `GET /characters?jobId=xxx` → `Vec<GoodCharacter>`
 - `GET /weapons?jobId=xxx` → `Vec<GoodWeapon>`
 - `GET /artifacts?jobId=xxx` → `Vec<GoodArtifact>`
+- `GET /achievements?jobId=xxx` → `Vec<u32>` (completed achievement IDs)
 
 **All-or-nothing per category.** A category is only cached with `(jobId, data)` if it completes *in full* during the run. Categories that aborted mid-scan (or never started because an earlier phase aborted) are remembered as "incomplete for this jobId" — queries for that jobId return **503**, not stale data from a previous scan. This matches the manager's all-or-nothing philosophy.
 
-Each cache stores only the latest completed jobId for its type. A characters-only scan updates only the character cache — weapon and artifact caches retain data from their most recent respective scans, queryable under their original jobIds.
+Each cache stores only the latest completed jobId for its type. A characters-only scan updates only the character cache — weapon, artifact, and achievement caches retain data from their most recent respective scans, queryable under their original jobIds.
 
 #### Responses
 
 | Code | When | Body |
 |------|------|------|
-| 202 | Job accepted | `{"jobId": "<uuid>", "targets": {"characters": true, "weapons": true, "artifacts": true}, "artifactMode": "all", "artifactLimit": null}` |
+| 202 | Job accepted | `{"jobId": "<uuid>", "targets": {"characters": true, "weapons": true, "artifacts": true, "achievements": false}, "artifactMode": "all", "artifactLimit": null}` |
 | 400 | Bad JSON, no targets enabled, invalid recent artifact options, or `artifactLimit` outside `1..=1000` | `{"error": "..."}` |
 | 403 | Disallowed origin | `{"error": "<localized message>"}` |
 | 409 | Another job running | `{"error": "..."}` |
@@ -410,14 +413,15 @@ Notes:
 
 #### When running — scan
 
-Scan jobs do **not** use the linear `progress` field. They use `scanProgress`, which carries one slot per requested category — unrequested categories are omitted. This is what lets clients render independent progress bars for characters, weapons, and artifacts.
+Scan jobs do **not** use the linear `progress` field. They use `scanProgress`, which carries one slot per requested category — unrequested categories are omitted. This is what lets clients render independent progress bars for characters, weapons, artifacts, and achievements.
 
 ```json
 {
   "state": "running",
   "jobId": "abc-123",
   "scanProgress": {
-    "characters": {"completed": 12, "total": 12, "state": "running"},
+    "achievements": {"completed": 40, "total": 40, "state": "running"},
+    "characters": {"completed": 0,  "total": 0,  "state": "pending"},
     "weapons":    {"completed": 0,  "total": 0,  "state": "pending"},
     "artifacts":  {"completed": 0,  "total": 0,  "state": "pending"}
   }
@@ -429,7 +433,7 @@ Per-category slot fields:
 | Field | Type | Meaning |
 |-------|------|---------|
 | `completed` | `usize` | Items scanned so far in this category. |
-| `total` | `usize` | Target total for the bar. For weapons and artifacts, this is the backpack item count (known once the bag has been opened). **For characters, the game does not expose a total**, so `total` stays equal to `completed` and grows as characters are scanned — clients should render this as an indeterminate "N scanned" counter, not a percentage. |
+| `total` | `usize` | Target total for the bar. For weapons and artifacts, this is the backpack item count (known once the bag has been opened). **For characters and achievements, the game does not expose a total**, so `total` stays equal to `completed` and grows as items are scanned — clients should render this as an indeterminate "N scanned" counter, not a percentage. |
 | `state` | `"pending" \| "running" \| "complete" \| "aborted"` | Lifecycle. Only `pending` and `running` are seen on `/status`; `complete` / `aborted` appear in `GET /result` once the job finishes. |
 
 Categories the client didn't request are omitted from the `scanProgress` object entirely (not present as `null`). Example — `POST /scan {"characters": true}`:
@@ -458,7 +462,7 @@ Both `progress` and `scanProgress` are cleared. The `summary` is aggregated acro
 }
 ```
 
-Per-category final status for a scan is in `GET /result`, not `/status` — each category becomes a `{"id": "characters|weapons|artifacts", "status": "success|ui_error|aborted"}` entry.
+Per-category final status for a scan is in `GET /result`, not `/status` — each category becomes a `{"id": "characters|weapons|artifacts|achievements", "status": "success|ui_error|aborted"}` entry.
 
 ### `GET /result?jobId=<id>`
 
@@ -570,6 +574,27 @@ Weapon scan data from the latest scan that produced weapon results.
 | 503 | The supplied `jobId` attempted to scan weapons but did not finish | `{"error": "<localized message>"}` |
 | 500 | Cached weapon data cannot be serialized | `{"error": "<localized hint + full diagnostic>"}` |
 
+### `GET /achievements?jobId=<id>`
+
+Completed achievement IDs from the latest OCR scan that produced achievement results. Same all-or-nothing cache rules as `/characters` and `/weapons` (`jobId` required).
+
+#### 200 OK
+
+```json
+[81006, 84519, 84520]
+```
+
+IDs are unique, sorted ascending. Presence of an ID means that achievement was recognized as completed during the scan. Incomplete achievements are not listed.
+
+#### Other responses
+
+| Code | When | Body |
+|------|------|------|
+| 400 | Missing `jobId` query parameter | `{"error": "<localized message>"}` |
+| 404 | Unknown `jobId` | `{"error": "<localized message>"}` |
+| 503 | The supplied `jobId` attempted to scan achievements but did not finish | `{"error": "<localized message>"}` |
+| 500 | Cached achievement data cannot be serialized | `{"error": "<localized hint + full diagnostic>"}` |
+
 ### `GET /artifacts[?jobId=<id>]`
 
 Artifact data. Works for both scan results and manage snapshots — whichever last updated the artifact cache.
@@ -646,16 +671,17 @@ The `jobId` parameter is **optional** for backwards compatibility:
 1. GET /health → check enabled && gameAlive && !busy
 2. POST /scan → get jobId (202)
 3. Poll GET /status every 1s
-   → "running": read `scanProgress.{characters,weapons,artifacts}`, render one bar per
-                requested category. Characters has no upfront total — render as an
+   → "running": read `scanProgress.{achievements,characters,weapons,artifacts}`, render one bar per
+                requested category. Characters and achievements have no upfront total — render as an
                 indeterminate "N scanned" counter.
    → "completed": proceed to step 4
 4. GET /result?jobId=<id> → per-phase results. `status: "success"` → category finished;
                              `status: "aborted"` → category did not finish.
 5. For each phase where status == "success":
-     GET /characters?jobId=<id> → character data
-     GET /weapons?jobId=<id>    → weapon data
-     GET /artifacts?jobId=<id>  → artifact data
+     GET /characters?jobId=<id>   → character data
+     GET /weapons?jobId=<id>      → weapon data
+     GET /artifacts?jobId=<id>    → artifact data
+     GET /achievements?jobId=<id> → completed achievement IDs
    For aborted phases, these endpoints return 503 with the same jobId — do not treat
    that as an error to retry, the data is genuinely unavailable for this run.
 6. Done. Each data cache retains its jobId independently.
@@ -735,6 +761,12 @@ All targets execute in a single backpack scan pass. Invalid entries (empty keys,
 **Duplicate-aware request:** If the client locks two pieces with identical stat lines, list order must match the intended backpack order (or include disambiguating fields the server does not yet support, such as `location`). Otherwise the wrong physical piece may be toggled even when OCR is perfect.
 
 ## Changelog
+
+### 2026-09-18
+
+- **`POST /scan` accepts `achievements`.** Opt-in OCR scan of the in-game achievement list. Not implied by `--all` or by omitting the field (defaults `false`). When mixed with other categories, achievements run first. Progress appears as `scanProgress.achievements` (indeterminate `completed == total`, same as characters).
+- **`GET /achievements?jobId=xxx`** — Completed achievement IDs (`Vec<u32>`). Same all-or-nothing cache and 400/404/503 contract as `/characters` and `/weapons`. `jobId` is required.
+- **202 `targets` includes `achievements`.** Existing character/weapon/artifact clients can ignore the new field.
 
 ### 2026-08-28
 

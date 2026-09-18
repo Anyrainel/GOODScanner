@@ -85,6 +85,7 @@ fn save_job_good_export(
     characters: Option<Vec<GoodCharacter>>,
     weapons: Option<Vec<GoodWeapon>>,
     artifacts: Option<Vec<GoodArtifact>>,
+    achievements: Option<Vec<u32>>,
 ) {
     let log_dir = std::path::PathBuf::from("log").join("job_data");
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
@@ -102,7 +103,7 @@ fn save_job_good_export(
         return;
     }
 
-    let export = GoodExport::new(characters, weapons, artifacts);
+    let export = GoodExport::new(characters, weapons, artifacts).with_achievements(achievements);
     let json = match serde_json::to_string_pretty(&export) {
         Ok(json) => json,
         Err(e) => {
@@ -206,6 +207,7 @@ impl ManageExecutor for GameExecutor {
         config.scan_characters = request.characters;
         config.scan_weapons = request.weapons;
         config.scan_artifacts = request.artifacts;
+        config.scan_achievements = request.achievements;
         if let Some(limit) = request.artifact_limit {
             config.artifact_max_count = limit;
         }
@@ -279,6 +281,7 @@ enum ScanCategory {
     Characters,
     Weapons,
     Artifacts,
+    Achievements,
 }
 
 impl ScanCategory {
@@ -287,6 +290,7 @@ impl ScanCategory {
             Self::Characters => "characters",
             Self::Weapons => "weapons",
             Self::Artifacts => "artifacts",
+            Self::Achievements => "achievements",
         }
     }
 
@@ -304,6 +308,10 @@ impl ScanCategory {
                 "圣遗物扫描遇到错误，因此未能完成。下方包含可复制的完整错误。",
                 "The artifact scan encountered an error and could not finish. The complete copyable error is included below.",
             ),
+            Self::Achievements => (
+                "成就扫描遇到错误，因此未能完成。下方包含可复制的完整错误。",
+                "The achievement scan encountered an error and could not finish. The complete copyable error is included below.",
+            ),
         }
     }
 
@@ -320,6 +328,10 @@ impl ScanCategory {
             Self::Artifacts => (
                 "圣遗物扫描在完成前被停止，因此没有发布不完整的数据。",
                 "The artifact scan was stopped before it finished, so incomplete data was not published.",
+            ),
+            Self::Achievements => (
+                "成就扫描在完成前被停止，因此没有发布不完整的数据。",
+                "The achievement scan was stopped before it finished, so incomplete data was not published.",
             ),
         }
     }
@@ -681,6 +693,8 @@ where
         Arc::new(Mutex::new(ScanDataCache::empty()));
     let artifact_cache: Arc<Mutex<ScanDataCache<GoodArtifact>>> =
         Arc::new(Mutex::new(ScanDataCache::empty()));
+    let achievement_cache: Arc<Mutex<ScanDataCache<u32>>> =
+        Arc::new(Mutex::new(ScanDataCache::empty()));
 
     // Channel for submitting jobs from HTTP thread to execution thread
     let (job_tx, job_rx) = mpsc::channel::<(String, JobRequest)>();
@@ -691,6 +705,7 @@ where
     let http_character_cache = character_cache.clone();
     let http_weapon_cache = weapon_cache.clone();
     let http_artifact_cache = artifact_cache.clone();
+    let http_achievement_cache = achievement_cache.clone();
 
     // Clone job_tx for the HTTP thread before moving the original
     let http_job_tx = job_tx.clone();
@@ -907,6 +922,16 @@ where
                     serve_artifact_cache(request, url, &http_artifact_cache, cors_ref);
                 },
 
+                (Method::Get, url) if url.starts_with("/achievements") => {
+                    serve_cache(
+                        request,
+                        url,
+                        &http_achievement_cache,
+                        "achievements",
+                        cors_ref,
+                    );
+                },
+
                 _ => {
                     respond_error(
                         request,
@@ -971,7 +996,10 @@ where
                         JobRequest::Manage(r) => r.lock.len() + r.unlock.len(),
                         JobRequest::Equip(r) => r.equip.len(),
                         JobRequest::Scan(r) => {
-                            r.characters as usize + r.weapons as usize + r.artifacts as usize
+                            r.characters as usize
+                                + r.weapons as usize
+                                + r.artifacts as usize
+                                + r.achievements as usize
                         },
                     };
                     let err_results: Vec<_> = (0..total_count)
@@ -1059,6 +1087,7 @@ where
                         "characters" => sp.characters.as_mut(),
                         "weapons" => sp.weapons.as_mut(),
                         "artifacts" => sp.artifacts.as_mut(),
+                        "achievements" => sp.achievements.as_mut(),
                         _ => None,
                     };
                     if let Some(pp) = slot {
@@ -1073,6 +1102,7 @@ where
                     "characters" => ("扫描角色", "Scanning characters"),
                     "weapons" => ("扫描武器", "Scanning weapons"),
                     "artifacts" => ("扫描圣遗物", "Scanning artifacts"),
+                    "achievements" => ("扫描成就", "Scanning achievements"),
                     _ => (phase, phase),
                 };
                 let msg_zh = if total > 0 {
@@ -1176,6 +1206,7 @@ where
                                 None,
                                 None,
                                 Some(snapshot.clone()),
+                                None,
                             );
                         }
                         artifact_cache.lock().unwrap().set(job_id.clone(), snapshot);
@@ -1242,11 +1273,22 @@ where
                             &mut phases_complete,
                             &mut phases_incomplete,
                         );
+                        let dump_achievements = finalize_scan_phase(
+                            sr.achievements,
+                            ScanCategory::Achievements,
+                            &achievement_cache,
+                            &job_id,
+                            dump_job_data,
+                            &mut results,
+                            &mut phases_complete,
+                            &mut phases_incomplete,
+                        );
 
                         if dump_job_data
                             && (dump_characters.is_some()
                                 || dump_weapons.is_some()
-                                || dump_artifacts.is_some())
+                                || dump_artifacts.is_some()
+                                || dump_achievements.is_some())
                         {
                             save_job_good_export(
                                 &job_id,
@@ -1254,6 +1296,7 @@ where
                                 dump_characters,
                                 dump_weapons,
                                 dump_artifacts,
+                                dump_achievements,
                             );
                         }
 
@@ -1353,11 +1396,12 @@ fn cache_data_names(label: &str) -> (&str, &str) {
         "characters" => ("角色", "character"),
         "weapons" => ("武器", "weapon"),
         "artifacts" => ("圣遗物", "artifact"),
+        "achievements" => ("成就", "achievement"),
         _ => (label, label),
     }
 }
 
-/// Serve a typed data cache endpoint (GET /characters, /weapons, /artifacts).
+/// Serve a typed data cache endpoint (GET /characters, /weapons, /artifacts, /achievements).
 /// Requires `?jobId=xxx` query parameter.
 ///
 /// 200: cached data for matching jobId.
@@ -1889,7 +1933,11 @@ fn handle_scan(
         },
     };
 
-    if !scan_request.characters && !scan_request.weapons && !scan_request.artifacts {
+    if !scan_request.characters
+        && !scan_request.weapons
+        && !scan_request.artifacts
+        && !scan_request.achievements
+    {
         respond_error(
             request,
             400,
@@ -1951,24 +1999,26 @@ fn handle_scan(
     let scan_chars = scan_request.characters;
     let scan_wpns = scan_request.weapons;
     let scan_arts = scan_request.artifacts;
+    let scan_achs = scan_request.achievements;
     let artifact_mode = scan_request.artifact_mode;
     let artifact_limit = scan_request.artifact_limit;
     let job_id = uuid::Uuid::new_v4().to_string();
 
     log_info!(
-        "[job {}] 收到扫描请求（角色: {}, 武器: {}, 圣遗物: {}, 圣遗物模式: {:?}, 限制: {:?}）",
-        "[job {}] Received scan request (characters: {}, weapons: {}, artifacts: {}, artifact_mode: {:?}, artifact_limit: {:?})",
+        "[job {}] 收到扫描请求（角色: {}, 武器: {}, 圣遗物: {}, 成就: {}, 圣遗物模式: {:?}, 限制: {:?}）",
+        "[job {}] Received scan request (characters: {}, weapons: {}, artifacts: {}, achievements: {}, artifact_mode: {:?}, artifact_limit: {:?})",
         job_id,
         scan_chars,
         scan_wpns,
         scan_arts,
+        scan_achs,
         artifact_mode,
         artifact_limit
     );
 
     {
         let mut s = state.lock().unwrap();
-        *s = JobState::running_scan(job_id.clone(), scan_chars, scan_wpns, scan_arts);
+        *s = JobState::running_scan(job_id.clone(), scan_chars, scan_wpns, scan_arts, scan_achs);
     }
 
     if let Err(e) = job_tx.send((job_id.clone(), JobRequest::Scan(scan_request))) {
@@ -1993,8 +2043,8 @@ fn handle_scan(
         .map(|limit| limit.to_string())
         .unwrap_or_else(|| "null".to_string());
     let json = format!(
-        r#"{{"jobId":"{}","targets":{{"characters":{},"weapons":{},"artifacts":{}}},"artifactMode":"{}","artifactLimit":{}}}"#,
-        job_id, scan_chars, scan_wpns, scan_arts, artifact_mode_json, limit_json
+        r#"{{"jobId":"{}","targets":{{"characters":{},"weapons":{},"artifacts":{},"achievements":{}}},"artifactMode":"{}","artifactLimit":{}}}"#,
+        job_id, scan_chars, scan_wpns, scan_arts, scan_achs, artifact_mode_json, limit_json
     );
     respond_json(request, 202, &json, cors_origin);
 }
@@ -2277,6 +2327,10 @@ mod tests {
                     (
                         "artifacts",
                         !matches!(sr.artifacts, PhaseResult::NotAttempted),
+                    ),
+                    (
+                        "achievements",
+                        !matches!(sr.achievements, PhaseResult::NotAttempted),
                     ),
                 ],
                 Err(_) => vec![],
@@ -3260,6 +3314,7 @@ mod tests {
                 20,
                 true,
             )]),
+            achievements: PhaseResult::NotAttempted,
         }));
 
         // Scan 2: characters only
@@ -3267,6 +3322,7 @@ mod tests {
             characters: PhaseResult::Complete(vec![make_character("Nahida", 90)]),
             weapons: PhaseResult::NotAttempted,
             artifacts: PhaseResult::NotAttempted,
+            achievements: PhaseResult::NotAttempted,
         }));
 
         // Scan 3: scan error
@@ -3283,6 +3339,15 @@ mod tests {
                     .context("weapon scan phase failed"),
             ),
             artifacts: PhaseResult::Incomplete,
+            achievements: PhaseResult::NotAttempted,
+        }));
+
+        // Scan 5: achievements only
+        scan_responses.push_back(Ok(ScanResult {
+            characters: PhaseResult::NotAttempted,
+            weapons: PhaseResult::NotAttempted,
+            artifacts: PhaseResult::NotAttempted,
+            achievements: PhaseResult::Complete(vec![81006, 84519]),
         }));
 
         let (port, shutdown, handle) =
@@ -3349,6 +3414,8 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 400);
         let resp = client.get(format!("{}/weapons", base)).send().unwrap();
         assert_eq!(resp.status().as_u16(), 400);
+        let resp = client.get(format!("{}/achievements", base)).send().unwrap();
+        assert_eq!(resp.status().as_u16(), 400);
 
         // === Scan 1: all targets ===
 
@@ -3364,6 +3431,7 @@ mod tests {
         assert_eq!(body["targets"]["characters"], true);
         assert_eq!(body["targets"]["weapons"], true);
         assert_eq!(body["targets"]["artifacts"], true);
+        assert_eq!(body["targets"]["achievements"], false);
         assert_eq!(body["artifactMode"], "all");
         assert!(body["artifactLimit"].is_null());
 
@@ -3433,6 +3501,11 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 404);
         let resp = client
             .get(format!("{}/artifacts?jobId=wrong", base))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 404);
+        let resp = client
+            .get(format!("{}/achievements?jobId=wrong", base))
             .send()
             .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
@@ -3633,6 +3706,57 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 404);
 
+        // === Scan 5: achievements only — other caches stay as they were ===
+
+        let resp = client
+            .post(format!("{}/scan", base))
+            .header("Content-Type", "application/json")
+            .body(r#"{"achievements":true}"#)
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 202);
+        let body: serde_json::Value = resp.json().unwrap();
+        let scan5_id = body["jobId"].as_str().unwrap().to_string();
+        assert_eq!(body["targets"]["achievements"], true);
+        assert_eq!(body["targets"]["characters"], false);
+        assert_eq!(body["targets"]["weapons"], false);
+        assert_eq!(body["targets"]["artifacts"], false);
+
+        poll_until_completed(port);
+
+        let resp = client
+            .get(format!("{}/result?jobId={}", base, scan5_id))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(body["results"].as_array().unwrap().len(), 1);
+        assert_eq!(body["results"][0]["id"], "achievements");
+        assert_eq!(body["results"][0]["status"], "success");
+
+        let resp = client
+            .get(format!("{}/achievements?jobId={}", base, scan5_id))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(
+            body.as_array().unwrap(),
+            &vec![serde_json::json!(81006), serde_json::json!(84519),]
+        );
+
+        // Earlier character/weapon/artifact caches are left alone.
+        let resp = client
+            .get(format!("{}/characters?jobId={}", base, scan4_id))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let resp = client
+            .get(format!("{}/weapons?jobId={}", base, scan1_id))
+            .send()
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+
         stop_server(&shutdown, handle);
     }
 
@@ -3651,6 +3775,7 @@ mod tests {
                 20,
                 true,
             )]),
+            achievements: PhaseResult::NotAttempted,
         }));
 
         let (port, shutdown, handle) =
@@ -3797,6 +3922,7 @@ mod tests {
                 20,
                 true,
             )]),
+            achievements: PhaseResult::NotAttempted,
         }));
 
         // 1500ms across 30 ticks (3 phases × 10 items each) → 50ms per tick.

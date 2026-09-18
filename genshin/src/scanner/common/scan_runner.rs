@@ -10,6 +10,7 @@ use anyhow::{Error, Result};
 use yas::{log_info, log_warn};
 
 use crate::cli::{GoodScannerApplication, GoodUserConfig, ScanCoreConfig};
+use crate::scanner::achievement::{AchievementCatalog, GoodAchievementScanner};
 use crate::scanner::artifact::GoodArtifactScanner;
 use crate::scanner::character::GoodCharacterScanner;
 use crate::scanner::common::game_controller::GenshinGameController;
@@ -117,6 +118,7 @@ pub struct ScanRunResult {
     pub characters: ScanPhaseResult<GoodCharacter>,
     pub weapons: ScanPhaseResult<GoodWeapon>,
     pub artifacts: ScanPhaseResult<GoodArtifact>,
+    pub achievements: ScanPhaseResult<u32>,
 }
 
 /// Whether one failed phase should abort the whole scan or only mark that phase incomplete.
@@ -189,10 +191,45 @@ pub fn run_scan_phases(
             outer(c, t, id, "artifacts");
         }
     };
+    let achievements_progress = |c: usize, t: usize, id: &str, _phase: &str| {
+        if let Some(outer) = progress_fn {
+            outer(c, t, id, "achievements");
+        }
+    };
 
     let mut characters = ScanPhaseResult::NotAttempted;
     let mut weapons = ScanPhaseResult::NotAttempted;
     let mut artifacts = ScanPhaseResult::NotAttempted;
+    let mut achievements = ScanPhaseResult::NotAttempted;
+
+    // Achievements first: the user is expected to already be on an achievement
+    // page (cocogoat's workflow). Later phases return to the main UI themselves.
+    if config.scan_achievements {
+        achievements = if scan_cancelled(&cancel_token, ctrl) {
+            ScanPhaseResult::Incomplete
+        } else {
+            report("扫描成就 / Scanning achievements...");
+            log_info!("扫描成就...", "Scanning achievements...");
+            let cfg = GoodScannerApplication::make_achievement_config(&scanner_config, user_config);
+            let scan_result = AchievementCatalog::new().and_then(|catalog| {
+                GoodAchievementScanner::new(cfg, Arc::new(catalog))?.scan(
+                    ctrl,
+                    &pools,
+                    Some(&achievements_progress),
+                )
+            });
+            phase_result(scan_result, &cancel_token, options, "achievement")?
+        };
+    }
+
+    if scan_cancelled(&cancel_token, ctrl) {
+        return Ok(ScanRunResult {
+            characters: skipped_due_to_cancel(config.scan_characters),
+            weapons: skipped_due_to_cancel(config.scan_weapons),
+            artifacts: skipped_due_to_cancel(config.scan_artifacts),
+            achievements,
+        });
+    }
 
     if config.scan_characters {
         characters = if scan_cancelled(&cancel_token, ctrl) {
@@ -219,6 +256,7 @@ pub fn run_scan_phases(
             characters,
             weapons: skipped_due_to_cancel(config.scan_weapons),
             artifacts: skipped_due_to_cancel(config.scan_artifacts),
+            achievements,
         });
     }
 
@@ -238,6 +276,7 @@ pub fn run_scan_phases(
             characters,
             weapons,
             artifacts: skipped_due_to_cancel(config.scan_artifacts),
+            achievements,
         });
     }
 
@@ -257,6 +296,7 @@ pub fn run_scan_phases(
         characters,
         weapons,
         artifacts,
+        achievements,
     })
 }
 

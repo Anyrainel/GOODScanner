@@ -629,6 +629,7 @@ pub struct AppState {
     pub scan_characters: bool,
     pub scan_weapons: bool,
     pub scan_artifacts: bool,
+    pub scan_achievements: bool,
     pub verbose: bool,
     pub continue_on_failure: bool,
     pub dump_images: bool,
@@ -639,6 +640,7 @@ pub struct AppState {
     pub char_max_count: usize,
     pub weapon_max_count: usize,
     pub artifact_max_count: usize,
+    pub achievement_max_count: usize,
 
     /// Set to true when Start Scan is pressed but a required character name is empty.
     /// Forces the Character Names section open with a warning.
@@ -684,6 +686,7 @@ impl AppState {
             scan_characters: user_config.scan_characters,
             scan_weapons: user_config.scan_weapons,
             scan_artifacts: user_config.scan_artifacts,
+            scan_achievements: user_config.scan_achievements,
             verbose: user_config.verbose,
             continue_on_failure: user_config.continue_on_failure,
             dump_images: user_config.dump_images,
@@ -693,6 +696,7 @@ impl AppState {
             char_max_count: user_config.char_max_count,
             weapon_max_count: user_config.weapon_max_count,
             artifact_max_count: user_config.artifact_max_count,
+            achievement_max_count: user_config.achievement_max_count,
             server_port: user_config.server_port,
             update_inventory: user_config.update_inventory,
             filter_involved_sets: user_config.filter_involved_sets,
@@ -727,6 +731,7 @@ impl AppState {
         self.user_config.scan_characters = self.scan_characters;
         self.user_config.scan_weapons = self.scan_weapons;
         self.user_config.scan_artifacts = self.scan_artifacts;
+        self.user_config.scan_achievements = self.scan_achievements;
         self.user_config.verbose = self.verbose;
         super::log_bridge::set_verbose(self.verbose);
         self.user_config.continue_on_failure = self.continue_on_failure;
@@ -740,6 +745,7 @@ impl AppState {
         self.user_config.char_max_count = self.char_max_count;
         self.user_config.weapon_max_count = self.weapon_max_count;
         self.user_config.artifact_max_count = self.artifact_max_count;
+        self.user_config.achievement_max_count = self.achievement_max_count;
         self.user_config.server_port = self.server_port;
         if self.filter_involved_sets {
             self.update_inventory = false;
@@ -775,6 +781,7 @@ impl AppState {
             scan_characters: self.scan_characters,
             scan_weapons: self.scan_weapons,
             scan_artifacts: self.scan_artifacts,
+            scan_achievements: self.scan_achievements,
             weapon_min_rarity: 3,
             artifact_min_rarity: 4,
             verbose: self.verbose,
@@ -791,6 +798,7 @@ impl AppState {
             char_max_count: self.char_max_count,
             weapon_max_count: self.weapon_max_count,
             artifact_max_count: self.artifact_max_count,
+            achievement_max_count: self.achievement_max_count,
             artifact_keep_five_star_filter: false,
         }
     }

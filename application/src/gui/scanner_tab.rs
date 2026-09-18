@@ -69,7 +69,18 @@ pub fn show(
                         ui.checkbox(&mut state.scan_weapons, l.t("武器", "Weapons"));
                         ui.add_space(12.0);
                         ui.checkbox(&mut state.scan_artifacts, l.t("圣遗物", "Artifacts"));
+                        ui.add_space(12.0);
+                        ui.checkbox(&mut state.scan_achievements, l.t("成就", "Achievements"));
                     });
+                    if state.scan_achievements {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(160, 160, 160),
+                            l.t(
+                                "成就扫描会先进行：请先打开成就界面任意分类。",
+                                "Achievements scan first: open any achievement category before starting.",
+                            ),
+                        );
+                    }
                     ui.checkbox(&mut state.hdr_mode, l.t("我的原神在使用HDR", "HDR mode"));
                 });
             });
@@ -94,6 +105,12 @@ pub fn show(
                         ]);
                         widgets::inventory_delays(&mut cols[1], state, l);
                     });
+                    widgets::delay_group(ui, "achievement_delays", l.t("成就", "Achievements"), l, &mut [
+                        (l.t("列表滚动", "List scroll"), &mut state.user_config.achievement_scroll_delay, defaults.achievement_scroll_delay,
+                            l.t("成就列表每次滚轮后的等待，与背包翻页无关", "Wait after each achievement-list wheel tick, independent of backpack scrolling")),
+                        (l.t("分类切换", "Category switch"), &mut state.user_config.achievement_category_delay, defaults.achievement_category_delay,
+                            l.t("点击左侧成就分类后的等待", "Wait after clicking a left-side achievement category")),
+                    ]);
                 });
             });
 
@@ -122,6 +139,9 @@ pub fn show(
                         ui.add_space(8.0);
                         ui.label(l.t("圣遗物:", "Art:"));
                         max_count_field(ui, &mut state.artifact_max_count);
+                        ui.add_space(8.0);
+                        ui.label(l.t("成就:", "Ach:"));
+                        max_count_field(ui, &mut state.achievement_max_count);
                     });
 
                     ui.add_space(4.0);
@@ -223,7 +243,10 @@ fn action_bar(
                 ui.label(phase.text(l));
             }
         } else {
-            let any_selected = state.scan_characters || state.scan_weapons || state.scan_artifacts;
+            let any_selected = state.scan_characters
+                || state.scan_weapons
+                || state.scan_artifacts
+                || state.scan_achievements;
             let can_scan = any_selected && !game_busy;
             if ui
                 .add_enabled(

@@ -12,6 +12,8 @@ pub struct ScanRequest {
     pub weapons: bool,
     #[serde(default)]
     pub artifacts: bool,
+    #[serde(default)]
+    pub achievements: bool,
     /// Artifact scan mode. `recent` enables the in-game 5-star acquired-time filter.
     #[serde(default, rename = "artifactMode")]
     pub artifact_mode: ArtifactScanMode,
@@ -329,6 +331,8 @@ pub struct ScanProgress {
     pub weapons: Option<PhaseProgress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<PhaseProgress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub achievements: Option<PhaseProgress>,
 }
 
 /// Shared state for an async job, polled via GET /status.
@@ -383,6 +387,7 @@ impl JobState {
         scan_characters: bool,
         scan_weapons: bool,
         scan_artifacts: bool,
+        scan_achievements: bool,
     ) -> Self {
         let sp = ScanProgress {
             characters: if scan_characters {
@@ -396,6 +401,11 @@ impl JobState {
                 None
             },
             artifacts: if scan_artifacts {
+                Some(PhaseProgress::pending())
+            } else {
+                None
+            },
+            achievements: if scan_achievements {
                 Some(PhaseProgress::pending())
             } else {
                 None

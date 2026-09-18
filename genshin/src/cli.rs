@@ -10,6 +10,10 @@ use yas::{log_debug, log_error, log_info, log_warn};
 use yas::capture::CaptureMethod;
 use yas::game_info::{GameInfo, GameInfoBuilder};
 
+use crate::scanner::achievement::{
+    GoodAchievementScannerConfig, DEFAULT_CATEGORY_DELAY as DEFAULT_ACHIEVEMENT_CATEGORY_DELAY,
+    DEFAULT_SCROLL_DELAY as DEFAULT_ACHIEVEMENT_SCROLL_DELAY,
+};
 use crate::scanner::artifact::GoodArtifactScannerConfig;
 use crate::scanner::character::GoodCharacterScannerConfig;
 use crate::scanner::common::constants::*;
@@ -397,6 +401,12 @@ fn default_artifact_panel_timeout() -> u64 {
 fn default_artifact_extra_delay() -> u64 {
     DEFAULT_ARTIFACT_EXTRA_DELAY
 }
+fn default_achievement_scroll_delay() -> u64 {
+    DEFAULT_ACHIEVEMENT_SCROLL_DELAY
+}
+fn default_achievement_category_delay() -> u64 {
+    DEFAULT_ACHIEVEMENT_CATEGORY_DELAY
+}
 
 fn default_mgr_transition() -> u64 {
     1500
@@ -503,6 +513,12 @@ fn is_default_artifact_panel_timeout(v: &u64) -> bool {
 fn is_default_artifact_extra_delay(v: &u64) -> bool {
     *v == DEFAULT_ARTIFACT_EXTRA_DELAY
 }
+fn is_default_achievement_scroll_delay(v: &u64) -> bool {
+    *v == DEFAULT_ACHIEVEMENT_SCROLL_DELAY
+}
+fn is_default_achievement_category_delay(v: &u64) -> bool {
+    *v == DEFAULT_ACHIEVEMENT_CATEGORY_DELAY
+}
 
 /// Fields in GoodUserConfig that must be unsigned integers.
 /// If the JSON has an invalid value (e.g. empty string from old config versions),
@@ -519,6 +535,8 @@ const U64_FIELDS: &[&str] = &[
     "artifact_initial_wait",
     "artifact_panel_timeout",
     "artifact_extra_delay",
+    "achievement_scroll_delay",
+    "achievement_category_delay",
     "mgr_transition_delay",
     "mgr_action_delay",
     "mgr_cell_delay",
@@ -655,6 +673,22 @@ pub struct GoodUserConfig {
     )]
     pub artifact_extra_delay: u64,
 
+    /// Achievement list: wait after each wheel tick (ms). Isolated from backpack scroll.
+    #[serde(
+        default = "default_achievement_scroll_delay",
+        skip_serializing_if = "is_default_achievement_scroll_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
+    pub achievement_scroll_delay: u64,
+
+    /// Achievement list: wait after clicking a left-side category (ms).
+    #[serde(
+        default = "default_achievement_category_delay",
+        skip_serializing_if = "is_default_achievement_category_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
+    pub achievement_category_delay: u64,
+
     // --- Manager delay settings ---
     /// Screen transition delay for the manager (ms). Default: 1500.
     #[serde(
@@ -693,6 +727,8 @@ pub struct GoodUserConfig {
     #[serde(default = "default_true")]
     pub scan_artifacts: bool,
     #[serde(default)]
+    pub scan_achievements: bool,
+    #[serde(default)]
     pub verbose: bool,
     #[serde(default)]
     pub continue_on_failure: bool,
@@ -714,6 +750,8 @@ pub struct GoodUserConfig {
     pub weapon_max_count: usize,
     #[serde(default)]
     pub artifact_max_count: usize,
+    #[serde(default)]
+    pub achievement_max_count: usize,
     #[serde(default = "default_server_port")]
     pub server_port: u16,
     #[serde(default = "default_true")]
@@ -804,6 +842,8 @@ impl Default for GoodUserConfig {
             artifact_initial_wait: default_artifact_initial_wait(),
             artifact_panel_timeout: default_artifact_panel_timeout(),
             artifact_extra_delay: default_artifact_extra_delay(),
+            achievement_scroll_delay: default_achievement_scroll_delay(),
+            achievement_category_delay: default_achievement_category_delay(),
             mgr_transition_delay: default_mgr_transition(),
             mgr_action_delay: default_mgr_action(),
             mgr_cell_delay: default_mgr_cell(),
@@ -812,6 +852,7 @@ impl Default for GoodUserConfig {
             scan_characters: true,
             scan_weapons: true,
             scan_artifacts: true,
+            scan_achievements: false,
             verbose: false,
             continue_on_failure: false,
             dump_images: false,
@@ -823,6 +864,7 @@ impl Default for GoodUserConfig {
             char_max_count: 0,
             weapon_max_count: 0,
             artifact_max_count: 0,
+            achievement_max_count: 0,
             server_port: default_server_port(),
             update_inventory: true,
             filter_involved_sets: false,
@@ -964,6 +1006,14 @@ pub struct GoodScannerConfig {
     )]
     pub scan_artifacts: bool,
 
+    /// 扫描成就 / Scan achievements
+    #[arg(
+        long = "achievements",
+        help = "扫描成就（请先打开成就界面）\nScan achievements (open the achievement screen first)",
+        help_heading = "扫描目标 / Scan Targets"
+    )]
+    pub scan_achievements: bool,
+
     /// 扫描全部 / Scan all
     #[arg(
         long = "all",
@@ -1079,6 +1129,15 @@ pub struct GoodScannerConfig {
     )]
     pub artifact_max_count: usize,
 
+    /// 最大成就扫描数 / Max achievements
+    #[arg(
+        long = "achievement-max-count",
+        help = "最大成就扫描数（0=不限）\nMax completed achievements to keep (0 = unlimited)",
+        default_value_t = 0,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
+    pub achievement_max_count: usize,
+
     // weapon_skip_delay and artifact_skip_delay removed — grid-based detection always used
     /// 圣遗物副词条OCR后端 / Artifact substat OCR backend
     #[arg(
@@ -1193,6 +1252,26 @@ impl GoodScannerApplication {
         }
     }
 
+    /// Build an achievement scanner config from global CLI flags + JSON config.
+    pub fn make_achievement_config(
+        config: &GoodScannerConfig,
+        user_config: &GoodUserConfig,
+    ) -> GoodAchievementScannerConfig {
+        GoodAchievementScannerConfig {
+            verbose: config.verbose,
+            ocr_backend: config
+                .ocr_backend
+                .clone()
+                .unwrap_or_else(|| "ppocrv4".to_string()),
+            scroll_delay: user_config.achievement_scroll_delay,
+            category_delay: user_config.achievement_category_delay,
+            continue_on_failure: config.continue_on_failure,
+            log_progress: config.log_progress,
+            dump_images: config.dump_images,
+            max_count: config.achievement_max_count,
+        }
+    }
+
     pub fn run(&self) -> Result<()> {
         println!(
             "{}",
@@ -1215,12 +1294,14 @@ impl GoodScannerApplication {
         let no_flags = !config.scan_characters
             && !config.scan_weapons
             && !config.scan_artifacts
+            && !config.scan_achievements
             && !config.scan_all;
 
         let scan_config = ScanCoreConfig {
             scan_characters: config.scan_characters || config.scan_all || no_flags,
             scan_weapons: config.scan_weapons || config.scan_all || no_flags,
             scan_artifacts: config.scan_artifacts || config.scan_all || no_flags,
+            scan_achievements: config.scan_achievements,
             weapon_min_rarity: config.weapon_min_rarity,
             artifact_min_rarity: config.artifact_min_rarity,
             verbose: config.verbose,
@@ -1236,6 +1317,7 @@ impl GoodScannerApplication {
             char_max_count: config.char_max_count,
             weapon_max_count: config.weapon_max_count,
             artifact_max_count: config.artifact_max_count,
+            achievement_max_count: config.achievement_max_count,
             artifact_keep_five_star_filter: false,
             save_on_cancel: false,
         };
@@ -1340,6 +1422,7 @@ pub struct ScanCoreConfig {
     pub scan_characters: bool,
     pub scan_weapons: bool,
     pub scan_artifacts: bool,
+    pub scan_achievements: bool,
     pub weapon_min_rarity: i32,
     pub artifact_min_rarity: i32,
     pub verbose: bool,
@@ -1355,6 +1438,7 @@ pub struct ScanCoreConfig {
     pub char_max_count: usize,
     pub weapon_max_count: usize,
     pub artifact_max_count: usize,
+    pub achievement_max_count: usize,
     /// If true, keep the artifact tab's 5-star acquired-time filter enabled.
     pub artifact_keep_five_star_filter: bool,
     /// If true, export partial results when the user cancels mid-scan.
@@ -1367,6 +1451,7 @@ impl Default for ScanCoreConfig {
             scan_characters: true,
             scan_weapons: true,
             scan_artifacts: true,
+            scan_achievements: false,
             weapon_min_rarity: 3,
             artifact_min_rarity: 4,
             verbose: false,
@@ -1382,6 +1467,7 @@ impl Default for ScanCoreConfig {
             char_max_count: 0,
             weapon_max_count: 0,
             artifact_max_count: 0,
+            achievement_max_count: 0,
             artifact_keep_five_star_filter: false,
             save_on_cancel: false,
         }
@@ -1395,6 +1481,7 @@ impl ScanCoreConfig {
             scan_characters: self.scan_characters,
             scan_weapons: self.scan_weapons,
             scan_artifacts: self.scan_artifacts,
+            scan_achievements: self.scan_achievements,
             scan_all: false,
             verbose: self.verbose,
             continue_on_failure: self.continue_on_failure,
@@ -1409,6 +1496,7 @@ impl ScanCoreConfig {
             char_max_count: self.char_max_count,
             weapon_max_count: self.weapon_max_count,
             artifact_max_count: self.artifact_max_count,
+            achievement_max_count: self.achievement_max_count,
             artifact_substat_ocr: self.artifact_substat_ocr.clone(),
             artifact_keep_five_star_filter: self.artifact_keep_five_star_filter,
         }
@@ -1502,6 +1590,7 @@ pub fn run_scan_core(
     let characters = scan_result.characters.into_complete();
     let weapons = scan_result.weapons.into_complete();
     let artifacts = scan_result.artifacts.into_complete();
+    let achievements = scan_result.achievements.into_complete();
 
     if token.is_cancelled() {
         log_info!("扫描被用户中断", "Scan stopped by user");
@@ -1514,7 +1603,7 @@ pub fn run_scan_core(
     crate::scanner::common::annotator::flush();
 
     // Export as GOOD v3
-    let export = GoodExport::new(characters, weapons, artifacts);
+    let export = GoodExport::new(characters, weapons, artifacts).with_achievements(achievements);
     let json = serde_json::to_string_pretty(&export)?;
 
     let timestamp = chrono_timestamp();

@@ -121,6 +121,11 @@ impl GoodExport {
             achievements: None,
         }
     }
+
+    pub fn with_achievements(mut self, achievements: Option<Vec<u32>>) -> Self {
+        self.achievements = achievements;
+        self
+    }
 }
 
 /// Debug info for a single OCR field.
