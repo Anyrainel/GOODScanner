@@ -1,14 +1,14 @@
 # Honkai: Star Rail support / 《崩坏：星穹铁道》支持
 
 `hsr_scanner` is the Star Rail library linked into the normal `GOODScanner`
-and `GOODCapture` Windows applications. It is not a separate product and does
-not build, download, or launch an HSR-specific executable. The shared
-applications keep their existing binary names and let the player switch
-between Genshin Impact and Star Rail.
+and `GOODCapture` Windows applications. It is not a separate product. The
+shared applications neither require nor launch an HSR-specific executable;
+they keep their existing binary names and let the player switch between
+Genshin Impact and Star Rail.
 
 `hsr_scanner` 是正式 `GOODScanner` 与 `GOODCapture` Windows 程序共用的星穹铁道功能库，
-不是独立产品，也不会构建、下载或启动额外的 HSR 专用程序。程序名称保持不变，玩家可在应用内切换
-《原神》和《崩坏：星穹铁道》。
+不是独立产品。两个共用程序均不要求或启动额外的 HSR 专用程序；程序名称保持不变，玩家可在应用内
+切换《原神》和《崩坏：星穹铁道》。
 
 ## Capabilities / 功能
 

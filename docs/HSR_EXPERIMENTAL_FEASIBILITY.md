@@ -133,7 +133,8 @@ Run from the repository root. These are the normal shared product targets; no HS
 
 ```powershell
 cargo fmt --all -- --check
-cargo test --locked --workspace --all-targets
+cargo test --locked --workspace --exclude good_tools_app --all-targets
+cargo test --locked -p good_tools_app --features test-as-invoker --all-targets
 cargo test --locked -p genshin_scanner --features capture --all-targets
 cargo test --locked -p hsr_scanner --all-features --all-targets
 cargo test --locked -p good_tools_app --features "capture,test-as-invoker" --all-targets
