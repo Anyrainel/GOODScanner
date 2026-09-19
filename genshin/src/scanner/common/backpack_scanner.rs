@@ -6,6 +6,7 @@ use yas::{log_debug, log_error, log_info, log_warn};
 use yas::ocr::ImageToText;
 use yas::utils;
 
+use super::annotator;
 use super::capture_frame::CaptureFrame;
 use super::constants::*;
 use super::coord_scaler::CoordScaler;
@@ -345,23 +346,9 @@ fn parse_item_count_text(text: &str) -> Result<(i32, i32)> {
             e
         )
     })?;
-    let capacity: i32 = caps[2].parse().map_err(|e| {
-        anyhow!(
-            "背包容量无效 '{}' / Invalid backpack capacity '{}': {}",
-            &caps[2],
-            &caps[2],
-            e
-        )
-    })?;
-    if capacity <= 0 || current > capacity {
-        return Err(anyhow!(
-            "背包数量读数无效 {}/{} / Invalid backpack count reading {}/{}",
-            current,
-            capacity,
-            current,
-            capacity
-        ));
-    }
+    // The game draws "current/capacity", but capacity is not a scan input.
+    // Inventories can temporarily exceed the cap; only `current` is used.
+    let capacity: i32 = caps[2].parse().unwrap_or(0);
     Ok((current, capacity))
 }
 
@@ -508,28 +495,16 @@ pub fn open_backpack_to_tab(
     {
         let mut bp = BackpackScanner::new(ctrl);
         bp.open_backpack(open_delay);
-        bp.select_tab(tab, tab_delay);
     }
 
-    if tab == "artifact" {
-        if keep_five_star_filter {
-            ensure_five_star_filter_active(ctrl, tab_delay, dump_images);
-        } else {
-            dismiss_five_star_filter(ctrl, tab_delay, dump_images);
-        }
-    }
-
-    if ctrl.check_rmb() {
-        anyhow::bail!("cancelled");
-    }
-
-    // Read item count (need a fresh BackpackScanner for the borrow). A zero or
-    // unreadable first result gets the same reopen-and-retry treatment; only a
-    // second unreadable header is returned as an error.
-    let first_reading = {
-        let bp = BackpackScanner::new(ctrl);
-        bp.read_item_count(count_ocr)
-    };
+    let first_reading = select_tab_and_read_count(
+        ctrl,
+        tab,
+        tab_delay,
+        count_ocr,
+        keep_five_star_filter,
+        dump_images,
+    );
 
     match first_reading {
         Ok((count, max)) if count > 0 => return Ok((count, max)),
@@ -545,30 +520,64 @@ pub fn open_backpack_to_tab(
         ),
     }
 
-    {
-        if ctrl.check_rmb() {
-            anyhow::bail!("cancelled");
-        }
-        ctrl.return_to_main_ui(4);
-        if ctrl.check_rmb() {
-            anyhow::bail!("cancelled");
-        }
-        {
-            let mut bp = BackpackScanner::new(ctrl);
-            bp.open_backpack(open_delay);
-            bp.select_tab(tab, tab_delay);
-        }
-        // Check filter again after retry
-        if tab == "artifact" {
-            if keep_five_star_filter {
-                ensure_five_star_filter_active(ctrl, tab_delay, dump_images);
-            } else {
-                dismiss_five_star_filter(ctrl, tab_delay, dump_images);
-            }
-        }
-        let bp = BackpackScanner::new(ctrl);
-        bp.read_item_count(count_ocr)
+    if ctrl.check_rmb() {
+        anyhow::bail!("cancelled");
     }
+    ctrl.return_to_main_ui(4);
+    if ctrl.check_rmb() {
+        anyhow::bail!("cancelled");
+    }
+    {
+        let mut bp = BackpackScanner::new(ctrl);
+        bp.open_backpack(open_delay);
+    }
+    select_tab_and_read_count(
+        ctrl,
+        tab,
+        tab_delay,
+        count_ocr,
+        keep_five_star_filter,
+        dump_images,
+    )
+}
+
+fn apply_artifact_star_filter(
+    ctrl: &mut GenshinGameController,
+    tab: &str,
+    tab_delay: u64,
+    keep_five_star_filter: bool,
+    dump_images: bool,
+) {
+    if tab != "artifact" {
+        return;
+    }
+    if keep_five_star_filter {
+        ensure_five_star_filter_active(ctrl, tab_delay, dump_images);
+    } else {
+        dismiss_five_star_filter(ctrl, tab_delay, dump_images);
+    }
+}
+
+/// Select an inventory tab, apply the artifact 5-star filter if needed, then
+/// OCR the header count. Shared by the full open path and the skip-open path.
+pub fn select_tab_and_read_count(
+    ctrl: &mut GenshinGameController,
+    tab: &str,
+    tab_delay: u64,
+    count_ocr: &dyn ImageToText<RgbImage>,
+    keep_five_star_filter: bool,
+    dump_images: bool,
+) -> Result<(i32, i32)> {
+    {
+        let mut bp = BackpackScanner::new(ctrl);
+        bp.select_tab(tab, tab_delay);
+    }
+    apply_artifact_star_filter(ctrl, tab, tab_delay, keep_five_star_filter, dump_images);
+    if ctrl.check_rmb() {
+        anyhow::bail!("cancelled");
+    }
+    let bp = BackpackScanner::new(ctrl);
+    bp.read_item_count(count_ocr)
 }
 
 /// What the scan callback should do after processing an event.
@@ -837,7 +846,26 @@ impl<'a> BackpackScanner<'a> {
             "[backpack] item count OCR raw text: '{}'",
             text.trim()
         );
-        parse_item_count_text(&text)
+        let parsed = parse_item_count_text(&text);
+        if annotator::is_enabled() {
+            if let Ok(full) = self.ctrl.capture_game() {
+                let mut collector = DumpCollector::new(
+                    "debug_images",
+                    "item_count",
+                    next_filter_dump_index(),
+                    &self.ctrl.scaler,
+                );
+                let img_idx = collector.add_image("header", &full);
+                collector.record_ocr(img_idx, "count", ITEM_COUNT_RECT, text.trim());
+                let display = match &parsed {
+                    Ok((cur, cap)) => format!("{cur}/{cap}"),
+                    Err(e) => e.to_string(),
+                };
+                collector.set_final_result("count", &display);
+                collector.finalize_success(&display);
+            }
+        }
+        parsed
     }
 
     /// Scroll down by a given number of rows using calibrated tick counts.
@@ -2032,12 +2060,16 @@ mod tests {
     }
 
     #[test]
-    fn item_count_parser_rejects_unreadable_or_invalid_headers() {
+    fn item_count_parser_uses_current_and_ignores_capacity() {
         assert_eq!(parse_item_count_text("120 / 2100").unwrap(), (120, 2100));
         assert_eq!(parse_item_count_text("0/2100").unwrap(), (0, 2100));
+        assert_eq!(parse_item_count_text("0/0").unwrap(), (0, 0));
+        assert_eq!(parse_item_count_text("2101/2100").unwrap(), (2101, 2100));
+        assert_eq!(
+            parse_item_count_text("圣遗物 2720/2700").unwrap(),
+            (2720, 2700)
+        );
         assert!(parse_item_count_text("not a count").is_err());
-        assert!(parse_item_count_text("0/0").is_err());
-        assert!(parse_item_count_text("2101/2100").is_err());
     }
 
     #[test]

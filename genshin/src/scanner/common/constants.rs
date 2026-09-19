@@ -63,12 +63,13 @@ pub const CHAR_TAB_ATTRIBUTES: (f64, f64) = (220.0, 158.0);
 pub const CHAR_TAB_CONSTELLATION: (f64, f64) = (220.0, 368.0);
 pub const CHAR_TAB_TALENTS: (f64, f64) = (170.0, 435.0);
 
-/// Constellation node click positions for OCR fallback (x=1695, y = 270 + index*113)
+/// Constellation node click positions for the phase-2 tree
+/// (x=1695, y = 270 + index*113). Used only when phase-1 pixels are invalid.
 pub const CHAR_CONSTELLATION_X: f64 = 1695.0;
 pub const CHAR_CONSTELLATION_Y_BASE: f64 = 270.0;
 pub const CHAR_CONSTELLATION_Y_STEP: f64 = 113.0;
 
-/// Constellation activate status OCR region
+/// Constellation activate status OCR region ("已激活") on a node detail popup.
 pub const CHAR_CONSTELLATION_ACTIVATE_RECT: (f64, f64, f64, f64) = (218.0, 1002.0, 82.0, 31.0);
 
 // Constellation icon pixel detection constants.
@@ -77,8 +78,8 @@ pub const CHAR_CONSTELLATION_ACTIVATE_RECT: (f64, f64, f64, f64) = (218.0, 1002.
 // active (ability art) and locked (lock icon) have similar brightness.
 // The ring captures the glow (active) vs dark circle edge (locked).
 //
-// Per-position threshold + monotonicity: check all 6 icons, find the first
-// locked one. Constellation = index of first locked node.
+// Phase 1 samples all 6 rings from one capture (prefix + gap check).
+// Phase 2 clicks along C2 → C1 / C6 → C3 → C4 → C5, never C1..C6 in order.
 //
 // Accuracy: 100% on 109 test characters (min gap=+55.4, d'=7.14).
 /// Per-node icon centers on the S-curve (base 1920x1080 coords)
@@ -152,10 +153,10 @@ pub const ITEM_COUNT_RECT: (f64, f64, f64, f64) = (1545.0, 30.0, 263.0, 38.0);
 pub const TAB_WEAPON: (f64, f64) = (585.0, 50.0);
 pub const TAB_ARTIFACT: (f64, f64) = (675.0, 50.0);
 
-/// "5-star sort by acquired time" filter toggle position.
-/// When active (pixel is light), only 5-star artifacts are visible.
-/// 4K position: (2496, 280), divided by 2 for 1080p base.
-pub const ARTIFACT_FIVE_STAR_FILTER_POS: (f64, f64) = (1248.0, 140.0);
+/// "5-star sort by acquired time" filter toggle knob.
+/// Sample the ON-side knob, not the dark gutter to the right of the control;
+/// (1248, 140) sits in that gutter and always reads inactive.
+pub const ARTIFACT_FIVE_STAR_FILTER_POS: (f64, f64) = (1228.0, 135.0);
 
 // ================================================================
 // Artifact scanner coordinates (at 1920x1080 base resolution)

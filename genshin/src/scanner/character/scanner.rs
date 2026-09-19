@@ -37,6 +37,15 @@ struct ScanMeta {
     raw_skill: i32,
     /// Raw OCR'd burst level BEFORE constellation/Tartaglia adjustment.
     raw_burst: i32,
+    /// True when the attributes panel produced no level text.
+    level_ocr_failed: bool,
+    /// True when constellation pixel detection was non-monotonic.
+    constellation_non_monotonic: bool,
+}
+
+fn click_character_ui(ctrl: &mut GenshinGameController, pos: (f64, f64), delay_ms: u64) {
+    ctrl.click_at(pos.0, pos.1);
+    utils::sleep(delay_ms as u32);
 }
 
 /// Phase 1 captures: images from deterministic tab sequence (no fallbacks).
@@ -52,7 +61,7 @@ struct ScanCaptures {
     talents_image: RgbImage,
 }
 
-/// Phase 2 captures: full rescan with constellation node + talent detail images.
+/// Phase 2 captures: recapture panels + optional constellation click-tree probes.
 struct RescanCaptures {
     /// Index in the `characters` vec.
     char_index: usize,
@@ -60,8 +69,10 @@ struct RescanCaptures {
     old: GoodCharacter,
     attrs_image: RgbImage,
     constellation_tab_image: RgbImage,
-    /// One image per constellation node (C1–C6), each showing activation status popup.
-    constellation_node_images: Vec<RgbImage>,
+    /// Some when phase-1 pixels were non-monotonic and the C2 click tree ran.
+    constellation_click_level: Option<i32>,
+    /// Nodes actually clicked by the tree, for dump annotation.
+    constellation_click_probes: Vec<(usize, RgbImage, bool)>,
     talent_overview_image: RgbImage,
     /// One image per talent detail (auto, skill, burst).
     talent_detail_images: Vec<RgbImage>,
@@ -671,6 +682,9 @@ impl GoodCharacterScanner {
             return true;
         }
         if let Some(m) = meta {
+            if m.level_ocr_failed || m.constellation_non_monotonic {
+                return true;
+            }
             if m.talent_suspicious {
                 return true;
             }
@@ -902,7 +916,6 @@ impl GoodCharacterScanner {
 
     /// Check if a constellation node is activated from its detail-view capture.
     /// OCRs the activation status region and looks for "已激活".
-    /// Annotates the image with OCR region and result.
     fn check_activation_from_image(
         ocr: &dyn ImageToText<RgbImage>,
         image: &RgbImage,
@@ -916,6 +929,75 @@ impl GoodCharacterScanner {
         annotator::record_ocr(label, CHAR_CONSTELLATION_ACTIVATE_RECT, &text);
         annotator::set_final(label, if activated { "activated" } else { "locked" });
         activated
+    }
+
+    fn constellation_node_pos(index: usize) -> (f64, f64) {
+        (
+            CHAR_CONSTELLATION_X,
+            CHAR_CONSTELLATION_Y_BASE + index as f64 * CHAR_CONSTELLATION_Y_STEP,
+        )
+    }
+
+    fn probe_constellation_node(
+        ctrl: &mut GenshinGameController,
+        ocr: &dyn ImageToText<RgbImage>,
+        index: usize,
+        delay_ms: u64,
+    ) -> (RgbImage, bool) {
+        let pos = Self::constellation_node_pos(index);
+        ctrl.click_at(pos.0, pos.1);
+        utils::sleep(delay_ms as u32);
+        let image = ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
+        let scaler = ctrl.scaler.clone();
+        let label = format!("constellation_c{}", index + 1);
+        let activated = Self::check_activation_from_image(ocr, &image, &scaler, &label);
+        (image, activated)
+    }
+
+    /// Phase-2 constellation fallback: click along C2 → C1 / C6 → C3 → C4 → C5.
+    /// Must already be on the constellation tab. Dismisses the popup with Escape.
+    fn resolve_constellation_click_tree(
+        ctrl: &mut GenshinGameController,
+        ocr: &dyn ImageToText<RgbImage>,
+        tab_delay: u64,
+    ) -> (i32, Vec<(usize, RgbImage, bool)>) {
+        let first_delay = tab_delay * 3 / 4;
+        let next_delay = tab_delay / 2;
+        let mut active = [false; 6];
+        let mut probes = Vec::new();
+
+        let mut probe = |ctrl: &mut GenshinGameController, index: usize, delay_ms: u64| {
+            if ctrl.check_rmb() {
+                return false;
+            }
+            let (image, activated) = Self::probe_constellation_node(ctrl, ocr, index, delay_ms);
+            probes.push((index, image, activated));
+            activated
+        };
+
+        active[1] = probe(ctrl, 1, first_delay);
+        if !active[1] {
+            active[0] = probe(ctrl, 0, next_delay);
+        } else {
+            active[5] = probe(ctrl, 5, next_delay);
+            if !active[5] {
+                active[2] = probe(ctrl, 2, next_delay);
+                if active[2] {
+                    active[3] = probe(ctrl, 3, next_delay);
+                    if active[3] {
+                        active[4] = probe(ctrl, 4, next_delay);
+                    }
+                }
+            }
+        }
+
+        ctrl.key_press(enigo::Key::Escape);
+        utils::sleep(tab_delay as u32);
+
+        (
+            crate::scanner::common::pixel_utils::constellation_level_from_tree(active),
+            probes,
+        )
     }
 
     /// OCR talent level from a talent detail-view capture.
@@ -1007,7 +1089,8 @@ impl GoodCharacterScanner {
         }
 
         let ocr = ocr_pool.get();
-        let (level, ascended, _) = Self::read_level_from_image(&ocr, &attrs_image, scaler);
+        let (level, ascended, raw_level) = Self::read_level_from_image(&ocr, &attrs_image, scaler);
+        let level_ocr_failed = raw_level.trim().is_empty();
 
         if Self::is_level_suspicious(level, ascended) {
             log_debug!(
@@ -1019,12 +1102,14 @@ impl GoodCharacterScanner {
         }
 
         // -- Constellation image: pixel detection (no fallback) --
+        let mut constellation_non_monotonic = false;
         let constellation = if let Some(ref const_image) = constellation_image {
             annotator::add_image("constellation", const_image);
             let result = crate::scanner::common::pixel_utils::detect_constellation_pixel(
                 const_image,
                 scaler,
             );
+            constellation_non_monotonic = !result.monotonic;
             if !result.monotonic {
                 log_debug!(
                     "[constellation] 像素非单调 {}，将在第二轮重新扫描",
@@ -1120,6 +1205,8 @@ impl GoodCharacterScanner {
             talent_suspicious,
             raw_skill: skill,
             raw_burst: burst,
+            level_ocr_failed,
+            constellation_non_monotonic,
         };
 
         CharacterResult::Scanned {
@@ -1131,7 +1218,9 @@ impl GoodCharacterScanner {
 
     /// Process Phase 2 rescan captures on the worker thread.
     ///
-    /// Uses OCR constellation fallback as truth and click talent fallback as truth.
+    /// Constellation: click-tree result if phase 1 pixels were invalid,
+    /// otherwise the recaptured-tab pixel prefix. Talent details are used
+    /// only when the overview disagrees with phase 1.
     fn process_rescan_captures(
         &self,
         captures: RescanCaptures,
@@ -1144,7 +1233,8 @@ impl GoodCharacterScanner {
             old,
             attrs_image,
             constellation_tab_image,
-            constellation_node_images,
+            constellation_click_level,
+            constellation_click_probes,
             talent_overview_image,
             talent_detail_images,
         } = captures;
@@ -1159,43 +1249,34 @@ impl GoodCharacterScanner {
         let (new_level, new_ascended, _) = Self::read_level_from_image(&ocr, &attrs_image, scaler);
         let new_ascension = level_to_ascension(new_level, new_ascended);
 
-        // -- Constellation: pixel (primary) --
+        // -- Constellation: click tree if phase 1 pixels were invalid;
+        // otherwise re-read the recaptured tab with the same all-6 prefix. --
         annotator::add_image("constellation_tab", &constellation_tab_image);
+        for (index, image, activated) in &constellation_click_probes {
+            let label = format!("constellation_c{}", index + 1);
+            annotator::add_image(&label, image);
+            annotator::set_final(&label, if *activated { "activated" } else { "locked" });
+        }
         let pixel_result = crate::scanner::common::pixel_utils::detect_constellation_pixel(
             &constellation_tab_image,
             scaler,
         );
-
-        // -- Constellation: OCR fallback only when the main thread decided to
-        // click the nodes (empty `constellation_node_images` = main trusted the
-        // pixel read because it was monotonic, so we trust it too). --
         let skip_constellation = NO_CONSTELLATION_CHARACTERS.contains(&name.as_str());
         let new_constellation = if skip_constellation {
             0
-        } else if constellation_node_images.is_empty() {
-            pixel_result.level
-        } else {
-            let mut ocr_count = 0;
-            for (i, node_image) in constellation_node_images.iter().enumerate() {
-                let label = format!("constellation_c{}", i + 1);
-                let activated = Self::check_activation_from_image(&ocr, node_image, scaler, &label);
-                if activated {
-                    ocr_count = i as i32 + 1;
-                } else {
-                    break;
-                }
-            }
-
-            if pixel_result.level != ocr_count {
+        } else if let Some(clicked) = constellation_click_level {
+            if clicked != pixel_result.level {
                 log_info!(
-                    "[constellation] 验证 {}: 像素=C{} OCR=C{} → 使用OCR结果",
-                    "[constellation] verify {}: pixel=C{} OCR=C{} → using OCR result",
+                    "[constellation] 验证 {}: 像素=C{} 点击树=C{} → 使用点击树",
+                    "[constellation] verify {}: pixel=C{} click-tree=C{} → using click tree",
                     name,
                     pixel_result.level,
-                    ocr_count
+                    clicked
                 );
             }
-            ocr_count
+            clicked
+        } else {
+            pixel_result.level
         };
 
         // -- Talents: overview (primary) --
@@ -1377,9 +1458,9 @@ impl GoodCharacterScanner {
     /// tab sequence (attrs → constellation → talents → attrs); worker thread
     /// processes with OCR + pixel detection (no fallbacks).
     ///
-    /// **Phase 2 (rescan)**: For suspicious characters only, main thread captures
-    /// all fallback images (6 constellation nodes + 3 talent details); worker
-    /// processes with OCR fallback as truth.
+    /// **Phase 2 (rescan)**: For suspicious characters only. Invalid
+    /// constellation pixels are resolved by the C2 click tree (not C1..C6).
+    /// Talent details are captured when the overview disagrees with phase 1.
     pub fn scan(
         &self,
         ctrl: &mut GenshinGameController,
@@ -1590,8 +1671,7 @@ impl GoodCharacterScanner {
                             ctrl.click_at(CHAR_TAB_ATTRIBUTES.0, CHAR_TAB_ATTRIBUTES.1);
                             utils::sleep((self.config.tab_delay / 2) as u32);
                         }
-                        ctrl.click_at(CHAR_NEXT_POS.0, CHAR_NEXT_POS.1);
-                        utils::sleep(self.config.next_delay as u32);
+                        click_character_ui(ctrl, CHAR_NEXT_POS, self.config.next_delay);
                         // Don't alternate on failure — stay with the same direction
                         // so the next character starts on a known tab (attrs).
                         reverse = false;
@@ -1655,13 +1735,11 @@ impl GoodCharacterScanner {
                 constellation_image = if skip_constellation {
                     None
                 } else {
-                    ctrl.click_at(CHAR_TAB_CONSTELLATION.0, CHAR_TAB_CONSTELLATION.1);
-                    utils::sleep(self.config.tab_delay as u32);
+                    click_character_ui(ctrl, CHAR_TAB_CONSTELLATION, self.config.tab_delay);
                     Some(ctrl.capture_game()?)
                 };
 
-                ctrl.click_at(CHAR_TAB_TALENTS.0, CHAR_TAB_TALENTS.1);
-                utils::sleep(self.config.tab_delay as u32);
+                click_character_ui(ctrl, CHAR_TAB_TALENTS, self.config.tab_delay);
                 talents_image = ctrl.capture_game()?;
                 // End on talents tab → next iteration will be reverse
             } else {
@@ -1671,13 +1749,11 @@ impl GoodCharacterScanner {
                 constellation_image = if skip_constellation {
                     None
                 } else {
-                    ctrl.click_at(CHAR_TAB_CONSTELLATION.0, CHAR_TAB_CONSTELLATION.1);
-                    utils::sleep(self.config.tab_delay as u32);
+                    click_character_ui(ctrl, CHAR_TAB_CONSTELLATION, self.config.tab_delay);
                     Some(ctrl.capture_game()?)
                 };
 
-                ctrl.click_at(CHAR_TAB_ATTRIBUTES.0, CHAR_TAB_ATTRIBUTES.1);
-                utils::sleep(self.config.tab_delay as u32);
+                click_character_ui(ctrl, CHAR_TAB_ATTRIBUTES, self.config.tab_delay);
                 attrs_image = ctrl.capture_game()?;
                 // End on attrs tab → next iteration will be forward
             }
@@ -1702,8 +1778,7 @@ impl GoodCharacterScanner {
             queued_phase1 += 1;
 
             // Navigate to next character
-            ctrl.click_at(CHAR_NEXT_POS.0, CHAR_NEXT_POS.1);
-            utils::sleep(self.config.next_delay as u32);
+            click_character_ui(ctrl, CHAR_NEXT_POS, self.config.next_delay);
             viewed_count += 1;
             reverse = !reverse;
 
@@ -1833,6 +1908,7 @@ impl GoodCharacterScanner {
                 &work_tx,
                 &result_rx,
                 &mut characters,
+                &scan_metas,
                 &suspicious,
             );
         }
@@ -1961,7 +2037,7 @@ impl GoodCharacterScanner {
     }
 
     /// Phase 2: reopen character screen, navigate to each suspicious character,
-    /// capture all fallback images, and send to worker for processing.
+    /// capture fallback images, and send to worker for processing.
     #[allow(unused_assignments)]
     fn run_phase2(
         &self,
@@ -1970,6 +2046,7 @@ impl GoodCharacterScanner {
         work_tx: &crossbeam_channel::Sender<CharacterWork>,
         result_rx: &crossbeam_channel::Receiver<CharacterResult>,
         characters: &mut Vec<GoodCharacter>,
+        scan_metas: &[ScanMeta],
         suspicious: &[(usize, usize)], // (char_index, viewed_index)
     ) {
         // Return to main world and reopen character screen
@@ -2040,7 +2117,6 @@ impl GoodCharacterScanner {
 
             let old = characters[char_idx].clone();
             let name = old.key.clone();
-            let skip_constellation = NO_CONSTELLATION_CHARACTERS.contains(&name.as_str());
             let has_special = SPECIAL_BURST_CHARACTERS.contains(&name.as_str());
 
             // 1. Capture attributes.
@@ -2058,8 +2134,7 @@ impl GoodCharacterScanner {
             };
 
             // 2. Talents first: click tab, capture overview.
-            ctrl.click_at(CHAR_TAB_TALENTS.0, CHAR_TAB_TALENTS.1);
-            utils::sleep(td as u32);
+            click_character_ui(ctrl, CHAR_TAB_TALENTS, td);
             let talent_overview_image = ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
 
             // 3. OCR the overview on the main thread. Acquire a v4 guard for the
@@ -2154,62 +2229,47 @@ impl GoodCharacterScanner {
                 );
             }
 
-            // 5. Constellation tab capture.
-            ctrl.click_at(CHAR_TAB_CONSTELLATION.0, CHAR_TAB_CONSTELLATION.1);
-            utils::sleep(td as u32);
+            // 5. Constellation tab. Pixel recapture always; click tree only
+            // when phase-1 pixels were non-monotonic.
+            click_character_ui(ctrl, CHAR_TAB_CONSTELLATION, td);
             let constellation_tab_image =
                 ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1));
 
-            // 6. Pixel detection on the tab image. Monotonic = clean, trust it;
-            // only click nodes if the pattern is ambiguous (non-monotonic) OR
-            // the character has no constellations (then there's nothing to click
-            // either way, so skip regardless).
-            let mut constellation_node_images = Vec::new();
-            if !skip_constellation {
-                let pixel_check = crate::scanner::common::pixel_utils::detect_constellation_pixel(
-                    &constellation_tab_image,
-                    &ctrl.scaler,
-                );
-                if pixel_check.monotonic {
-                    log_debug!(
-                        "[constellation] 第二轮 {}: 像素单调 C{} → 跳过节点点击",
-                        "[constellation] pass2 {}: pixel monotonic C{} → skipping node clicks",
-                        name,
-                        pixel_check.level,
-                    );
+            let skip_constellation = NO_CONSTELLATION_CHARACTERS.contains(&name.as_str());
+            let pixel_invalid = scan_metas
+                .get(char_idx)
+                .map(|m| m.constellation_non_monotonic)
+                .unwrap_or(false);
+            let (constellation_click_level, constellation_click_probes) =
+                if skip_constellation || !pixel_invalid {
+                    (None, Vec::new())
                 } else {
                     log_debug!(
-                        "[constellation] 第二轮 {}: 像素非单调 → 点击每个节点",
-                        "[constellation] pass2 {}: pixel non-monotonic → clicking each node",
+                        "[constellation] 第二轮 {}: 像素非单调 → C2 点击树",
+                        "[constellation] pass2 {}: pixel non-monotonic → C2 click tree",
                         name,
                     );
-                    for ci in 0..6 {
-                        let click_y =
-                            CHAR_CONSTELLATION_Y_BASE + ci as f64 * CHAR_CONSTELLATION_Y_STEP;
-                        ctrl.click_at(CHAR_CONSTELLATION_X, click_y);
-                        let delay = if ci == 0 { td * 3 / 4 } else { td / 2 };
-                        utils::sleep(delay as u32);
-                        constellation_node_images
-                            .push(ctrl.capture_game().unwrap_or_else(|_| RgbImage::new(1, 1)));
-                    }
-                    // Dismiss constellation popup.
-                    ctrl.key_press(enigo::Key::Escape);
-                    utils::sleep(td as u32);
-                }
-            }
+                    let ocr = ocr_pool.get();
+                    let (level, probes) = Self::resolve_constellation_click_tree(
+                        ctrl,
+                        &ocr as &dyn ImageToText<RgbImage>,
+                        td,
+                    );
+                    (Some(level), probes)
+                };
 
-            // 7. Return to attributes tab.
-            ctrl.click_at(CHAR_TAB_ATTRIBUTES.0, CHAR_TAB_ATTRIBUTES.1);
-            utils::sleep((td / 2) as u32);
+            // 6. Return to attributes tab.
+            click_character_ui(ctrl, CHAR_TAB_ATTRIBUTES, td / 2);
 
-            // 8. Send to worker.
+            // 7. Send to worker.
             let rescan = RescanCaptures {
                 char_index: char_idx,
                 name,
                 old,
                 attrs_image,
                 constellation_tab_image,
-                constellation_node_images,
+                constellation_click_level,
+                constellation_click_probes,
                 talent_overview_image,
                 talent_detail_images,
             };

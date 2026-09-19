@@ -1586,27 +1586,41 @@ impl GoodArtifactScanner {
             )?;
             count
         } else {
-            // Already in backpack — just select tab and read count
-            {
-                let mut bp = BackpackScanner::new(ctrl);
-                bp.select_tab("artifact", self.config.delay_tab);
+            // Already in backpack — select the artifact tab and read count.
+            // Retry once on a zero or unreadable header; skip-open used to
+            // fail the whole scan on a single over-cap or OCR glitch.
+            match backpack_scanner::select_tab_and_read_count(
+                ctrl,
+                "artifact",
+                self.config.delay_tab,
+                &count_ocr_guard,
+                self.config.keep_five_star_filter,
+                self.config.dump_images,
+            ) {
+                Ok((count, _)) if count > 0 => count,
+                first => {
+                    match &first {
+                        Ok(_) => log_info!(
+                            "[artifact] 数量=0，重新选择标签后重试...",
+                            "[artifact] count=0, reselecting tab before retrying..."
+                        ),
+                        Err(e) => log_warn!(
+                            "[artifact] 首次物品数量读取失败，重新选择标签后重试: {}",
+                            "[artifact] first item-count read failed; reselecting tab before retrying: {}",
+                            e
+                        ),
+                    }
+                    backpack_scanner::select_tab_and_read_count(
+                        ctrl,
+                        "artifact",
+                        self.config.delay_tab,
+                        &count_ocr_guard,
+                        self.config.keep_five_star_filter,
+                        self.config.dump_images,
+                    )?
+                    .0
+                },
             }
-            if self.config.keep_five_star_filter {
-                backpack_scanner::ensure_five_star_filter_active(
-                    ctrl,
-                    self.config.delay_tab,
-                    self.config.dump_images,
-                );
-            } else {
-                backpack_scanner::dismiss_five_star_filter(
-                    ctrl,
-                    self.config.delay_tab,
-                    self.config.dump_images,
-                );
-            }
-            let bp = BackpackScanner::new(ctrl);
-            let (count, _) = bp.read_item_count(&count_ocr_guard)?;
-            count
         };
 
         // Return count OCR model to pool before scan loop

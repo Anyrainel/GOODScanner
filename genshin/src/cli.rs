@@ -1583,7 +1583,7 @@ pub fn run_scan_core(
         ScanRunOptions {
             save_on_cancel,
             accept_cancelled_success: true,
-            failure_policy: ScanFailurePolicy::StopOnError,
+            failure_policy: ScanFailurePolicy::ContinueOnError,
         },
     )?;
 

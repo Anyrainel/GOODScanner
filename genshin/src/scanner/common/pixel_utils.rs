@@ -666,73 +666,115 @@ pub struct ConstellationResult {
     pub nodes: [ConstellationNodeInfo; 6],
 }
 
-/// Detect constellation level from the constellation sidebar screenshot using pixel brightness.
-///
-/// Checks all 6 icon positions with per-position thresholds, then enforces
-/// monotonicity (constellations are always contiguous from C1).
-/// Constellation = index of first locked node.
-///
-/// Accuracy: 100% on 109 test characters (min gap=+55.4, d'=7.14).
-pub fn detect_constellation_pixel(image: &RgbImage, scaler: &CoordScaler) -> ConstellationResult {
-    use super::constants::{CONSTELLATION_NODES, CONSTELLATION_THRESHOLDS};
+struct ConstellationSamples {
+    brightnesses: [f64; 6],
+    active: [bool; 6],
+}
 
-    let mut brightnesses = [0.0_f64; 6];
-    for ci in 0..6 {
-        brightnesses[ci] = sample_constellation_brightness(image, scaler, ci);
+fn sample_all_constellation_nodes(image: &RgbImage, scaler: &CoordScaler) -> ConstellationSamples {
+    use super::constants::CONSTELLATION_THRESHOLDS;
+
+    let brightnesses = std::array::from_fn(|ci| sample_constellation_brightness(image, scaler, ci));
+    let active = std::array::from_fn(|ci| brightnesses[ci] >= CONSTELLATION_THRESHOLDS[ci]);
+    ConstellationSamples {
+        brightnesses,
+        active,
     }
+}
 
-    // Per-position threshold check
-    let active: [bool; 6] =
-        std::array::from_fn(|ci| brightnesses[ci] >= CONSTELLATION_THRESHOLDS[ci]);
-
-    // Monotonicity: constellation = first locked position
+/// Phase 1: constellation = length of the leading ON prefix.
+/// `monotonic` is false when any later node is ON (a gap).
+fn constellation_level_from_prefix(active: [bool; 6]) -> (i32, bool) {
     let mut constellation = 0;
-    for ci in 0..6 {
-        if active[ci] {
+    for (ci, on) in active.iter().enumerate() {
+        if *on {
             constellation = ci as i32 + 1;
         } else {
             break;
         }
     }
+    let monotonic = active
+        .iter()
+        .enumerate()
+        .all(|(ci, on)| *on == (ci < constellation as usize));
+    (constellation, monotonic)
+}
 
-    // Check for non-monotonic pattern (A-L-A) which would indicate a detection error
-    let mut non_monotonic = false;
-    for ci in (constellation as usize)..6 {
-        if active[ci] {
-            non_monotonic = true;
-            break;
+/// Phase 2 click tree: C2 → C1 / C6 → C3 → C4 → C5.
+/// Unsampled nodes must stay false (the live click path only probes the
+/// branch it takes).
+pub(crate) fn constellation_level_from_tree(active: [bool; 6]) -> i32 {
+    if !active[1] {
+        if active[0] {
+            1
+        } else {
+            0
         }
+    } else if active[5] {
+        6
+    } else if !active[2] {
+        2
+    } else if !active[3] {
+        3
+    } else if active[4] {
+        5
+    } else {
+        4
     }
+}
 
-    if non_monotonic {
-        let det_str: String = active.iter().map(|&a| if a { 'A' } else { 'L' }).collect();
+fn constellation_result_from_samples(
+    samples: ConstellationSamples,
+    level: i32,
+    monotonic: bool,
+) -> ConstellationResult {
+    use super::constants::CONSTELLATION_NODES;
+    use super::constants::CONSTELLATION_THRESHOLDS;
+
+    if !monotonic {
+        let det_str: String = samples
+            .active
+            .iter()
+            .map(|&a| if a { 'A' } else { 'L' })
+            .collect();
         log_debug!(
             "[constellation-pixel] 非单调: [{}] br=[{:.0},{:.0},{:.0},{:.0},{:.0},{:.0}] → C{}",
             "[constellation-pixel] NON-MONOTONIC: [{}] br=[{:.0},{:.0},{:.0},{:.0},{:.0},{:.0}] → C{}",
             det_str,
-            brightnesses[0], brightnesses[1], brightnesses[2],
-            brightnesses[3], brightnesses[4], brightnesses[5],
-            constellation
+            samples.brightnesses[0],
+            samples.brightnesses[1],
+            samples.brightnesses[2],
+            samples.brightnesses[3],
+            samples.brightnesses[4],
+            samples.brightnesses[5],
+            level
         );
     }
 
     let nodes = std::array::from_fn(|ci| ConstellationNodeInfo {
         pos: CONSTELLATION_NODES[ci],
-        brightness: brightnesses[ci],
+        brightness: samples.brightnesses[ci],
         threshold: CONSTELLATION_THRESHOLDS[ci],
-        activated: active[ci],
+        activated: samples.active[ci],
     });
 
     let result = ConstellationResult {
-        level: constellation,
-        monotonic: !non_monotonic,
+        level,
+        monotonic,
         nodes,
     };
-
-    // Record to annotator as side effect (no-op if annotation disabled)
     super::annotator::record_constellation(&result);
-
     result
+}
+
+/// Phase 1 constellation detection: sample all 6 rings from one capture.
+///
+/// Level is the leading ON prefix. A later ON node is non-monotonic and
+/// should be resolved by the phase-2 click tree.
+pub fn detect_constellation_pixel(image: &RgbImage, scaler: &CoordScaler) -> ConstellationResult {
+    let samples = sample_all_constellation_nodes(image, scaler);
+    let (level, monotonic) = constellation_level_from_prefix(samples.active);
+    constellation_result_from_samples(samples, level, monotonic)
 }
 
 #[cfg(test)]
@@ -904,5 +946,50 @@ mod tests {
         set_pixel(&mut image, 1683, 468, mid);
         set_pixel(&mut image, 1768, 468, mid);
         assert!(is_artifact_lock_ambiguous(&image, &scaler, 40.0));
+    }
+
+    #[test]
+    fn five_star_filter_samples_the_toggle_knob() {
+        let mut image = make_1080p_image();
+        let scaler = make_1080p_scaler();
+        // Dark gutter at the old probe, bright ON knob at the current probe.
+        set_pixel(&mut image, 1248, 140, [53, 61, 79]);
+        set_pixel(&mut image, 1228, 135, [236, 229, 216]);
+        assert!(is_five_star_filter_active(&image, &scaler));
+
+        set_pixel(&mut image, 1228, 135, [53, 61, 79]);
+        assert!(!is_five_star_filter_active(&image, &scaler));
+    }
+
+    #[test]
+    fn constellation_phase1_prefix_flags_gaps() {
+        fn on(n: usize) -> [bool; 6] {
+            std::array::from_fn(|i| i < n)
+        }
+        for n in 0..=6 {
+            assert_eq!(constellation_level_from_prefix(on(n)), (n as i32, true));
+        }
+        // C1 on, C2 off, C3 on — phase 1 keeps the prefix and flags the gap.
+        let gapped = [true, false, true, false, false, false];
+        assert_eq!(constellation_level_from_prefix(gapped), (1, false));
+    }
+
+    #[test]
+    fn constellation_phase2_tree_follows_c2_c1_c6_c3_c4_c5() {
+        fn on(n: usize) -> [bool; 6] {
+            std::array::from_fn(|i| i < n)
+        }
+        assert_eq!(constellation_level_from_tree(on(0)), 0);
+        assert_eq!(constellation_level_from_tree(on(1)), 1);
+        assert_eq!(constellation_level_from_tree(on(2)), 2);
+        assert_eq!(constellation_level_from_tree(on(3)), 3);
+        assert_eq!(constellation_level_from_tree(on(4)), 4);
+        assert_eq!(constellation_level_from_tree(on(5)), 5);
+        assert_eq!(constellation_level_from_tree(on(6)), 6);
+        // C2 and C6 on with a dark C1: phase 1 would be C0+gap; the tree yields C6.
+        assert_eq!(
+            constellation_level_from_tree([false, true, false, false, false, true]),
+            6
+        );
     }
 }
