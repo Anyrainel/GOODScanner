@@ -8,12 +8,24 @@
 use std::{
     collections::{BTreeSet, HashMap},
     future::Future,
+    panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use crate::network::{GamePacket, GameSniffer};
-use crate::{model::ObservationSnapshot, reference::ReferenceCache};
+use crate::{
+    model::{
+        CoverageLevel, EvidenceKind, HsrInventoryExport, InventoryCoverage, ObservationEvidence,
+        ObservationSnapshot, OBSERVATION_SCHEMA_VERSION,
+    },
+    observation::ValidatedObservationSnapshot,
+    pipeline::{
+        build_achievement_snapshot, build_export, build_export_with_achievements,
+        write_json_create_new,
+    },
+    reference::ReferenceCache,
+};
 use base64::prelude::*;
 use futures::{stream::FusedStream, StreamExt};
 use inventory::InventoryDecoder;
@@ -39,6 +51,7 @@ pub const HSR_CAPTURE_REVISION: &str = "reliquary-shape-4.5-v1";
 
 /// HSR's two UDP gateway ports. Kept public for build-time regression tests.
 pub const HSR_PACKET_PORTS: [u16; 2] = [23301, 23302];
+const CAPTURE_TIMEOUT_SECS: u64 = 300;
 
 const CAPTURE_HINT: LocalizedText = LocalizedText::new(
     "无法读取 HSR 网络数据。请确认程序以管理员身份运行，然后重新抓包。",
@@ -149,6 +162,9 @@ impl HsrPacketDecoder {
 
     /// Full packet replay and live capture use exactly the same transport.
     pub fn receive_packet(&mut self, packet: Vec<u8>) -> HsrResult<()> {
+        if let Some(dump) = &mut self.packet_dump {
+            dump.write_raw(&packet)?;
+        }
         self.state.packet_count += 1;
         let packets = match self.sniffer.receive_packet(packet) {
             Ok(packets) => packets,
@@ -270,6 +286,111 @@ pub struct HsrCaptureState {
     pub error: Option<HsrError>,
 }
 
+impl HsrCaptureState {
+    /// Build the internal GGStarRail v3 export. Capture GUI writes HSR-Scanner v4 instead.
+    pub fn build_export(&self, references: &ReferenceCache) -> HsrResult<HsrInventoryExport> {
+        if !self.complete {
+            return Err(HsrError::new(
+                "HSR-CAPTURE-EXPORT-INCOMPLETE",
+                LocalizedText::new(
+                    "抓包尚未完成，无法导出。",
+                    "Capture is not complete, so nothing can be exported.",
+                ),
+                "build_export requires a complete capture",
+            ));
+        }
+        let inventory = self.inventory.clone().ok_or_else(|| {
+            HsrError::new(
+                "HSR-CAPTURE-EXPORT-EMPTY",
+                LocalizedText::new(
+                    "库存数据缺失，请重新抓包。",
+                    "Inventory data is missing. Capture again.",
+                ),
+                "completed capture has no inventory snapshot",
+            )
+        })?;
+        let observations = ValidatedObservationSnapshot::from_packet_capture(inventory)?;
+        if self.has_achievements {
+            let achievements = build_achievement_snapshot(
+                self.completed_ids.iter().copied(),
+                HSR_CAPTURE_REVISION,
+                references,
+            )?;
+            build_export_with_achievements(observations, achievements, references)
+        } else {
+            build_export(observations, references)
+        }
+    }
+
+    /// Single HSR-Scanner v4 JSON, including optional achievement and Trailblazer extensions.
+    pub fn build_scanner_export(
+        &self,
+        references: &ReferenceCache,
+    ) -> HsrResult<serde_json::Value> {
+        if !self.complete {
+            return Err(HsrError::new(
+                "HSR-CAPTURE-EXPORT-INCOMPLETE",
+                LocalizedText::new(
+                    "抓包尚未完成，无法导出。",
+                    "Capture is not complete, so nothing can be exported.",
+                ),
+                "build_scanner_export requires a complete capture",
+            ));
+        }
+        let owned;
+        let inventory = match self.inventory.as_ref() {
+            Some(snapshot) => snapshot,
+            None => {
+                owned = empty_capture_snapshot();
+                &owned
+            },
+        };
+        crate::scanner_export::build_scanner_export(
+            inventory,
+            references,
+            &self.export_details,
+            self.has_achievements
+                .then_some(self.completed_ids.as_slice()),
+        )
+    }
+
+    /// Write one HSR-Scanner v4 JSON. Returns that path.
+    pub fn write_interop_exports(
+        &self,
+        dir: &std::path::Path,
+        references: &ReferenceCache,
+        suffix: &str,
+    ) -> HsrResult<std::path::PathBuf> {
+        std::fs::create_dir_all(dir).map_err(|error| {
+            HsrError::write_failed(
+                "HSR-CAPTURE-EXPORT-DIR",
+                format!("dir={}; cause={error}", dir.display()),
+            )
+        })?;
+        let path = dir.join(format!("star_rail_export{suffix}.json"));
+        write_json_create_new(&path, &self.build_scanner_export(references)?)?;
+        Ok(path)
+    }
+}
+
+fn empty_capture_snapshot() -> ObservationSnapshot {
+    ObservationSnapshot {
+        schema_version: OBSERVATION_SCHEMA_VERSION,
+        evidence: ObservationEvidence {
+            kind: EvidenceKind::PacketCapture,
+            revision: HSR_CAPTURE_REVISION.to_owned(),
+            coverage: InventoryCoverage {
+                characters: CoverageLevel::Unknown,
+                light_cones: CoverageLevel::Unknown,
+                relics: CoverageLevel::Unknown,
+            },
+        },
+        characters: vec![],
+        light_cones: vec![],
+        gear: vec![],
+    }
+}
+
 /// Cancelable capture monitor. Constructing it does not access a native
 /// capture device; the device opens only after [`StartCapture`](HsrCaptureCommand::StartCapture).
 pub struct HsrCaptureMonitor {
@@ -351,6 +472,12 @@ impl HsrCaptureMonitor {
         }
 
         self.decoder.reset();
+        if let Some(dump) = &mut self.decoder.packet_dump {
+            if let Err(error) = dump.ensure_session() {
+                self.fail(error);
+                return;
+            }
+        }
         self.started = Some(tokio::time::Instant::now());
         if let Ok(mut state) = self.state.lock() {
             *state = HsrCaptureState {
@@ -381,8 +508,8 @@ impl HsrCaptureMonitor {
         if self.started.is_none() {
             return;
         }
-        match self.decoder.receive_packet(packet) {
-            Ok(()) => {
+        match catch_unwind(AssertUnwindSafe(|| self.decoder.receive_packet(packet))) {
+            Ok(Ok(())) => {
                 let mut snapshot = self.decoder.state().clone();
                 snapshot.capturing = !snapshot.complete;
                 if snapshot.complete {
@@ -392,17 +519,22 @@ impl HsrCaptureMonitor {
                     *state = snapshot;
                 }
             },
-            Err(error) => self.fail(error),
+            Ok(Err(error)) => self.fail(error),
+            Err(_) => self.fail(HsrError::new(
+                "HSR-CAPTURE-KCP",
+                WORKER_HINT,
+                "kcp decoder panicked while reading a captured packet",
+            )),
         }
     }
 
     fn check_timeout(&mut self) {
         if self
             .started
-            .is_some_and(|start| start.elapsed().as_secs() >= 120)
+            .is_some_and(|start| start.elapsed().as_secs() >= CAPTURE_TIMEOUT_SECS)
         {
             let state = self.decoder.state();
-            let detail = format!("capture timed out after 120 seconds; packets={}; decryptedCommands={}; characters={}; lightCones={}; relics={}; achievements={}; lastTransportError={}",
+            let detail = format!("capture timed out after {CAPTURE_TIMEOUT_SECS} seconds; packets={}; decryptedCommands={}; characters={}; lightCones={}; relics={}; achievements={}; lastTransportError={}",
                 state.packet_count, state.command_count, state.character_count, state.light_cone_count,
                 state.relic_count, state.achievement_count, state.last_transport_error.as_deref().unwrap_or("none"));
             let hint = if state.packet_count == 0 {
@@ -690,7 +822,9 @@ mod tests {
         monitor.decoder.state.packet_count = 12;
         monitor.decoder.state.last_transport_error =
             Some("decryption key is missing for command".to_owned());
-        monitor.started = Some(tokio::time::Instant::now() - std::time::Duration::from_secs(121));
+        monitor.started = Some(
+            tokio::time::Instant::now() - std::time::Duration::from_secs(CAPTURE_TIMEOUT_SECS + 1),
+        );
         monitor.check_timeout();
         let state = state.lock().unwrap();
         assert!(!state.capturing);

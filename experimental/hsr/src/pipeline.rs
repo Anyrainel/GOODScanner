@@ -113,10 +113,10 @@ pub fn build_achievement_only_export(
     })
 }
 
-/// Serialize a v3 export without overwriting an existing path. A failed write
+/// Serialize JSON without overwriting an existing path. A failed write
 /// makes a best effort to remove the newly-created partial file.
-pub fn write_export_create_new(path: &Path, export: &HsrInventoryExport) -> HsrResult<()> {
-    let output = serde_json::to_vec_pretty(export).map_err(|error| {
+pub fn write_json_create_new(path: &Path, value: &impl serde::Serialize) -> HsrResult<()> {
+    let output = serde_json::to_vec_pretty(value).map_err(|error| {
         HsrError::write_failed(
             "HSR-EXPORT-JSON",
             format!("serialization failed; cause={error}"),
@@ -149,6 +149,11 @@ pub fn write_export_create_new(path: &Path, export: &HsrInventoryExport) -> HsrR
         ));
     }
     Ok(())
+}
+
+/// Serialize a GGStarRail companion export without overwriting an existing path.
+pub fn write_export_create_new(path: &Path, export: &HsrInventoryExport) -> HsrResult<()> {
+    write_json_create_new(path, export)
 }
 
 fn build_inventory_export(

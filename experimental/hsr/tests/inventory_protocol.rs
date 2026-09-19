@@ -90,6 +90,7 @@ fn trailblazer_path_uses_base_progression() {
     .unwrap();
     let base = Avatar {
         base_avatar_id: 8001,
+        cur_multi_path_avatar_type: 8005,
         level: 70,
         promotion: 5,
         first_met_time_stamp: 1_700_000_000,
@@ -113,7 +114,8 @@ fn trailblazer_path_uses_base_progression() {
     drop(out);
     decoder.receive_command(&bytes).unwrap();
     decoder.receive_command(&bag(6, 7)).unwrap();
-    let character = &decoder.state().inventory.as_ref().unwrap().characters[0];
+    let state = decoder.state();
+    let character = &state.inventory.as_ref().unwrap().characters[0];
     assert_eq!(
         (
             character.character_id,
@@ -123,6 +125,16 @@ fn trailblazer_path_uses_base_progression() {
         ),
         (8005, 70, 5, 4)
     );
+    let common = hsr_scanner::scanner_export::build_scanner_export(
+        state.inventory.as_ref().unwrap(),
+        &load_embedded_gilore_reference().unwrap(),
+        &state.export_details,
+        Some(&[4010101]),
+    )
+    .unwrap();
+    assert_eq!(common["metadata"]["trailblazer"], "Caelus");
+    assert_eq!(common["metadata"]["current_trailblazer_path"], "Harmony");
+    assert_eq!(common["achievements"], serde_json::json!([4010101]));
 }
 
 fn bag(tag: u32, relic_tag: u32) -> Vec<u8> {
@@ -386,8 +398,10 @@ fn common_export_preserves_selected_capture_records_and_character_progression() 
         state.inventory.as_ref().unwrap(),
         &refs,
         &state.export_details,
+        None,
     )
     .unwrap();
+    assert!(common.get("achievements").is_none());
     assert_eq!(common["characters"][0]["skills"]["basic"], 6);
     assert_eq!(common["characters"][0]["ability_version"], 0);
     assert_eq!(common["light_cones"][0]["location"], "1001");
@@ -435,6 +449,7 @@ fn collaboration_roster_and_equipment_export_with_embedded_references() {
                 &snapshot,
                 &refs,
                 &state.export_details,
+                None,
             )
             .unwrap();
             assert_eq!(common["characters"][0]["id"], id.to_string());

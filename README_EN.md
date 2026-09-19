@@ -6,7 +6,7 @@
 
 Windows scanner, capture, and manager for Genshin Impact and Honkai: Star Rail, based on [yas](https://github.com/wormtql/yas)
 
-The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data remains compatible [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc); Star Rail data uses the `goodscanner.hsr` v3 contract for GGStarRail.
+The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data remains compatible [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc); Star Rail capture writes [HSR-Scanner v4](docs/HSR_EXPORT.md) (the Fribbels / Reliquary interchange, plus achievement and Trailblazer gender/path extensions).
 
 [![Build](https://github.com/Anyrainel/GOODScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GOODScanner/actions)
 
@@ -18,7 +18,7 @@ The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data 
 - **Genshin scanning and capture**: existing Character, Weapon, Artifact, and GOOD v3 export behavior remains compatible
 - **Genshin achievement capture**: GOODCapture exports the account's completed achievement IDs by default
 - **Star Rail scanning**: Characters, Light Cones, Cavern Relics, and Planar Ornaments
-- **Star Rail export and manager**: `goodscanner.hsr` v3 export plus attended Relic management preview and confirmation-protected reversible actions
+- **Star Rail export and manager**: capture writes [HSR-Scanner v4](docs/HSR_EXPORT.md); OCR scanning and Relic management still use `goodscanner.hsr` v3
 - **Star Rail achievement capture**: GOODCapture captures completed achievements in process; no separate HSR application or packet-capture helper download is required
 - **Dual-engine OCR**: PPOCRv4 (general) + PPOCRv5 (level-specific), automatically picks the best result
 - **Substat validation**: Roll Solver verifies substat combinations against game mechanics
@@ -44,7 +44,7 @@ Genshin continues to store achievements in a backwards-compatible GOOD v3 extens
 
 The field is a compact array of completed achievement IDs. When present, including as an empty array, importers should replace achievement state. When the user disables the Achievements export option, the field is omitted and importers should preserve existing achievement state. Standard GOOD v3 fields and the format version remain unchanged.
 
-Star Rail uses `schema: "goodscanner.hsr"`, `schemaVersion: 3`. Its optional `achievements` snapshot contains only public achievement IDs and the `completed` status. An omitted field means achievements were not observed and importers must preserve existing state. A present snapshot with `coverage: "complete"` is authoritative replacement data; `entries: []` explicitly confirms zero completed achievements. See the [HSR implementation and contract](docs/HSR_EXPERIMENTAL_FEASIBILITY.md).
+Star Rail capture writes [HSR-Scanner v4](docs/HSR_EXPORT.md). Its optional `achievements` field is a compact array of completed IDs. An omitted field means achievements were not observed; a present array, including `[]`, is authoritative replacement data. OCR scanning and Relic management still use `goodscanner.hsr` v3.
 
 ### Usage
 

@@ -8,12 +8,9 @@ use std::{
 
 use eframe::egui;
 use hsr_scanner::{
-    packet_capture::{
-        CaptureTargets, HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState, HSR_CAPTURE_REVISION,
-    },
-    pipeline::{build_achievement_snapshot, build_export, build_export_with_achievements},
+    packet_capture::{CaptureTargets, HsrCaptureCommand, HsrCaptureMonitor, HsrCaptureState},
     reference::ReferenceCache,
-    HsrError, LocalizedText, ValidatedObservationSnapshot,
+    HsrError, LocalizedText,
 };
 
 use crate::config::StarRailSettings;
@@ -253,9 +250,7 @@ impl StarRailCaptureState {
     #[doc(hidden)]
     pub fn completed_export_path_for_test(&self) -> Option<&str> {
         match &self.phase {
-            CapturePhase::Done { path, .. } => {
-                path.split("\n→ ").find(|p| p.contains("star_rail_export_"))
-            },
+            CapturePhase::Done { path, .. } => Some(path.as_str()),
             CapturePhase::Failed(error) => panic!("capture export failed: {error:?}"),
             _ => None,
         }
@@ -388,8 +383,8 @@ pub fn show(
                     });
                 });
             ui.label(lang.t(
-                "库存：Fribbels / HSR-Scanner v4；成就：StarDB。另存 GGStarRail 文件。",
-                "Inventory: Fribbels / HSR-Scanner v4. Achievements: StarDB. A GGStarRail file is also saved."));
+                "导出一份 HSR-Scanner v4 JSON（含成就与开拓者性别/命途扩展）。",
+                "Writes one HSR-Scanner v4 JSON, including achievements and Trailblazer gender/path."));
 
             egui::CollapsingHeader::new(lang.t("使用说明", "How to Use"))
                 .default_open(true)
@@ -833,27 +828,12 @@ fn spawn_export(
         .name("star-rail-export".to_owned())
         .spawn(move || {
             let result = (|| {
-                let inventory = captured.inventory.ok_or_else(|| UiError::from_message(
-                    UiText::new("库存数据缺失，请重新抓包。", "Inventory data is missing. Capture again."),
-                    "completed capture has no inventory snapshot"))?;
-                let scanner = if inventory.evidence.coverage.characters != hsr_scanner::CoverageLevel::Unknown
-                    || inventory.evidence.coverage.light_cones != hsr_scanner::CoverageLevel::Unknown
-                    || inventory.evidence.coverage.relics != hsr_scanner::CoverageLevel::Unknown {
-                    Some(hsr_scanner::scanner_export::build_scanner_export(&inventory, &references, &captured.export_details)
-                        .map_err(|e| star_rail_worker::hsr_ui_error(UiText::new("无法生成通用库存导出。", "Could not build the inventory interchange export."), e))?)
-                } else { None };
-                let observations = ValidatedObservationSnapshot::from_packet_capture(inventory)
-                    .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("库存数据校验失败。", "Inventory validation failed."), error))?;
-                let export = if captured.has_achievements {
-                    build_achievement_snapshot(captured.completed_ids, HSR_CAPTURE_REVISION, &references)
-                        .and_then(|achievements| build_export_with_achievements(observations, achievements, &references))
-                } else { build_export(observations, &references) }
-                .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("无法生成星穹铁道导出文件。", "The Star Rail export could not be built."), error))?;
-                super::star_rail_exports::write_capture_files(&output_dir, &export, scanner.as_ref(), only_latest)
+                let export = captured.build_scanner_export(&references)
+                    .map_err(|error| star_rail_worker::hsr_ui_error(UiText::new("无法生成星穹铁道导出文件。", "The Star Rail export could not be built."), error))?;
+                super::star_rail_exports::write_capture_files(&output_dir, &export, only_latest)
                     .map_err(|e| star_rail_worker::hsr_ui_error(UiText::new(
                         "导出文件保存或旧文件清理失败。请查看完整错误中的文件路径。",
                         "Saving exports or removing older files failed. See the file paths in the full error."), e))
-
             })();
             let _ = sender.send(result);
         })

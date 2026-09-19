@@ -53,13 +53,13 @@ pub fn decode_achievement_command(
 
     let mut decoded = None;
     for entries in groups.values() {
-        let Some(records) = entries
+        // Login GetQuestData-style responses mix public achievements with
+        // quests in one repeated field. Skip entries that are not scalar
+        // records instead of rejecting the whole group.
+        let records = entries
             .iter()
-            .map(|bytes| parse_scalar_record(bytes))
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
+            .filter_map(|bytes| parse_scalar_record(bytes))
+            .collect::<Vec<_>>();
         let Some(candidate) = decode_candidate(&records, known_achievement_ids)? else {
             continue;
         };
@@ -136,9 +136,10 @@ fn decode_candidate(
 
     let mut unknown_ids = BTreeSet::new();
     let mut completed_ids = Vec::new();
+    let mut known_records = 0usize;
     for record in records {
         let Some(&raw_id) = record.get(&id_tag) else {
-            return Ok(None);
+            continue;
         };
         let Ok(id) = u32::try_from(raw_id) else {
             unknown_ids.insert(raw_id);
@@ -152,12 +153,20 @@ fn decode_candidate(
         let Some(&status) = record.get(&status_tag) else {
             return Ok(None);
         };
+        known_records += 1;
         if matches!(status, 2 | 3) {
             completed_ids.push(id);
         }
     }
 
-    if !unknown_ids.is_empty() {
+    if known_records < MIN_ACHIEVEMENT_RECORDS {
+        return Ok(None);
+    }
+
+    // A homogeneous achievement list with unknown IDs means GIlore is stale.
+    // A mixed quest/achievement list is expected on live 4.5 login; keep only
+    // the public IDs.
+    if !unknown_ids.is_empty() && known_records * 100 >= records.len() * MIN_KNOWN_ID_PERCENT {
         let rendered = unknown_ids
             .iter()
             .take(16)
@@ -207,8 +216,9 @@ fn infer_id_tag(records: &[BTreeMap<u32, u64>], known_ids: &BTreeSet<u32>) -> Op
             })
             .count();
         let unique = values.iter().copied().collect::<BTreeSet<_>>().len();
+        // Do not require known IDs to dominate the mixed quest list; uniqueness
+        // plus a handful of GIlore matches is enough to locate the ID tag.
         if known_matches < MIN_KNOWN_ID_MATCHES
-            || known_matches * 100 < records.len() * MIN_KNOWN_ID_PERCENT
             || unique * 100 < records.len() * MIN_UNIQUE_ID_PERCENT
         {
             continue;
@@ -428,5 +438,68 @@ mod tests {
             decode_achievement_command(&[0x0a, 0xff, 0xff], &known).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn mixed_quest_records_keep_only_known_completed_achievements() {
+        let known = BTreeSet::from([
+            4_010_101, 4_010_102, 4_010_103, 4_010_104, 4_010_105, 4_010_106,
+        ]);
+        let mut records = Vec::new();
+        for id in &known {
+            records.push(scalar_record(11, *id, 12, 3));
+        }
+        for quest_id in [
+            1_001_711u32,
+            2_202_001,
+            5_001_001,
+            6_001_001,
+            7_301_001,
+            3_002_020,
+        ] {
+            records.push(scalar_record(11, quest_id, 12, 1));
+        }
+        // A nested junk entry in the same repeated field must not drop the group.
+        records.push(vec![0x0a, 0x03, b'b', b'a', b'd']);
+        let decoded = decode_achievement_command(&repeated(13, &records), &known)
+            .unwrap()
+            .expect("mixed login list must still be recognized");
+        assert_eq!(
+            decoded.completed_ids(),
+            &[4_010_101, 4_010_102, 4_010_103, 4_010_104, 4_010_105, 4_010_106]
+        );
+    }
+
+    fn put_varint(out: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+
+    fn scalar_record(id_tag: u32, id: u32, status_tag: u32, status: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        put_varint(&mut out, u64::from(id_tag) << 3);
+        put_varint(&mut out, u64::from(id));
+        put_varint(&mut out, u64::from(status_tag) << 3);
+        put_varint(&mut out, u64::from(status));
+        out
+    }
+
+    fn repeated(field: u32, records: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for record in records {
+            put_varint(&mut out, (u64::from(field) << 3) | 2);
+            put_varint(&mut out, record.len() as u64);
+            out.extend_from_slice(record);
+        }
+        out
     }
 }

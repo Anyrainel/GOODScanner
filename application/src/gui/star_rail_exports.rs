@@ -1,5 +1,6 @@
-//! One capture produces a complete export set before any older set is removed.
+//! One capture produces a complete export before any older set is removed.
 use hsr_scanner::{HsrError, HsrResult};
+use serde_json::Value;
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -13,8 +14,7 @@ pub struct CaptureFiles {
 
 pub fn write_capture_files(
     output_dir: &Path,
-    gg: &hsr_scanner::HsrInventoryExport,
-    scanner: Option<&serde_json::Value>,
+    export: &Value,
     only_latest: bool,
 ) -> HsrResult<CaptureFiles> {
     let stamp = format!(
@@ -25,56 +25,36 @@ pub fn write_capture_files(
             .map_err(|e| fail(e.to_string()))?
             .subsec_nanos()
     );
-    write_capture_set(output_dir, &stamp, gg, scanner, only_latest)
+    write_capture_set(output_dir, &stamp, export, only_latest)
 }
 
 fn write_capture_set(
     output_dir: &Path,
     stamp: &str,
-    gg: &hsr_scanner::HsrInventoryExport,
-    scanner: Option<&serde_json::Value>,
+    export: &Value,
     only_latest: bool,
 ) -> HsrResult<CaptureFiles> {
-    // Serialize every selected format before opening any destination.
-    let mut outputs = Vec::new();
-    if let Some(scanner) = scanner {
-        outputs.push(("star_rail_fribbels_", serialize(scanner)?));
-    }
-    outputs.push(("star_rail_export_", serialize(gg)?));
-    if let Some(achievements) = &gg.achievements {
-        let ids: Vec<_> = achievements
-            .entries
-            .iter()
-            .map(|a| a.achievement_id)
-            .collect();
-        outputs.push((
-            "star_rail_achievements_",
-            serialize(&serde_json::json!({"hsr_achievements": ids}))?,
-        ));
-    }
-    let mut paths = Vec::new();
-    for (prefix, bytes) in outputs {
-        let path = output_dir.join(format!("{prefix}{stamp}.json"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| {
-                fail(format!(
-                    "path={}; cause={e}; older exports retained",
-                    path.display()
-                ))
-            })?;
-        file.write_all(&bytes)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| {
-                fail(format!(
-                    "path={}; cause={e}; older exports retained",
-                    path.display()
-                ))
-            })?;
-        paths.push(path);
-    }
+    let bytes = serialize(export)?;
+    let path = output_dir.join(format!("star_rail_export_{stamp}.json"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| {
+            fail(format!(
+                "path={}; cause={e}; older exports retained",
+                path.display()
+            ))
+        })?;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| {
+            fail(format!(
+                "path={}; cause={e}; older exports retained",
+                path.display()
+            ))
+        })?;
+    let paths = vec![path];
     if only_latest {
         remove_older_exports(output_dir, stamp).map_err(|e| {
             fail(format!(
@@ -172,10 +152,8 @@ mod tests {
         let old = dir.join("star_rail_export_2026-09-01_10-00-00.json");
         fs::write(&old, b"previous complete export").unwrap();
         fs::create_dir(dir.join("star_rail_export_2026-09-07_10-00-00_000000001.json")).unwrap();
-        let refs = hsr_scanner::load_embedded_gilore_reference().unwrap();
-        let achievements = hsr_scanner::build_achievement_snapshot([], "test", &refs).unwrap();
-        let gg = hsr_scanner::build_achievement_only_export(achievements, &refs).unwrap();
-        assert!(write_capture_set(&dir, "2026-09-07_10-00-00_000000001", &gg, None, true).is_err());
+        let export = serde_json::json!({"source": "HSR-Scanner", "version": 4});
+        assert!(write_capture_set(&dir, "2026-09-07_10-00-00_000000001", &export, true).is_err());
         assert_eq!(fs::read(old).unwrap(), b"previous complete export");
         fs::remove_dir_all(dir).unwrap();
     }

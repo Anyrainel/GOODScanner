@@ -128,6 +128,9 @@ impl InventoryDecoder {
                 if let (Some((_, bases)), Some((_, paths))) = (bases, paths) {
                     let bases: BTreeMap<_, _> =
                         bases.into_iter().map(|b| (b.base_avatar_id, b)).collect();
+                    for base in bases.values() {
+                        self.record_trailblazer_from_base(base)?;
+                    }
                     let mut characters = Vec::new();
                     let mut seen = BTreeSet::new();
                     for path in paths {
@@ -146,6 +149,7 @@ impl InventoryDecoder {
                                 path.avatar_id
                             ))
                         })?;
+                        self.record_trailblazer_from_path_id(path.avatar_id);
                         self.export_details
                             .characters
                             .insert(path.avatar_id, character_details(&path));
@@ -220,6 +224,29 @@ impl InventoryDecoder {
             }
         }
         Ok(())
+    }
+
+    fn record_trailblazer_from_base(&mut self, base: &Avatar) -> HsrResult<()> {
+        let path_id = base.cur_multi_path_avatar_type;
+        let Some(gender) = crate::scanner_export::trailblazer_gender(path_id) else {
+            return Ok(());
+        };
+        let Some(character) = self.references.character(path_id) else {
+            return Ok(());
+        };
+        self.export_details.trailblazer = Some(gender.to_owned());
+        self.export_details.current_trailblazer_path =
+            Some(crate::scanner_export::path_name(&character.path)?.to_owned());
+        Ok(())
+    }
+
+    fn record_trailblazer_from_path_id(&mut self, avatar_id: u32) {
+        if self.export_details.trailblazer.is_some() {
+            return;
+        }
+        if let Some(gender) = crate::scanner_export::trailblazer_gender(avatar_id) {
+            self.export_details.trailblazer = Some(gender.to_owned());
+        }
     }
 
     fn location(&self, id: u32) -> HsrResult<Option<u32>> {

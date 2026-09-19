@@ -430,53 +430,34 @@ fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
         path
     });
     let exported_path = exported_path.expect("off-screen capture should finish its export");
-    let export: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(&exported_path).expect("achievement export should be readable"),
+    let common: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&exported_path).expect("Fribbels export should be readable"),
     )
-    .expect("achievement export should be valid JSON");
-
-    assert_eq!(export["schema"], "goodscanner.hsr");
-    assert_eq!(export["schemaVersion"], 3);
-    assert_eq!(export["source"]["coverage"]["characters"], "complete");
-    assert_eq!(export["source"]["coverage"]["lightCones"], "complete");
-    assert_eq!(export["source"]["coverage"]["relics"], "complete");
-    assert!(!export["characters"].as_array().unwrap().is_empty());
-    assert!(!export["lightCones"].as_array().unwrap().is_empty());
-    assert!(!export["relics"].as_array().unwrap().is_empty());
-    assert_eq!(export["achievements"]["coverage"], "complete");
-    assert_eq!(
-        export["achievements"]["entries"][0]["achievementId"],
-        achievement_id
-    );
-    assert_eq!(export["achievements"]["entries"][0]["status"], "completed");
-
-    let stamp = exported_path
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .strip_prefix("star_rail_export_")
-        .unwrap();
-    let common: serde_json::Value = serde_json::from_slice(
-        &fs::read(output_dir.join(format!("star_rail_fribbels_{stamp}"))).unwrap(),
-    )
-    .unwrap();
+    .expect("Fribbels export should be valid JSON");
     assert_eq!(common["source"], "HSR-Scanner");
     assert_eq!(common["version"], 4);
     assert_eq!(common["generator"]["name"], "GOODScanner");
     assert!(common["metadata"]["uid"].is_null());
-    assert_eq!(
-        common["relics"].as_array().unwrap().len(),
-        export["relics"].as_array().unwrap().len()
-            + export["planarOrnaments"].as_array().unwrap().len()
-    );
-    let stardb: serde_json::Value = serde_json::from_slice(
-        &fs::read(output_dir.join(format!("star_rail_achievements_{stamp}"))).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        stardb,
-        serde_json::json!({"hsr_achievements": [achievement_id]})
+    assert!(!common["characters"].as_array().unwrap().is_empty());
+    assert!(!common["light_cones"].as_array().unwrap().is_empty());
+    assert!(!common["relics"].as_array().unwrap().is_empty());
+
+    assert!(exported_path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("star_rail_export_"));
+    assert_eq!(common["achievements"], serde_json::json!([achievement_id]));
+    let extras: Vec<_> = fs::read_dir(&output_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != exported_path.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert!(
+        extras.is_empty(),
+        "capture must write a single JSON file, found {extras:?}"
     );
     if let Ok(path) = std::env::var("HSR_INTEROP_FIXTURE") {
         fs::write(path, serde_json::to_vec_pretty(&common).unwrap()).unwrap();

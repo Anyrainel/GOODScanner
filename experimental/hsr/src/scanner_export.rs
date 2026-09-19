@@ -1,9 +1,10 @@
 //! HSR-Scanner v4 interchange, as consumed by Fribbels and Reliquary clients.
 //! `source` is the importer's required format discriminator; `generator` records
 //! the actual producer. Account and server-instance identifiers are not exported.
+//! See `docs/HSR_EXPORT.md`.
 use crate::{model::*, reference::ReferenceCache, HsrError, HsrResult};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -18,12 +19,15 @@ pub struct CharacterDetails {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CaptureExportDetails {
     pub characters: BTreeMap<u32, CharacterDetails>,
+    pub trailblazer: Option<String>,
+    pub current_trailblazer_path: Option<String>,
 }
 
 pub fn build_scanner_export(
     snapshot: &ObservationSnapshot,
     refs: &ReferenceCache,
     details: &CaptureExportDetails,
+    completed_achievement_ids: Option<&[u32]>,
 ) -> HsrResult<Value> {
     let mut characters = Vec::new();
     for c in &snapshot.characters {
@@ -51,7 +55,7 @@ pub fn build_scanner_export(
             .ok_or_else(|| invalid("unknown Light Cone"))?;
         cones.push(json!({"id": c.light_cone_id.to_string(), "name": r.name.en,
             "level": c.level, "ascension": c.ascension, "superimposition": c.superimposition,
-            "location": location(c.equipped_character_id), "lock": c.lock,
+            "location": location(c.equipped_character_id), "lock": c.lock.unwrap_or(false),
             "_uid": (index + 1).to_string()}));
     }
     let mut relics = Vec::new();
@@ -75,33 +79,52 @@ pub fn build_scanner_export(
                 GearSlot::Body => "Body", GearSlot::Feet => "Feet", GearSlot::PlanarSphere => "Planar Sphere",
                 GearSlot::LinkRope => "Link Rope" },
             "rarity": r.rarity, "level": g.level, "mainstat": mainstat_name(&g.main_stat_key)?,
-            "substats": subs, "location": location(g.equipped_character_id), "lock": g.lock,
-            "discard": g.discard, "_uid": (index + 1).to_string()}));
+            "substats": subs, "location": location(g.equipped_character_id),
+            "lock": g.lock.unwrap_or(false), "discard": g.discard.unwrap_or(false),
+            "_uid": (index + 1).to_string()}));
     }
-    let trailblazer = snapshot
-        .characters
-        .iter()
-        .find(|c| (8001..9000).contains(&c.character_id))
-        .map(|c| {
-            if c.character_id % 2 == 0 {
-                "Stelle"
-            } else {
-                "Caelus"
-            }
-        });
-    Ok(
-        json!({"source": "HSR-Scanner", "build": "v1.2.0", "version": 4,
+    let trailblazer = details.trailblazer.as_deref().or_else(|| {
+        snapshot
+            .characters
+            .iter()
+            .find_map(|c| trailblazer_gender(c.character_id))
+    });
+    let mut metadata = Map::new();
+    metadata.insert("uid".into(), Value::Null);
+    metadata.insert("trailblazer".into(), json!(trailblazer));
+    if let Some(path) = &details.current_trailblazer_path {
+        metadata.insert("current_trailblazer_path".into(), json!(path));
+    }
+    let mut export = json!({"source": "HSR-Scanner", "build": "v1.2.0", "version": 4,
         "generator": {"name": "GOODScanner", "version": env!("CARGO_PKG_VERSION"),
             "captureRevision": snapshot.evidence.revision, "compatibility": "HSR-Scanner v1.2.0 / format v4"},
-        "metadata": {"uid": null, "trailblazer": trailblazer},
-        "coverage": snapshot.evidence.coverage, "characters": characters, "light_cones": cones, "relics": relics}),
-    )
+        "metadata": metadata,
+        "coverage": snapshot.evidence.coverage, "characters": characters, "light_cones": cones, "relics": relics});
+    // Presence is authoritative, including []. Absence means achievements were not observed.
+    if let Some(ids) = completed_achievement_ids {
+        export
+            .as_object_mut()
+            .unwrap()
+            .insert("achievements".into(), json!(ids));
+    }
+    Ok(export)
 }
 
 fn location(id: Option<u32>) -> String {
     id.map(|id| id.to_string()).unwrap_or_default()
 }
-fn path_name(path: &str) -> HsrResult<&str> {
+
+pub(crate) fn trailblazer_gender(avatar_id: u32) -> Option<&'static str> {
+    (8001..9000)
+        .contains(&avatar_id)
+        .then_some(if avatar_id % 2 == 0 {
+            "Stelle"
+        } else {
+            "Caelus"
+        })
+}
+
+pub(crate) fn path_name(path: &str) -> HsrResult<&str> {
     Ok(match path {
         "Warrior" => "Destruction",
         "Rogue" => "Hunt",

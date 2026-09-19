@@ -77,7 +77,20 @@ fn error(code: &'static str, detail: impl Into<String>) -> HsrError {
 }
 
 pub fn load_data_cache() -> HsrResult<ReferenceCache> {
-    load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, false)
+    match load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, false) {
+        Ok(cache) => Ok(cache),
+        Err(error) => match crate::load_embedded_gilore_reference() {
+            Ok(cache) => {
+                yas::log_warn!(
+                    "无法下载星穹铁道游戏数据，将使用内置参考数据。完整错误详情: {}",
+                    "Star Rail game data could not be downloaded; using the built-in reference. Full error details: {}",
+                    error
+                );
+                Ok(cache)
+            },
+            Err(_) => Err(error),
+        },
+    }
 }
 
 pub fn force_refresh() -> HsrResult<()> {

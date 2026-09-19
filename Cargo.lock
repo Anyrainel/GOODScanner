@@ -408,7 +408,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "etherparse 0.16.0",
- "kcp 0.6.0",
+ "kcp 0.6.0 (git+https://github.com/hashblen/mhy-kcp)",
  "protobuf",
  "protobuf-codegen",
  "rand_mt 4.2.2",
@@ -1975,10 +1975,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "enigo",
+ "env_logger",
  "etherparse 0.17.0",
  "futures",
  "image 0.24.9",
- "kcp 0.5.3",
+ "kcp 0.6.0 (git+https://github.com/hashblen/mhy-kcp?rev=1acf4ba5938ff91f7f2d2a31e16bf1f8d2db9c8f)",
  "log",
  "pktmon",
  "protobuf",
@@ -2459,9 +2460,8 @@ dependencies = [
 
 [[package]]
 name = "kcp"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e387a924f42063d380be14857714a2f0c177e44dbeab8895244e5370d8a8e68"
+version = "0.6.0"
+source = "git+https://github.com/hashblen/mhy-kcp?rev=1acf4ba5938ff91f7f2d2a31e16bf1f8d2db9c8f#1acf4ba5938ff91f7f2d2a31e16bf1f8d2db9c8f"
 dependencies = [
  "bytes",
  "log",
