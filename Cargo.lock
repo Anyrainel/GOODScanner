@@ -1978,6 +1978,7 @@ dependencies = [
  "env_logger",
  "etherparse 0.17.0",
  "futures",
+ "genshin_scanner",
  "image 0.24.9",
  "kcp 0.6.0 (git+https://github.com/hashblen/mhy-kcp?rev=1acf4ba5938ff91f7f2d2a31e16bf1f8d2db9c8f)",
  "log",

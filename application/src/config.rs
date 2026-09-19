@@ -134,7 +134,7 @@ fn default_panel_timeout_ms() -> u64 {
 }
 
 fn default_max_inventory_items() -> usize {
-    2_000
+    4_000
 }
 
 fn default_max_characters() -> usize {

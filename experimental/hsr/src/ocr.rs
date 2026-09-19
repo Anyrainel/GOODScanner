@@ -295,9 +295,15 @@ impl<R: OcrReader> PanelParser<R> {
         let name_text = self.read_crop(OcrField::GearName, frame, layout, layout::RELIC_NAME)?;
         let rarity_rect = layout.panel.relative(layout::RELIC_RARITY);
         let rarity_crop = rarity_rect.crop(frame)?;
-        let rarity =
-            detect_rarity(&rarity_crop).ok_or_else(|| ocr_semantic("gear rarity unreadable"))?;
-        annotator::record_ocr("gear_rarity", rarity_rect, &rarity.to_string());
+        let name_color_crop = layout.crop(frame, layout::RELIC_NAME)?;
+        let rarity = detect_rarity(&rarity_crop)
+            .or_else(|| detect_rarity_from_name_color(&name_color_crop));
+        annotator::record_ocr(
+            "gear_rarity",
+            rarity_rect,
+            &rarity.map(|value| value.to_string()).unwrap_or_default(),
+        );
+        let rarity = rarity.ok_or_else(|| ocr_semantic("gear rarity unreadable"))?;
         let level_text = self.read_crop(OcrField::GearLevel, frame, layout, layout::RELIC_LEVEL)?;
         let level = parse_first_u8(&level_text, 15, "gear level")?;
 
@@ -423,7 +429,7 @@ impl<R: OcrReader> PanelParser<R> {
         record_icon("gear_lock", lock_rect, &lock_crop, lock, lock_confidence);
         let discard_rect = layout.discard_button();
         let discard_crop = discard_rect.crop(frame)?;
-        let (discard, discard_confidence) = detect_icon_state(&discard_crop);
+        let (discard, discard_confidence) = detect_discard_state(&discard_crop);
         record_icon(
             "gear_discard",
             discard_rect,
@@ -791,6 +797,58 @@ pub fn detect_icon_state(image: &RgbImage) -> (Option<bool>, f64) {
     (Some(state), confidence)
 }
 
+/// Discard sits on the 5-star gold card. Card chrome is not a discard mark.
+/// kel-z template-matches the lit trash icon; we keep that idea fail-closed:
+/// red/orange fill is discarded, a gray/white glyph without that fill is not,
+/// and gold-only chrome stays unknown.
+pub fn detect_discard_state(image: &RgbImage) -> (Option<bool>, f64) {
+    if image.as_raw().is_empty() {
+        return (None, 0.0);
+    }
+    let mut red = 0_usize;
+    let mut gray = 0_usize;
+    let mut white = 0_usize;
+    let mut card_gold = 0_usize;
+    for pixel in image.pixels() {
+        let [r, g, b] = pixel.0;
+        let is_red = r > 170 && r > g.saturating_add(50) && g < 140 && b < 120;
+        if is_red {
+            red += 1;
+            continue;
+        }
+        if r > 165 && g > 165 && b > 165 && r.abs_diff(g) < 28 && g.abs_diff(b) < 28 {
+            white += 1;
+            continue;
+        }
+        if r.abs_diff(g) < 25 && g.abs_diff(b) < 25 && (60..160).contains(&r) {
+            gray += 1;
+            continue;
+        }
+        if r > 155 && g > 105 && r > b.saturating_add(35) && g > b.saturating_add(15) {
+            card_gold += 1;
+        }
+    }
+    let total = (image.width() as usize * image.height() as usize).max(1) as f64;
+    let red_ratio = red as f64 / total;
+    let gray_ratio = gray as f64 / total;
+    let white_ratio = white as f64 / total;
+    let gold_ratio = card_gold as f64 / total;
+
+    if red_ratio >= 0.08 && red_ratio >= gray_ratio && red_ratio >= white_ratio {
+        return (Some(true), (red_ratio * 8.0).min(1.0));
+    }
+    if white_ratio >= 0.022 && white_ratio > gold_ratio && white_ratio >= red_ratio * 3.0 {
+        return (
+            Some(false),
+            ((white_ratio - red_ratio) * 12.0).min(1.0),
+        );
+    }
+    if gray_ratio >= 0.08 && red_ratio < 0.03 && gray_ratio >= gold_ratio * 0.30 {
+        return (Some(false), (gray_ratio * 6.0).min(1.0));
+    }
+    (None, 0.0)
+}
+
 fn edge_density(image: &RgbImage) -> f64 {
     if image.width() < 2 || image.height() < 2 {
         return 0.0;
@@ -847,14 +905,41 @@ fn detect_rarity(image: &RgbImage) -> Option<u8> {
     (1..=5).contains(&runs).then_some(runs)
 }
 
+/// Current HSR relic panels no longer draw a star strip; 5/4/3-star names use
+/// gold/purple/blue. This is a fallback only after the star-run detector
+/// returns nothing, so a real star crop is never overridden.
+fn detect_rarity_from_name_color(image: &RgbImage) -> Option<u8> {
+    let mut gold = 0_u32;
+    let mut purple = 0_u32;
+    let mut blue = 0_u32;
+    for pixel in image.pixels() {
+        let [r, g, b] = pixel.0;
+        if r > 190 && (110..210).contains(&g) && b < 130 {
+            gold += 1;
+        } else if r > 110 && b > 150 && g < 150 {
+            purple += 1;
+        } else if b > 160 && b > r.saturating_add(25) && b > g.saturating_add(25) {
+            blue += 1;
+        }
+    }
+    let dominant = gold.max(purple).max(blue);
+    if dominant < 24 {
+        return None;
+    }
+    if gold >= purple && gold >= blue {
+        Some(5)
+    } else if purple >= blue {
+        Some(4)
+    } else {
+        Some(3)
+    }
+}
+
 fn record_icon(field: &str, rect: NormRect, crop: &RgbImage, state: Option<bool>, confidence: f64) {
+    let summary = format!("state={state:?} confidence={confidence:.2}");
+    annotator::record_ocr(field, rect, &summary);
     let pixel = crop.get_pixel(crop.width() / 2, crop.height() / 2).0;
-    annotator::record_pixel(
-        field,
-        rect.center(),
-        pixel,
-        &format!("state={state:?} confidence={confidence:.2}"),
-    );
+    annotator::record_pixel(field, rect.center(), pixel, &summary);
 }
 
 fn ocr_semantic(detail: impl Into<String>) -> HsrError {
@@ -1105,6 +1190,20 @@ mod tests {
     }
 
     #[test]
+    fn name_color_rarity_is_only_used_when_stars_are_absent() {
+        let gold_name = RgbImage::from_pixel(80, 24, Rgb([220, 160, 70]));
+        assert_eq!(detect_rarity_from_name_color(&gold_name), Some(5));
+        let blank = RgbImage::from_pixel(80, 24, Rgb([24, 28, 35]));
+        assert_eq!(detect_rarity_from_name_color(&blank), None);
+        let star_strip = RgbImage::from_pixel(120, 20, Rgb([24, 28, 35]));
+        assert_eq!(detect_rarity(&star_strip), None);
+        assert_eq!(
+            detect_rarity(&star_strip).or_else(|| detect_rarity_from_name_color(&gold_name)),
+            Some(5)
+        );
+    }
+
+    #[test]
     fn icon_state_preserves_unknown() {
         let blank = RgbImage::from_pixel(40, 40, Rgb([30, 30, 30]));
         assert_eq!(detect_icon_state(&blank).0, None);
@@ -1145,6 +1244,21 @@ mod tests {
             assert_eq!(state, None, "gold={gold}, neutral={neutral}");
             assert_eq!(confidence, 0.0, "gold={gold}, neutral={neutral}");
         }
+    }
+
+    #[test]
+    fn five_star_card_gold_around_a_gray_trash_is_not_discarded() {
+        let mut image = RgbImage::from_pixel(40, 40, Rgb([220, 170, 70]));
+        for y in 10..30 {
+            for x in 10..30 {
+                image.put_pixel(x, y, Rgb([90, 90, 90]));
+            }
+        }
+        assert_eq!(detect_icon_state(&image).0, Some(true));
+        assert_eq!(detect_discard_state(&image).0, Some(false));
+
+        let gold_only = RgbImage::from_pixel(40, 40, Rgb([220, 170, 70]));
+        assert_eq!(detect_discard_state(&gold_only).0, None);
     }
 
     #[test]

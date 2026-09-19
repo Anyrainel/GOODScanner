@@ -19,8 +19,8 @@ use crate::{
     },
     observation::ValidatedObservationSnapshot,
     ocr::{
-        detect_icon_state, InventoryKind, OcrField, OcrReader, PaddleOcrReader, PanelParser,
-        ParsedGearPanel, StatsPanelLayout, MANAGED_ICON_CONFIDENCE_THRESHOLD,
+        detect_discard_state, detect_icon_state, InventoryKind, OcrField, OcrReader, PaddleOcrReader,
+        PanelParser, ParsedGearPanel, StatsPanelLayout, MANAGED_ICON_CONFIDENCE_THRESHOLD,
     },
     reference::ReferenceCache,
     vision::{
@@ -67,6 +67,9 @@ pub struct ScanConfig {
     pub inventory_scroll_ticks_per_page: usize,
     pub scroll_tick_delay: Duration,
     pub max_inventory_items: usize,
+    /// Stop after this many parsed inventory entries. `None` walks the OCR
+    /// quantity. Used by dump sessions so a large backpack can still be sampled.
+    pub scan_item_limit: Option<usize>,
     pub max_characters: usize,
     pub expected_characters: Option<usize>,
     /// Configurable because current public evidence uses virtual-controller RB
@@ -88,7 +91,8 @@ impl Default for ScanConfig {
             panel_timeout: Duration::from_millis(900),
             inventory_scroll_ticks_per_page: 25,
             scroll_tick_delay: Duration::from_millis(10),
-            max_inventory_items: 2_000,
+            max_inventory_items: 4_000,
+            scan_item_limit: None,
             max_characters: 200,
             expected_characters: None,
             next_character_key: 'e',
@@ -342,7 +346,21 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     )
                 },
             ) {
-                Ok(item) => items.push(item),
+                Ok(item) => {
+                    items.push(item);
+                    if self
+                        .config
+                        .scan_item_limit
+                        .is_some_and(|limit| items.len() >= limit)
+                    {
+                        incomplete_reason = Some(format!(
+                            "scan_item_limit={} reached after {} entries",
+                            self.config.scan_item_limit.unwrap(),
+                            items.len()
+                        ));
+                        break;
+                    }
+                },
                 Err(error) if is_omittable_ambiguity(error.code()) => {
                     incomplete_reason.get_or_insert_with(|| {
                         format!(
@@ -417,6 +435,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     }
 
     fn enter_inventory(&mut self, kind: InventoryKind) -> HsrResult<InventorySession> {
+        self.prepare_menu_focus()?;
         self.issue_input(InputCommand::Escape)?;
         self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
         self.issue_input(InputCommand::Key('b'))?;
@@ -810,6 +829,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
     fn scan_characters(&mut self) -> HsrResult<CharacterScan> {
         yas::log_info!("正在扫描角色详情。", "Scanning Character details.");
+        self.prepare_menu_focus()?;
         self.issue_input(InputCommand::Escape)?;
         self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
         self.issue_input(InputCommand::Key('c'))?;
@@ -991,22 +1011,27 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
     fn capture_stable(&mut self) -> HsrResult<RgbImage> {
         self.ensure_attended()?;
-        let mut previous = self.device.capture_client()?;
-        let steps = (self.config.panel_timeout.as_millis() / 20).max(2) as usize;
-        for _ in 0..steps {
-            self.wait_attended(Duration::from_millis(20))?;
-            self.ensure_attended()?;
-            let current = self.device.capture_client()?;
-            if frames_similar(&previous, &current) {
-                return Ok(current);
-            }
-            previous = current;
+        // Menu transition waits already ran. Take two frames; HSR's 3D preview
+        // and starfield never go fully still, so do not poll until timeout.
+        let first = self.device.capture_client()?;
+        self.wait_attended(Duration::from_millis(80))?;
+        self.ensure_attended()?;
+        let second = self.device.capture_client()?;
+        if chrome_settled(&first, &second) {
+            return Ok(second);
         }
-        Err(HsrError::new(
-            "HSR-SCREEN-UNSTABLE",
-            hints::SCREEN_INVALID,
-            "the HSR client did not produce two stable frames before timeout",
-        ))
+        yas::log_warn!(
+            "菜单画面在等待后仍有动画，将使用最后一帧继续扫描。",
+            "The menu was still animating after the wait; continuing with the last frame."
+        );
+        Ok(second)
+    }
+
+    /// Click a non-interactive corner so the client actually receives keys.
+    /// Center clicks can confirm nearby interact prompts.
+    fn prepare_menu_focus(&mut self) -> HsrResult<()> {
+        self.issue_input(InputCommand::Click(crate::vision::Point::new(0.12, 0.82)))?;
+        self.wait_attended(Duration::from_millis(120))
     }
 
     fn leave_menu(&mut self) -> HsrResult<()> {
@@ -1081,6 +1106,17 @@ fn dump_parsed_item<T: std::fmt::Debug>(
             Err(error)
         },
     }
+}
+
+fn chrome_settled(left: &RgbImage, right: &RgbImage) -> bool {
+    [layout::UI_CHROME_LEFT, layout::UI_CHROME_RIGHT]
+        .into_iter()
+        .all(|rect| {
+            match (rect.crop(left), rect.crop(right)) {
+                (Ok(left_crop), Ok(right_crop)) => frames_similar(&left_crop, &right_crop),
+                _ => false,
+            }
+        })
 }
 
 impl<D: HsrDevice, R: OcrReader> ManagerMutationDevice for HsrScanner<D, R> {
@@ -1250,7 +1286,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         let lock_button = selected.panel.lock_button(InventoryKind::Gear);
         let discard_button = selected.panel.discard_button();
         let (lock, lock_confidence) = detect_icon_state(&lock_button.crop(&frame)?);
-        let (discard, discard_confidence) = detect_icon_state(&discard_button.crop(&frame)?);
+        let (discard, discard_confidence) = detect_discard_state(&discard_button.crop(&frame)?);
         if lock_confidence < MANAGED_ICON_CONFIDENCE_THRESHOLD
             || discard_confidence < MANAGED_ICON_CONFIDENCE_THRESHOLD
             || lock != target.state.lock
@@ -1834,7 +1870,7 @@ mod tests {
     fn defaults_are_bounded_and_wgc() {
         let config = ScanConfig::default();
         assert_eq!(config.capture_method, CaptureMethod::Wgc);
-        assert!(config.max_inventory_items <= 2_000);
+        assert!(config.max_inventory_items <= 4_000);
         assert!(config.max_characters <= 200);
         assert!(config.inventory_scroll_ticks_per_page > 0);
         assert!(!config.scroll_tick_delay.is_zero());
