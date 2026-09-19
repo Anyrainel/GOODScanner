@@ -126,6 +126,7 @@ fn scanner_config(
         expected_characters: (settings.expected_characters > 0)
             .then_some(settings.expected_characters),
         next_character_key,
+        dump_images: settings.dump_images,
         ..ScanConfig::default()
     })
 }

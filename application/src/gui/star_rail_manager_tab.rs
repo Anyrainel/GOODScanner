@@ -114,6 +114,13 @@ pub fn show(
     );
     ui.add_enabled_ui(!is_running && !game_busy, |ui| {
         widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
+        ui.checkbox(
+            &mut settings.dump_images,
+            lang.t(
+                "保存OCR截图 → debug_images/",
+                "Dump OCR images → debug_images/",
+            ),
+        );
     });
     ui.add_space(4.0);
     ui.separator();

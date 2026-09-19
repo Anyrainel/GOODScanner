@@ -173,6 +173,8 @@ pub struct StarRailSettings {
     #[serde(default = "default_next_character_key")]
     pub next_character_key: String,
     #[serde(default)]
+    pub dump_images: bool,
+    #[serde(default)]
     pub offline_import_path: String,
     #[serde(default)]
     pub manager_instructions_path: String,
@@ -206,6 +208,7 @@ impl Default for StarRailSettings {
             navigation_delay_ms: default_navigation_delay_ms(),
             panel_timeout_ms: default_panel_timeout_ms(),
             next_character_key: default_next_character_key(),
+            dump_images: false,
             offline_import_path: String::new(),
             manager_instructions_path: String::new(),
             manager_journal_path: String::new(),

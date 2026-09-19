@@ -5,7 +5,9 @@ use regex::Regex;
 use yas::ocr::{ImageToText, PPOCRChV4RecInfer};
 
 use crate::{
+    annotator,
     error::{hints, HsrError, HsrResult},
+    layout,
     model::{
         CharacterReference, GearReference, ObservedCharacter, ObservedGear, ObservedLightCone,
         ObservedSubstat, StatReference, StatValueKind,
@@ -32,6 +34,27 @@ pub enum OcrField {
     LightConeEquipped,
 }
 
+impl OcrField {
+    pub fn dump_name(self) -> String {
+        match self {
+            Self::InventoryQuantity => "quantity".to_string(),
+            Self::CharacterName => "character_name".to_string(),
+            Self::CharacterLevel => "character_level".to_string(),
+            Self::GearName => "gear_name".to_string(),
+            Self::GearLevel => "gear_level".to_string(),
+            Self::GearMainName => "gear_main_name".to_string(),
+            Self::GearMainValue => "gear_main_value".to_string(),
+            Self::GearSubName(index) => format!("gear_sub_name_{index}"),
+            Self::GearSubValue(index) => format!("gear_sub_value_{index}"),
+            Self::GearEquipped => "gear_equipped".to_string(),
+            Self::LightConeName => "light_cone_name".to_string(),
+            Self::LightConeLevel => "light_cone_level".to_string(),
+            Self::LightConeSuperimposition => "light_cone_superimposition".to_string(),
+            Self::LightConeEquipped => "light_cone_equipped".to_string(),
+        }
+    }
+}
+
 pub trait OcrReader {
     fn read(&mut self, field: OcrField, image: &RgbImage) -> HsrResult<String>;
 }
@@ -55,17 +78,27 @@ impl PaddleOcrReader {
 }
 
 impl OcrReader for PaddleOcrReader {
-    fn read(&mut self, _field: OcrField, image: &RgbImage) -> HsrResult<String> {
-        self.model
-            .image_to_text(image, false)
-            .map(|text| text.trim().to_string())
-            .map_err(|error| {
+    fn read(&mut self, field: OcrField, image: &RgbImage) -> HsrResult<String> {
+        let infer = |model: &PPOCRChV4RecInfer, image: &RgbImage| {
+            model.image_to_text(image, false).map_err(|error| {
                 HsrError::new(
                     "HSR-OCR-INFERENCE",
                     hints::OCR_FAILED,
                     format!("OCR inference failed; cause={error}"),
                 )
             })
+        };
+        let text = infer(&self.model, image)?.trim().to_string();
+        if !text.is_empty() {
+            return Ok(text);
+        }
+        // Retry only empty results. A successful first read is never replaced.
+        yas::log_debug!(
+            "OCR {} 第一次为空，正在重试同一裁剪。",
+            "OCR {} was empty on the first read; retrying the same crop.",
+            field.dump_name()
+        );
+        Ok(infer(&self.model, image)?.trim().to_string())
     }
 }
 
@@ -122,7 +155,7 @@ pub struct StatsPanelLayout {
 
 impl StatsPanelLayout {
     pub const MAINTAINED_SEED: Self = Self {
-        panel: NormRect::new(0.72, 0.09, 0.25, 0.78),
+        panel: layout::STATS_PANEL,
     };
 
     pub fn candidates() -> Vec<Self> {
@@ -130,7 +163,12 @@ impl StatsPanelLayout {
         for dx in [0.0, -0.012, 0.012, -0.024, 0.024] {
             for dy in [0.0, -0.012, 0.012] {
                 candidates.push(Self {
-                    panel: NormRect::new(0.72 + dx, 0.09 + dy, 0.25, 0.78),
+                    panel: NormRect::new(
+                        layout::STATS_PANEL.x + dx,
+                        layout::STATS_PANEL.y + dy,
+                        layout::STATS_PANEL.width,
+                        layout::STATS_PANEL.height,
+                    ),
                 });
             }
         }
@@ -147,18 +185,13 @@ impl StatsPanelLayout {
 
     pub fn lock_button(self, kind: InventoryKind) -> NormRect {
         match kind {
-            InventoryKind::LightCone => self
-                .panel
-                .relative(NormRect::new(0.896, 0.321, 0.074, 0.044)),
-            InventoryKind::Gear => self
-                .panel
-                .relative(NormRect::new(0.858, 0.181, 0.080, 0.047)),
+            InventoryKind::LightCone => self.panel.relative(layout::LIGHT_CONE_LOCK),
+            InventoryKind::Gear => self.panel.relative(layout::RELIC_LOCK),
         }
     }
 
     pub fn discard_button(self) -> NormRect {
-        self.panel
-            .relative(NormRect::new(0.865, 0.253, 0.072, 0.043))
+        self.panel.relative(layout::RELIC_DISCARD)
     }
 }
 
@@ -228,10 +261,16 @@ impl<R: OcrReader> PanelParser<R> {
                 InventoryKind::LightCone => OcrField::LightConeName,
                 InventoryKind::Gear => OcrField::GearName,
             };
-            let title = self.reader.read(
-                field,
-                &layout.crop(frame, NormRect::new(0.0, 0.0, 0.82, 0.10))?,
-            )?;
+            let name_rect = match kind {
+                InventoryKind::LightCone => layout::LIGHT_CONE_NAME,
+                InventoryKind::Gear => layout::RELIC_NAME,
+            };
+            let title = self.reader.read(field, &layout.crop(frame, name_rect)?)?;
+            annotator::record_ocr(
+                field.dump_name().as_str(),
+                layout.panel.relative(name_rect),
+                &title,
+            );
             let resolved = match kind {
                 InventoryKind::LightCone => references.resolve_light_cone_name(&title).is_some(),
                 InventoryKind::Gear => references.resolve_gear_name_any_rarity(&title).is_some(),
@@ -253,28 +292,20 @@ impl<R: OcrReader> PanelParser<R> {
         layout: StatsPanelLayout,
         references: &ReferenceCache,
     ) -> HsrResult<ParsedGearPanel> {
-        let name_text = self.read_crop(
-            OcrField::GearName,
-            frame,
-            layout,
-            NormRect::new(0.0, 0.0, 0.82, 0.10),
-        )?;
-        let rarity_crop = layout.crop(frame, NormRect::new(0.055, 0.135, 0.19, 0.10))?;
+        let name_text = self.read_crop(OcrField::GearName, frame, layout, layout::RELIC_NAME)?;
+        let rarity_rect = layout.panel.relative(layout::RELIC_RARITY);
+        let rarity_crop = rarity_rect.crop(frame)?;
         let rarity =
             detect_rarity(&rarity_crop).ok_or_else(|| ocr_semantic("gear rarity unreadable"))?;
-        let level_text = self.read_crop(
-            OcrField::GearLevel,
-            frame,
-            layout,
-            NormRect::new(0.03, 0.245, 0.28, 0.085),
-        )?;
+        annotator::record_ocr("gear_rarity", rarity_rect, &rarity.to_string());
+        let level_text = self.read_crop(OcrField::GearLevel, frame, layout, layout::RELIC_LEVEL)?;
         let level = parse_first_u8(&level_text, 15, "gear level")?;
 
         let mut main_name = self.read_crop(
             OcrField::GearMainName,
             frame,
             layout,
-            NormRect::new(0.10, 0.35, 0.62, 0.055),
+            layout::RELIC_MAIN_NAME,
         )?;
         if main_name.trim().is_empty() {
             let candidates = references.gear_name_candidates(&name_text, rarity);
@@ -283,8 +314,8 @@ impl<R: OcrReader> PanelParser<R> {
                 .map(|candidate| candidate.slot)
                 .filter(|slot| candidates.iter().all(|candidate| candidate.slot == *slot));
             main_name = match fixed_slot {
-                Some(crate::model::GearSlot::Head) => "HP".to_string(),
-                Some(crate::model::GearSlot::Hands) => "ATK".to_string(),
+                Some(crate::model::GearSlot::Head) => "生命值".to_string(),
+                Some(crate::model::GearSlot::Hands) => "攻击力".to_string(),
                 _ => main_name,
             };
         }
@@ -292,7 +323,7 @@ impl<R: OcrReader> PanelParser<R> {
             OcrField::GearMainValue,
             frame,
             layout,
-            NormRect::new(0.69, 0.35, 0.29, 0.055),
+            layout::RELIC_MAIN_VALUE,
         )?;
         let main_value = parse_display_number(&main_value_text, "main stat value")?;
         let main_stat = resolve_stat_with_context(references, &main_name, &main_value_text)
@@ -325,6 +356,10 @@ impl<R: OcrReader> PanelParser<R> {
                     "gear name/rarity/main-stat progression did not select one unique or canonically visible-equivalent public definition",
                 )
             })?;
+        annotator::set_final(
+            OcrField::GearName.dump_name().as_str(),
+            &reference.game_id.to_string(),
+        );
         // The visible number is used above to validate the candidate against
         // UI formatting, but full live references export the authoritative
         // GIlore progression value. This keeps matcher semantics stable across
@@ -336,18 +371,17 @@ impl<R: OcrReader> PanelParser<R> {
 
         let mut substats = Vec::new();
         for index in 0..4 {
-            let y = 0.405 + index as f64 * 0.047;
             let name = self.read_crop(
                 OcrField::GearSubName(index),
                 frame,
                 layout,
-                NormRect::new(0.10, y, 0.58, 0.047),
+                layout::relic_sub_name(index),
             )?;
             let value = self.read_crop(
                 OcrField::GearSubValue(index),
                 frame,
                 layout,
-                NormRect::new(0.69, y, 0.29, 0.047),
+                layout::relic_sub_value(index),
             )?;
             if name.trim().is_empty() && value.trim().is_empty() {
                 continue;
@@ -375,13 +409,28 @@ impl<R: OcrReader> PanelParser<R> {
             return Err(ocr_semantic("duplicate resolved substat key"));
         }
 
-        let equip_crop = layout.crop(frame, NormRect::new(0.32, 0.90, 0.50, 0.075))?;
+        let equip_crop = layout.crop(frame, layout::RELIC_EQUIPPED)?;
         let equip_text = self.reader.read(OcrField::GearEquipped, &equip_crop)?;
+        annotator::record_ocr(
+            OcrField::GearEquipped.dump_name().as_str(),
+            layout.panel.relative(layout::RELIC_EQUIPPED),
+            &equip_text,
+        );
         let (equipped, location_key) = parse_equipped(&equip_text, &equip_crop, references);
-        let (lock, lock_confidence) =
-            detect_icon_state(&layout.lock_button(InventoryKind::Gear).crop(frame)?);
-        let (discard, discard_confidence) =
-            detect_icon_state(&layout.discard_button().crop(frame)?);
+        let lock_rect = layout.lock_button(InventoryKind::Gear);
+        let lock_crop = lock_rect.crop(frame)?;
+        let (lock, lock_confidence) = detect_icon_state(&lock_crop);
+        record_icon("gear_lock", lock_rect, &lock_crop, lock, lock_confidence);
+        let discard_rect = layout.discard_button();
+        let discard_crop = discard_rect.crop(frame)?;
+        let (discard, discard_confidence) = detect_icon_state(&discard_crop);
+        record_icon(
+            "gear_discard",
+            discard_rect,
+            &discard_crop,
+            discard,
+            discard_confidence,
+        );
 
         Ok(ParsedGearPanel {
             observation: ObservedGear {
@@ -413,30 +462,47 @@ impl<R: OcrReader> PanelParser<R> {
             OcrField::LightConeName,
             frame,
             layout,
-            NormRect::new(0.0, 0.0, 1.0, 0.10),
+            layout::LIGHT_CONE_NAME,
         )?;
         let reference = references
             .resolve_light_cone_name(&name)
             .ok_or_else(|| ocr_semantic("Light Cone name did not resolve uniquely"))?;
+        annotator::set_final(
+            OcrField::LightConeName.dump_name().as_str(),
+            &reference.game_id.to_string(),
+        );
         let level_text = self.read_crop(
             OcrField::LightConeLevel,
             frame,
             layout,
-            NormRect::new(0.12, 0.30, 0.35, 0.08),
+            layout::LIGHT_CONE_LEVEL,
         )?;
         let (level, cap) = parse_level_and_cap(&level_text)?;
         let superimposition_text = self.read_crop(
             OcrField::LightConeSuperimposition,
             frame,
             layout,
-            NormRect::new(0.50, 0.47, 0.14, 0.10),
+            layout::LIGHT_CONE_SUPERIMPOSITION,
         )?;
         let superimposition = parse_first_u8(&superimposition_text, 5, "superimposition")?;
-        let equip_crop = layout.crop(frame, NormRect::new(0.32, 0.90, 0.50, 0.075))?;
+        let equip_crop = layout.crop(frame, layout::LIGHT_CONE_EQUIPPED)?;
         let equip_text = self.reader.read(OcrField::LightConeEquipped, &equip_crop)?;
+        annotator::record_ocr(
+            OcrField::LightConeEquipped.dump_name().as_str(),
+            layout.panel.relative(layout::LIGHT_CONE_EQUIPPED),
+            &equip_text,
+        );
         let (equipped, location_key) = parse_equipped(&equip_text, &equip_crop, references);
-        let (lock, icon_confidence) =
-            detect_icon_state(&layout.lock_button(InventoryKind::LightCone).crop(frame)?);
+        let lock_rect = layout.lock_button(InventoryKind::LightCone);
+        let lock_crop = lock_rect.crop(frame)?;
+        let (lock, icon_confidence) = detect_icon_state(&lock_crop);
+        record_icon(
+            "light_cone_lock",
+            lock_rect,
+            &lock_crop,
+            lock,
+            icon_confidence,
+        );
         Ok(ParsedLightConePanel {
             observation: ObservedLightCone {
                 light_cone_id: reference.game_id,
@@ -460,8 +526,13 @@ impl<R: OcrReader> PanelParser<R> {
         references: &ReferenceCache,
         eidolon: u8,
     ) -> HsrResult<ParsedCharacterPanel> {
-        let name_crop = NormRect::new(0.055, 0.045, 0.23, 0.055).crop(frame)?;
+        let name_crop = layout::CHARACTER_NAME.crop(frame)?;
         let name_text = self.reader.read(OcrField::CharacterName, &name_crop)?;
+        annotator::record_ocr(
+            OcrField::CharacterName.dump_name().as_str(),
+            layout::CHARACTER_NAME,
+            &name_text,
+        );
         let (path_text, character_name) = character_header_segments(&name_text);
         let reference = path_text
             .map_or_else(
@@ -475,8 +546,17 @@ impl<R: OcrReader> PanelParser<R> {
                     "character name did not resolve uniquely; duplicate variants and renameable characters require independent path/variant evidence or explicit user configuration",
                 )
             })?;
-        let level_crop = NormRect::new(0.775, 0.195, 0.075, 0.065).crop(frame)?;
+        annotator::set_final(
+            OcrField::CharacterName.dump_name().as_str(),
+            &reference.game_id.to_string(),
+        );
+        let level_crop = layout::CHARACTER_LEVEL.crop(frame)?;
         let level_text = self.reader.read(OcrField::CharacterLevel, &level_crop)?;
+        annotator::record_ocr(
+            OcrField::CharacterLevel.dump_name().as_str(),
+            layout::CHARACTER_LEVEL,
+            &level_text,
+        );
         let (level, cap) = parse_level_and_cap(&level_text)?;
         Ok(ParsedCharacterPanel {
             observation: ObservedCharacter {
@@ -496,7 +576,11 @@ impl<R: OcrReader> PanelParser<R> {
         layout: StatsPanelLayout,
         rect: NormRect,
     ) -> HsrResult<String> {
-        self.reader.read(field, &layout.crop(frame, rect)?)
+        let text = self.reader.read(field, &layout.crop(frame, rect)?)?;
+        let absolute = layout.panel.relative(rect);
+        annotator::record_ocr(&field.dump_name(), absolute, &text);
+        yas::log_debug!("OCR {} = {}", "OCR {} = {}", field.dump_name(), text);
+        Ok(text)
     }
 }
 
@@ -560,7 +644,7 @@ fn resolve_stat_with_context<'a>(
     label: &str,
     value_text: &str,
 ) -> Option<&'a StatReference> {
-    let expected_kind = if value_text.contains(['%', '％']) {
+    let expected_kind = if value_implies_percent(label, value_text) {
         StatValueKind::Ratio
     } else {
         StatValueKind::Flat
@@ -573,6 +657,38 @@ fn resolve_stat_with_context<'a>(
                     || candidate.value_kind == expected_kind
             })
         })
+}
+
+/// Percent is trusted when the glyph is present. The only additional case is a
+/// dropped '%' on HP/ATK/DEF: in-game flats are integers, so a single-digit
+/// decimal like "4.8" cannot be a good flat reading.
+fn value_implies_percent(label: &str, value_text: &str) -> bool {
+    if value_text.contains(['%', '％']) {
+        return true;
+    }
+    is_hp_atk_def_label(label) && is_single_decimal(value_text)
+}
+
+fn is_single_decimal(value_text: &str) -> bool {
+    let compact: String = value_text
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '+' && *ch != ',' && *ch != '，')
+        .map(|ch| if ch == 'S' { '5' } else { ch })
+        .collect();
+    let bytes = compact.as_bytes();
+    bytes.len() == 3 && bytes[0].is_ascii_digit() && bytes[1] == b'.' && bytes[2].is_ascii_digit()
+}
+
+fn is_hp_atk_def_label(label: &str) -> bool {
+    let normalized: String = label
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "生命值" | "攻击力" | "防御力" | "hp" | "atk" | "def"
+    )
 }
 
 fn strip_inactive_suffix(value: &str) -> &str {
@@ -731,6 +847,16 @@ fn detect_rarity(image: &RgbImage) -> Option<u8> {
     (1..=5).contains(&runs).then_some(runs)
 }
 
+fn record_icon(field: &str, rect: NormRect, crop: &RgbImage, state: Option<bool>, confidence: f64) {
+    let pixel = crop.get_pixel(crop.width() / 2, crop.height() / 2).0;
+    annotator::record_pixel(
+        field,
+        rect.center(),
+        pixel,
+        &format!("state={state:?} confidence={confidence:.2}"),
+    );
+}
+
 fn ocr_semantic(detail: impl Into<String>) -> HsrError {
     HsrError::new("HSR-OCR-SEMANTIC", hints::OCR_FAILED, detail)
 }
@@ -858,9 +984,7 @@ mod tests {
     ) -> RgbImage {
         let layout = StatsPanelLayout::MAINTAINED_SEED;
         let mut frame = RgbImage::from_pixel(1920, 1080, Rgb([24, 28, 35]));
-        let rarity = layout
-            .panel
-            .relative(NormRect::new(0.055, 0.135, 0.19, 0.10));
+        let rarity = layout.panel.relative(layout::RELIC_RARITY);
         for index in 0..rarity_count {
             paint_rect(
                 &mut frame,
@@ -875,12 +999,7 @@ mod tests {
         }
         paint_rect(&mut frame, layout.lock_button(InventoryKind::Gear), lock);
         paint_rect(&mut frame, layout.discard_button(), discard);
-        paint_text_evidence(
-            &mut frame,
-            layout
-                .panel
-                .relative(NormRect::new(0.32, 0.90, 0.50, 0.075)),
-        );
+        paint_text_evidence(&mut frame, layout.panel.relative(layout::RELIC_EQUIPPED));
         frame
     }
 
@@ -1077,12 +1196,7 @@ mod tests {
             layout.lock_button(InventoryKind::LightCone),
             Rgb([220, 220, 220]),
         );
-        paint_text_evidence(
-            &mut frame,
-            layout
-                .panel
-                .relative(NormRect::new(0.32, 0.90, 0.50, 0.075)),
-        );
+        paint_text_evidence(&mut frame, layout.panel.relative(layout::RELIC_EQUIPPED));
         let reader = ScriptedOcrReader::default()
             .with(OcrField::LightConeName, ["制胜的瞬间"])
             .with(OcrField::LightConeLevel, ["等级 80/80"])
@@ -1163,6 +1277,46 @@ mod tests {
         let mut planar = PanelParser::new(gear_reader("「黑塔」的空间站点", "攻击力", "43.2%"));
         let parsed = planar.parse_gear(&frame, layout, &refs).unwrap();
         assert_eq!(parsed.observation.main_stat_key, "AttackAddedRatio");
+    }
+
+    #[test]
+    fn dropped_percent_on_hp_atk_def_is_inferred_without_rewriting_integer_flats() {
+        let layout = StatsPanelLayout::MAINTAINED_SEED;
+        let frame = generated_panel_frame(Rgb([230, 180, 65]), Rgb([220, 220, 220]));
+        let refs = collision_references();
+
+        let mut missing_percent = PanelParser::new(
+            ScriptedOcrReader::default()
+                .with(OcrField::GearName, ["过客的逢春木簪"])
+                .with(OcrField::GearLevel, ["+15"])
+                .with(OcrField::GearMainName, ["生命值"])
+                .with(OcrField::GearMainValue, ["705"])
+                .with(OcrField::GearSubName(0), ["生命值"])
+                .with(OcrField::GearSubValue(0), ["3.8"])
+                .with(OcrField::GearSubName(1), ["攻击力"])
+                .with(OcrField::GearSubValue(1), ["38"])
+                .with(OcrField::GearSubName(2), ["防御力"])
+                .with(OcrField::GearSubValue(2), ["4.3"])
+                .with(OcrField::GearSubName(3), ["防御力"])
+                .with(OcrField::GearSubValue(3), ["19"])
+                .with(OcrField::GearEquipped, ["装备"]),
+        );
+        let parsed = missing_percent.parse_gear(&frame, layout, &refs).unwrap();
+        assert_eq!(parsed.observation.main_stat_key, "HPDelta");
+        assert_eq!(
+            parsed
+                .observation
+                .substats
+                .iter()
+                .map(|stat| stat.stat_key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "AttackDelta",
+                "DefenceAddedRatio",
+                "DefenceDelta",
+                "HPAddedRatio"
+            ]
+        );
     }
 
     #[test]

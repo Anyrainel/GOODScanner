@@ -5,8 +5,10 @@ use sha2::{Digest, Sha256};
 use yas::{cancel::CancelToken, capture::CaptureMethod};
 
 use crate::{
+    annotator,
     device::{HsrDevice, InputCommand, WindowsHsrDevice},
     error::{hints, HsrError, HsrResult},
+    layout,
     manager::{
         ManagedField, ManagedGearObservation, ManagedState, ManagerMutationDevice, MutationScope,
         VisibleGearMatcher, VisibleStat,
@@ -29,6 +31,12 @@ use crate::{
 };
 
 const CHARACTER_IDENTITY_REGION: NormRect = NormRect::new(0.045, 0.035, 0.84, 0.25);
+
+/// kel-z/HSR-Scanner menu timings, added on top of `navigation_delay`.
+const MENU_TRANSITION: Duration = Duration::from_millis(1_000);
+const INVENTORY_OPEN: Duration = Duration::from_millis(1_500);
+const TAB_SWITCH: Duration = Duration::from_millis(1_500);
+const DETAILS_OPEN: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanTargets {
@@ -65,6 +73,10 @@ pub struct ScanConfig {
     /// for roster traversal. The default `e` is not claimed live-proven until
     /// the device calibration step succeeds.
     pub next_character_key: char,
+    /// GOODScanner-style OCR dump. When true, crops and full frames are written
+    /// under `debug_images/` as a side effect of parsing; click/wait code is
+    /// unchanged.
+    pub dump_images: bool,
 }
 
 impl Default for ScanConfig {
@@ -80,6 +92,7 @@ impl Default for ScanConfig {
             max_characters: 200,
             expected_characters: None,
             next_character_key: 'e',
+            dump_images: false,
         }
     }
 }
@@ -155,6 +168,13 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     /// ordinal is deliberately discarded: manager identity is the complete
     /// visible matcher, never scan order.
     pub fn scan_manager_inventory(&mut self) -> HsrResult<Vec<ManagedGearObservation>> {
+        annotator::init(self.config.dump_images);
+        let result = self.scan_manager_inventory_inner();
+        annotator::flush();
+        result
+    }
+
+    fn scan_manager_inventory_inner(&mut self) -> HsrResult<Vec<ManagedGearObservation>> {
         self.device.focus_and_verify()?;
         let scan = self.scan_gear()?;
         if scan.coverage != CoverageLevel::Complete {
@@ -172,6 +192,19 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     }
 
     pub fn scan(mut self) -> HsrResult<ScanResult> {
+        annotator::init(self.config.dump_images);
+        if self.config.dump_images {
+            yas::log_info!(
+                "已开启 OCR 截图转储 → debug_images/",
+                "OCR image dumping enabled → debug_images/"
+            );
+        }
+        let result = self.scan_inner();
+        annotator::flush();
+        result
+    }
+
+    fn scan_inner(&mut self) -> HsrResult<ScanResult> {
         self.device.focus_and_verify()?;
         let mut characters = Vec::new();
         let mut light_cones = Vec::new();
@@ -268,7 +301,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         Ok(scan)
     }
 
-    fn scan_inventory<T>(
+    fn scan_inventory<T: std::fmt::Debug>(
         &mut self,
         kind: InventoryKind,
         mut parse: impl FnMut(
@@ -295,12 +328,19 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 },
                 Err(error) => return Err(error),
             };
-            match parse(
-                &mut self.parser,
-                &session.frame,
-                session.panel,
-                &self.references,
+            match dump_parsed_item(
+                inventory_dump_category(kind),
                 ordinal,
+                &session.frame,
+                || {
+                    parse(
+                        &mut self.parser,
+                        &session.frame,
+                        session.panel,
+                        &self.references,
+                        ordinal,
+                    )
+                },
             ) {
                 Ok(item) => items.push(item),
                 Err(error) if is_omittable_ambiguity(error.code()) => {
@@ -378,21 +418,21 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
     fn enter_inventory(&mut self, kind: InventoryKind) -> HsrResult<InventorySession> {
         self.issue_input(InputCommand::Escape)?;
-        self.wait_attended(Duration::from_millis(350))?;
+        self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
         self.issue_input(InputCommand::Key('b'))?;
-        self.wait_attended(self.config.navigation_delay + Duration::from_millis(700))?;
+        self.wait_attended(self.config.navigation_delay + INVENTORY_OPEN)?;
 
-        let tab_x = match kind {
-            InventoryKind::LightCone => 0.38,
-            InventoryKind::Gear => 0.43,
+        let tab = match kind {
+            InventoryKind::LightCone => layout::LIGHT_CONE_TAB,
+            InventoryKind::Gear => layout::GEAR_TAB,
         };
         let mut last_error = None;
         for offset in [0.0, -0.012, 0.012, -0.024, 0.024] {
             self.issue_input(InputCommand::Click(crate::vision::Point::new(
-                tab_x + offset,
-                0.06,
+                tab.x + offset,
+                tab.y,
             )))?;
-            self.wait_attended(self.config.navigation_delay + Duration::from_millis(350))?;
+            self.wait_attended(self.config.navigation_delay + TAB_SWITCH)?;
             let before = self.capture_stable()?;
             let grid = match discover_inventory_grid(&before) {
                 Ok(grid) => grid,
@@ -405,7 +445,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 continue;
             };
             self.issue_input(InputCommand::Click(first))?;
-            self.wait_attended(self.config.navigation_delay)?;
+            self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
             let selected = self.capture_stable()?;
             if selected_cell(&grid, &selected).map(|entry| entry.0) != Some(0) {
                 last_error = Some(HsrError::new(
@@ -420,31 +460,60 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 .discover_inventory_panel(&selected, kind, &self.references)
             {
                 Ok(panel) => {
-                    let primary_quantity = self.read_inventory_quantity(&selected)?;
-                    self.validate_inventory_quantity(primary_quantity, "primary")?;
+                    dump_inventory_setup(kind, &selected);
+                    let primary_quantity = match self.read_inventory_quantity(&selected) {
+                        Ok(quantity) => quantity,
+                        Err(error) => {
+                            annotator::finalize_error(None, &error.to_string());
+                            return Err(error);
+                        },
+                    };
+                    if let Err(error) =
+                        self.validate_inventory_quantity(primary_quantity, "primary")
+                    {
+                        annotator::finalize_error(None, &error.to_string());
+                        return Err(error);
+                    }
                     self.wait_attended(Duration::from_millis(30))?;
                     let confirmation_frame = self.device.capture_client()?;
+                    annotator::add_image("confirmation", &confirmation_frame);
                     if selected_cell(&grid, &confirmation_frame).map(|entry| entry.0) != Some(0)
                         || !frames_similar(
                             &panel.immutable_panel().crop(&selected)?,
                             &panel.immutable_panel().crop(&confirmation_frame)?,
                         )
                     {
-                        return Err(HsrError::new(
+                        let error = HsrError::new(
                             "HSR-SCAN-QUANTITY-FRAME",
                             hints::SCREEN_INVALID,
                             "independent quantity confirmation frame did not preserve the selected first card and immutable detail panel",
-                        ));
+                        );
+                        annotator::finalize_error(None, &error.to_string());
+                        return Err(error);
                     }
                     let confirmation_quantity =
-                        self.read_inventory_quantity(&confirmation_frame)?;
-                    self.validate_inventory_quantity(confirmation_quantity, "confirmation")?;
+                        match self.read_inventory_quantity(&confirmation_frame) {
+                            Ok(quantity) => quantity,
+                            Err(error) => {
+                                annotator::finalize_error(None, &error.to_string());
+                                return Err(error);
+                            },
+                        };
+                    if let Err(error) =
+                        self.validate_inventory_quantity(confirmation_quantity, "confirmation")
+                    {
+                        annotator::finalize_error(None, &error.to_string());
+                        return Err(error);
+                    }
                     // Use the larger plausible reading for traversal so a
                     // disagreement cannot silently truncate the inventory.
                     // Coverage remains unknown until all reads agree and the
                     // terminal probes independently prove the bottom.
                     let quantity = primary_quantity.max(confirmation_quantity);
                     let cursor = InventoryCursor::new(quantity, &grid)?;
+                    annotator::finalize_success(&format!(
+                        "quantity_reads=[{primary_quantity}, {confirmation_quantity}]"
+                    ));
                     return Ok(InventorySession {
                         cursor,
                         grid,
@@ -466,10 +535,15 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     }
 
     fn read_inventory_quantity(&mut self, frame: &RgbImage) -> HsrResult<usize> {
-        let crop = NormRect::new(0.775, 0.022, 0.17, 0.075).crop(frame)?;
+        let crop = layout::QUANTITY.crop(frame)?;
         let text = self
             .parser_reader_mut()
             .read(OcrField::InventoryQuantity, &crop)?;
+        annotator::record_ocr(
+            OcrField::InventoryQuantity.dump_name().as_str(),
+            layout::QUANTITY,
+            &text,
+        );
         let first = text.split(['/', '／']).next().unwrap_or_default();
         let digits: String = first.chars().filter(char::is_ascii_digit).collect();
         digits.parse().map_err(|error| {
@@ -737,11 +811,11 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     fn scan_characters(&mut self) -> HsrResult<CharacterScan> {
         yas::log_info!("正在扫描角色详情。", "Scanning Character details.");
         self.issue_input(InputCommand::Escape)?;
-        self.wait_attended(Duration::from_millis(350))?;
+        self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
         self.issue_input(InputCommand::Key('c'))?;
-        self.wait_attended(self.config.navigation_delay + Duration::from_millis(900))?;
-        self.issue_input(InputCommand::Click(crate::vision::Point::new(0.13, 0.143)))?;
-        self.wait_attended(self.config.navigation_delay)?;
+        self.wait_attended(self.config.navigation_delay + INVENTORY_OPEN)?;
+        self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
+        self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
 
         let limit = self
             .config
@@ -758,13 +832,12 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         for index in 0..limit {
             visited = index + 1;
             let eidolon = self.read_eidolon_count()?;
-            self.issue_input(InputCommand::Click(crate::vision::Point::new(0.13, 0.143)))?;
-            self.wait_attended(self.config.navigation_delay)?;
-            let parsed = match self.parser.parse_character_details(
-                &details,
-                &self.references,
-                eidolon,
-            ) {
+            self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
+            self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+            let parsed = match dump_parsed_item("characters", index, &details, || {
+                self.parser
+                    .parse_character_details(&details, &self.references, eidolon)
+            }) {
                 Ok(parsed) => Some(parsed),
                 Err(error) if error.code() == "HSR-OCR-CHARACTER-AMBIGUOUS" => {
                     coverage_degraded = true;
@@ -887,8 +960,8 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     }
 
     fn read_eidolon_count(&mut self) -> HsrResult<u8> {
-        self.issue_input(InputCommand::Click(crate::vision::Point::new(0.13, 0.49)))?;
-        self.wait_attended(self.config.navigation_delay + Duration::from_millis(200))?;
+        self.issue_input(InputCommand::Click(layout::EIDOLONS_BUTTON))?;
+        self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
         let frame = self.capture_stable()?;
         let positions = [
             (0.32724, 0.17778),
@@ -938,9 +1011,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
     fn leave_menu(&mut self) -> HsrResult<()> {
         self.issue_input(InputCommand::Escape)?;
-        self.wait_attended(Duration::from_millis(300))?;
+        self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
         self.issue_input(InputCommand::Escape)?;
-        self.wait_attended(Duration::from_millis(300))
+        self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)
     }
 
     fn ensure_attended(&self) -> HsrResult<()> {
@@ -971,6 +1044,42 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         self.ensure_attended()?;
         self.device.wait(duration)?;
         self.ensure_attended()
+    }
+}
+
+fn inventory_dump_category(kind: InventoryKind) -> &'static str {
+    match kind {
+        InventoryKind::LightCone => "light_cones",
+        InventoryKind::Gear => "gear",
+    }
+}
+
+fn dump_inventory_setup(kind: InventoryKind, frame: &RgbImage) {
+    let category = match kind {
+        InventoryKind::LightCone => "inventory_light_cones",
+        InventoryKind::Gear => "inventory_gear",
+    };
+    annotator::begin_item(category, 0);
+    annotator::add_image("full", frame);
+}
+
+fn dump_parsed_item<T: std::fmt::Debug>(
+    category: &str,
+    index: usize,
+    frame: &RgbImage,
+    parse: impl FnOnce() -> HsrResult<T>,
+) -> HsrResult<T> {
+    annotator::begin_item(category, index);
+    annotator::add_image("full", frame);
+    match parse() {
+        Ok(item) => {
+            annotator::finalize_success(&format!("{item:#?}"));
+            Ok(item)
+        },
+        Err(error) => {
+            annotator::finalize_error(None, &error.to_string());
+            Err(error)
+        },
     }
 }
 
@@ -1729,6 +1838,7 @@ mod tests {
         assert!(config.max_characters <= 200);
         assert!(config.inventory_scroll_ticks_per_page > 0);
         assert!(!config.scroll_tick_delay.is_zero());
+        assert!(!config.dump_images);
     }
 
     #[test]

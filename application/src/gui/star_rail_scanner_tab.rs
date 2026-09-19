@@ -139,6 +139,13 @@ pub fn show(
                                 ),
                             );
                         });
+                        ui.checkbox(
+                            &mut settings.dump_images,
+                            lang.t(
+                                "保存OCR截图 → debug_images/",
+                                "Dump OCR images → debug_images/",
+                            ),
+                        );
                         if !settings.scan_characters
                             && !settings.scan_light_cones
                             && !settings.scan_relics_and_ornaments

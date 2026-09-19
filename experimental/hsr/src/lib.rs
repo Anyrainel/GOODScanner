@@ -1,10 +1,12 @@
 //! Honkai: Star Rail capture, screenshot scanner, export, and attended
 //! reversible status manager used by the shared GOODScanner applications.
 
+pub mod annotator;
 pub mod capture;
 pub mod device;
 mod embedded_reference;
 pub mod error;
+pub mod layout;
 pub mod localization;
 pub mod manager;
 pub mod model;
@@ -42,7 +44,7 @@ pub use packet_capture::{
 };
 pub use pipeline::{
     build_achievement_only_export, build_achievement_snapshot, build_export,
-    build_export_with_achievements, write_export_create_new,
+    build_export_with_achievements, write_export_create_new, write_json_create_new,
 };
 pub use reference::{
     load_gilore_reference_bundle, GiloreBundleReferenceProvider, JsonFileReferenceProvider,

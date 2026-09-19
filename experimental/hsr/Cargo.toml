@@ -38,7 +38,7 @@ yas = { path = "../../yas", package = "yas_core", features = ["ort", "capturer_w
 
 # Packet capture is compiled only into GOODCapture.
 etherparse = { version = "0.17", optional = true }
-kcp = { version = "0.5", optional = true }
+kcp = { git = "https://github.com/hashblen/mhy-kcp", rev = "1acf4ba5938ff91f7f2d2a31e16bf1f8d2db9c8f", optional = true }
 protobuf = { version = "=3.7.1", optional = true }
 rand_mt = { version = "5.0", optional = true }
 thiserror = { version = "2", optional = true }
@@ -51,3 +51,14 @@ tokio-util = { version = "0.7", optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
 pktmon = { version = "0.6", features = ["tokio"], optional = true }
+
+[dev-dependencies]
+env_logger = "0.11"
+
+[[example]]
+name = "live_capture"
+required-features = ["capture"]
+
+[[example]]
+name = "analyze_dump"
+required-features = ["capture"]
