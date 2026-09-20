@@ -142,6 +142,20 @@ impl AchievementCatalog {
         }
     }
 
+    pub fn ids_for_title(&self, title: &str) -> Vec<u32> {
+        let mut ids = self
+            .titles
+            .get(&normalize_text(title))
+            .cloned()
+            .unwrap_or_default();
+        ids.sort_unstable();
+        ids
+    }
+
+    pub fn title_id_count(&self, title: &str) -> usize {
+        self.ids_for_title(title).len()
+    }
+
     pub fn len(&self) -> usize {
         self.titles.values().map(|ids| ids.len()).sum()
     }
@@ -388,6 +402,7 @@ mod tests {
         let cat = AchievementCatalog::from_cached(&entries);
         assert_eq!(cat.match_text("俯瞰风景", ""), Some(81000));
         assert_eq!(cat.match_text("动物园大亨", ""), None);
+        assert_eq!(cat.ids_for_title("动物园大亨"), vec![80127, 80128]);
     }
 
     #[test]

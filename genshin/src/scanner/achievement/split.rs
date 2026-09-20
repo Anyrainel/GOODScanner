@@ -9,8 +9,8 @@ use image::{GenericImageView, Rgb, RgbImage};
 use super::layout::{
     CATEGORY_PROBE_X0, CATEGORY_PROBE_X1, CATEGORY_SELECTED_MAX_H, CATEGORY_SELECTED_MIN_H,
     LIST_MIN_HEIGHT_RATIO, LIST_MIN_WIDTH_RATIO, LIST_PANEL_GRAY, LIST_PROBE_X0, LIST_PROBE_X1,
-    LIST_ROW_BRIGHT_RATIO, LIST_RUN_GAP, LIST_X_GAP, MIN_ROW_HEIGHT, PARTIAL_ROW_HEIGHT_RATIO,
-    ROW_DIVIDER_MAX,
+    LIST_ROW_BRIGHT_RATIO, LIST_RUN_GAP, LIST_UNCHANGED_MEAN_DELTA, LIST_X_GAP, MIN_ROW_HEIGHT,
+    PARTIAL_ROW_HEIGHT_RATIO, ROW_DIVIDER_MAX,
 };
 
 /// Axis-aligned rectangle in image pixels.
@@ -141,6 +141,14 @@ pub fn split_row_bands(list: &RgbImage, keep_last: bool) -> Vec<RowBand> {
     let median = heights[heights.len() / 2] as f32;
 
     if !keep_last {
+        while rows.len() > 1 {
+            let first_h = rows[0].rect.h as f32;
+            if first_h < median * PARTIAL_ROW_HEIGHT_RATIO {
+                rows.remove(0);
+            } else {
+                break;
+            }
+        }
         while rows.len() > 1 {
             let last_h = rows.last().unwrap().rect.h as f32;
             if last_h < median * PARTIAL_ROW_HEIGHT_RATIO {
@@ -308,6 +316,37 @@ pub fn crop_frac(row: &RgbImage, frac: (f32, f32, f32, f32)) -> Option<RgbImage>
     Some(row.view(x, y, w, h).to_image())
 }
 
+/// True when two list crops show the same cards (scroll hit the bottom).
+///
+/// Only the left ~58% is compared. The right side is status/date text that
+/// shimmers and would otherwise keep the controller scrolling after the list
+/// has already stopped moving.
+pub fn list_nearly_equal(a: &RgbImage, b: &RgbImage) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return false;
+    }
+    let (w, h) = a.dimensions();
+    if w == 0 || h == 0 {
+        return false;
+    }
+    let x_limit = ((w as f32) * 0.58).round().max(1.0) as u32;
+    let step_x = (x_limit / 32).max(1) as usize;
+    let step_y = (h / 32).max(1) as usize;
+    let mut sum = 0u64;
+    let mut n = 0u64;
+    for y in (0..h).step_by(step_y) {
+        for x in (0..x_limit).step_by(step_x) {
+            let pa = a.get_pixel(x, y);
+            let pb = b.get_pixel(x, y);
+            sum += pa[0].abs_diff(pb[0]) as u64
+                + pa[1].abs_diff(pb[1]) as u64
+                + pa[2].abs_diff(pb[2]) as u64;
+            n += 1;
+        }
+    }
+    n > 0 && (sum / n) <= LIST_UNCHANGED_MEAN_DELTA
+}
+
 pub fn crop_row(list: &RgbImage, band: &RowBand) -> Option<RgbImage> {
     let r = band.rect;
     if r.w == 0 || r.h == 0 {
@@ -401,5 +440,25 @@ mod tests {
         assert!(rect.h >= 50 && rect.h <= 120, "h={}", rect.h);
         assert!(rect.x < 200, "x={}", rect.x);
         assert!(rect.w > 150, "w={}", rect.w);
+    }
+
+    #[test]
+    fn list_nearly_equal_accepts_identical_crops() {
+        let a = RgbImage::from_pixel(64, 64, Rgb([231, 231, 231]));
+        let b = a.clone();
+        assert!(list_nearly_equal(&a, &b));
+        let mut c = a.clone();
+        fill_rect(&mut c, 0, 0, 64, 64, Rgb([10, 10, 10]));
+        assert!(!list_nearly_equal(&a, &c));
+    }
+
+    #[test]
+    fn list_nearly_equal_ignores_status_date_flicker() {
+        let a = RgbImage::from_pixel(100, 40, Rgb([231, 231, 231]));
+        let mut b = a.clone();
+        fill_rect(&mut b, 70, 0, 30, 40, Rgb([40, 40, 40]));
+        assert!(list_nearly_equal(&a, &b));
+        fill_rect(&mut b, 0, 0, 40, 40, Rgb([10, 10, 10]));
+        assert!(!list_nearly_equal(&a, &b));
     }
 }

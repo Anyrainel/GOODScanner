@@ -30,15 +30,24 @@ pub const CATEGORY_STEP_Y: f64 = 104.0;
 pub const CATEGORY_VISIBLE: usize = 8;
 
 /// Safety cap on category clicks (including left-list scrolls).
-pub const MAX_CATEGORIES: usize = 64;
+pub const MAX_CATEGORIES: usize = 128;
 
 /// Cocogoat CaptureScanner: `MOUSEEVENTF_WHEEL` dwData=-120, `repeat=11`
 /// per capture. One tick per OCR frame is what made the list crawl.
 pub const LIST_WHEEL_TICKS: i32 = 11;
 
-/// Consecutive captures with no new unique rows before treating the list as done.
-/// Cocogoat used `zeroTimes > 5`.
+/// Consecutive captures with no new unique titles before treating the list as done.
+/// Pixel-identical lists stop immediately; this fallback must be high enough
+/// that two OCR misses in a row do not abandon a long category.
 pub const IDLE_FRAMES_BEFORE_STOP: u32 = 6;
+
+/// Safety cap so a flickering OCR key cannot scroll a category forever.
+/// 天地万象 is hundreds of cards; 11 wheel ticks only move ~1.5 rows, so
+/// a full pass can need ~800 frames. Pixel-identical title regions stop earlier.
+pub const MAX_LIST_FRAMES: u32 = 1200;
+
+/// Mean per-sample RGB delta below which two list captures are the same view.
+pub const LIST_UNCHANGED_MEAN_DELTA: u64 = 6;
 
 /// Left sidebar probe (fraction of window width) for the selected category row.
 pub const CATEGORY_PROBE_X0: f32 = 0.04;
