@@ -2,14 +2,23 @@
 //! `source` is the importer's required format discriminator; `generator` records
 //! the actual producer. Account and server-instance identifiers are not exported.
 //! See `docs/HSR_EXPORT.md`.
-use crate::{model::*, reference::ReferenceCache, HsrError, HsrResult};
+//!
+//! Screenshot OCR and packet capture both write this shape. OCR omits fields it
+//! cannot observe rather than emitting a second schema.
+
+use crate::{
+    model::*, observation::ValidatedObservationSnapshot, reference::ReferenceCache, HsrError,
+    HsrResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CharacterDetails {
-    pub ability_version: u32,
+    /// Packet skill-tree revision. Screenshot scans omit this; it is not on screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability_version: Option<u32>,
     pub skills: BTreeMap<String, u32>,
     pub traces: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,7 +45,6 @@ pub fn build_scanner_export(
             .ok_or_else(|| invalid("unknown character"))?;
         let mut value = json!({"id": c.character_id.to_string(), "name": r.name.en,
             "path": path_name(&r.path)?, "level": c.level, "ascension": c.ascension, "eidolon": c.eidolon});
-        // Missing progression remains absent for non-packet sources, never invented.
         if let Some(detail) = details.characters.get(&c.character_id) {
             value.as_object_mut().unwrap().extend(
                 serde_json::to_value(detail)
@@ -53,6 +61,8 @@ pub fn build_scanner_export(
         let r = refs
             .light_cone(c.light_cone_id)
             .ok_or_else(|| invalid("unknown Light Cone"))?;
+        // TODO(ocr): Chinese 「装备中」 has no character name; location stays "".
+        // v4 requires a lock boolean; an unread lock icon serializes as false.
         cones.push(json!({"id": c.light_cone_id.to_string(), "name": r.name.en,
             "level": c.level, "ascension": c.ascension, "superimposition": c.superimposition,
             "location": location(c.equipped_character_id), "lock": c.lock.unwrap_or(false),
@@ -74,6 +84,8 @@ pub fn build_scanner_export(
             "value": s.value}))
             })
             .collect::<HsrResult<Vec<_>>>()?;
+        // TODO(ocr): equipped character is often unknown from the portrait row.
+        // v4 requires lock/discard booleans; unread icons serialize as false.
         relics.push(json!({"set_id": r.set_key, "name": r.set_name.en,
             "slot": match r.slot { GearSlot::Head => "Head", GearSlot::Hands => "Hands",
                 GearSlot::Body => "Body", GearSlot::Feet => "Feet", GearSlot::PlanarSphere => "Planar Sphere",
@@ -95,12 +107,14 @@ pub fn build_scanner_export(
     if let Some(path) = &details.current_trailblazer_path {
         metadata.insert("current_trailblazer_path".into(), json!(path));
     }
+    // TODO(ocr): ability_version is a packet skill-tree revision, not on-screen text.
     let mut export = json!({"source": "HSR-Scanner", "build": "v1.2.0", "version": 4,
         "generator": {"name": "GOODScanner", "version": env!("CARGO_PKG_VERSION"),
             "captureRevision": snapshot.evidence.revision, "compatibility": "HSR-Scanner v1.2.0 / format v4"},
         "metadata": metadata,
         "coverage": snapshot.evidence.coverage, "characters": characters, "light_cones": cones, "relics": relics});
     // Presence is authoritative, including []. Absence means achievements were not observed.
+    // TODO(ocr): completed achievements are not visible inventory text; omit the field.
     if let Some(ids) = completed_achievement_ids {
         export
             .as_object_mut()
@@ -108,6 +122,23 @@ pub fn build_scanner_export(
             .insert("achievements".into(), json!(ids));
     }
     Ok(export)
+}
+
+/// Same v4 document the capture GUI writes. Screenshot scans fill
+/// [`CaptureExportDetails`] from visible traces/skills text when those screens
+/// were read; packet-only fields stay omitted.
+pub fn export_observations(
+    snapshot: &ValidatedObservationSnapshot,
+    refs: &ReferenceCache,
+    details: &CaptureExportDetails,
+    completed_achievement_ids: Option<&[u32]>,
+) -> HsrResult<Value> {
+    build_scanner_export(
+        snapshot.as_inner(),
+        refs,
+        details,
+        completed_achievement_ids,
+    )
 }
 
 fn location(id: Option<u32>) -> String {

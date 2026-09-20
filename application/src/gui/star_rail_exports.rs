@@ -35,7 +35,7 @@ fn write_capture_set(
     only_latest: bool,
 ) -> HsrResult<CaptureFiles> {
     let bytes = serialize(export)?;
-    let path = output_dir.join(format!("star_rail_export_{stamp}.json"));
+    let path = output_dir.join(format!("star_rail_capture_{stamp}.json"));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -96,6 +96,7 @@ fn remove_older_exports(dir: &Path, current: &str) -> std::io::Result<()> {
 fn export_timestamp(name: &str) -> Option<&str> {
     let body = name.strip_suffix(".json")?;
     let stamp = [
+        "star_rail_capture_",
         "star_rail_export_",
         "star_rail_fribbels_",
         "star_rail_achievements_",
@@ -149,9 +150,9 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir(&dir).unwrap();
-        let old = dir.join("star_rail_export_2026-09-01_10-00-00.json");
+        let old = dir.join("star_rail_capture_2026-09-01_10-00-00.json");
         fs::write(&old, b"previous complete export").unwrap();
-        fs::create_dir(dir.join("star_rail_export_2026-09-07_10-00-00_000000001.json")).unwrap();
+        fs::create_dir(dir.join("star_rail_capture_2026-09-07_10-00-00_000000001.json")).unwrap();
         let export = serde_json::json!({"source": "HSR-Scanner", "version": 4});
         assert!(write_capture_set(&dir, "2026-09-07_10-00-00_000000001", &export, true).is_err());
         assert_eq!(fs::read(old).unwrap(), b"previous complete export");
@@ -169,16 +170,18 @@ mod tests {
         ));
         fs::create_dir(&dir).unwrap();
         let old = [
+            "star_rail_capture_2026-09-01_10-00-00.json",
             "star_rail_export_2026-09-01_10-00-00.json",
             "star_rail_fribbels_2026-09-01_10-00-00_000000001.json",
             "star_rail_achievements_2026-09-01_10-00-00_000000001.json",
         ];
         let keep = [
             "genshin_export_2026-09-01_10-00-00.json",
+            "star_rail_scan_2026-09-01_10-00-00.json",
             "star_rail_export_latest.json",
             "star_rail_export_2026-02-30_10-00-00.json",
             "star_rail_export_2026-09-01_10-00-00.backup.json",
-            "star_rail_export_2026-09-07_10-00-00_000000001.json",
+            "star_rail_capture_2026-09-07_10-00-00_000000001.json",
             "star_rail_fribbels_2026-09-08_10-00-00.json",
         ];
         for name in old.iter().chain(keep.iter()) {

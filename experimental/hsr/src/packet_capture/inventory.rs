@@ -342,7 +342,7 @@ fn invalid(detail: impl Into<String>) -> HsrError {
 // Current AvatarPathSkillTree uses public point anchors 1-22 (Reliquary v23).
 fn character_details(path: &AvatarPathData) -> crate::scanner_export::CharacterDetails {
     let mut result = crate::scanner_export::CharacterDetails {
-        ability_version: path.skilltree_version,
+        ability_version: Some(path.skilltree_version),
         ..Default::default()
     };
     for name in ["basic", "skill", "ult", "talent"] {

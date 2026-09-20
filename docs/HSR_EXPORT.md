@@ -1,6 +1,7 @@
 # Star Rail export format / 《星穹铁道》导出格式
 
-GOODCapture writes **one** JSON file: `star_rail_export_<timestamp>.json`.
+GOODCapture writes **one** JSON file: `star_rail_capture_<timestamp>.json`.
+The screenshot scanner writes the same v4 shape to `star_rail_scan_<timestamp>.json`.
 
 The file is **HSR-Scanner format v4**, the same interchange used by
 [HSR-Scanner](https://github.com/kel-z/HSR-Scanner) (`source: "HSR-Scanner"`)
@@ -9,9 +10,10 @@ and [Reliquary Archiver](https://github.com/IceDynamix/reliquary-archiver)
 GOODCapture uses `source: "HSR-Scanner"` because Fribbels allowlists that
 string; `generator` records the actual producer.
 
-抓包只写这一份 JSON。基础形状与 Kel-Z HSR-Scanner / Reliquary Archiver 的
-v4 互通格式相同；GOODCapture 的 `source` 固定为 `HSR-Scanner`，真正的生成器
-写在 `generator` 里。
+抓包与截图扫描写同一套 v4 JSON，但文件名前缀不同（`star_rail_capture_` /
+`star_rail_scan_`），避免互相覆盖。GOODScanner 的 `source` 固定为 `HSR-Scanner`，
+真正的生成器写在 `generator` 里。截图扫描会读取画面上能看到的技能/行迹文字；
+无法从画面读出的字段（成就数据包、`ability_version` 等）省略，不另起一套 schema。
 
 ## Required v4 fields / 必填 v4 字段
 
@@ -22,7 +24,7 @@ v4 互通格式相同；GOODCapture 的 `source` 固定为 `HSR-Scanner`，真�
 | `version` | `4` |
 | `metadata.uid` | always `null` (account IDs are not exported) |
 | `metadata.trailblazer` | `"Stelle"` or `"Caelus"`, else `null` |
-| `characters[]` | `id` (string), `name`, `path`, `level`, `ascension`, `eidolon`; packet captures also include `ability_version`, `skills`, `traces`, optional `memosprite` |
+| `characters[]` | `id` (string), `name`, `path`, `level`, `ascension`, `eidolon`. Packet captures also include `ability_version`. Screenshot OCR fills `skills`, `traces`, and optional `memosprite` from the traces screen when readable; `ability_version` is omitted because it is not on-screen text. |
 | `light_cones[]` | `id` (string), `name`, `level`, `ascension`, `superimposition`, `location`, `lock`, `_uid` |
 | `relics[]` | all six slots; `set_id`, `name`, `slot`, `rarity`, `level`, `mainstat`, `substats[{key,value}]`, `location`, `lock`, `discard`, `_uid` |
 

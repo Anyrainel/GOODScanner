@@ -1,4 +1,12 @@
-//! Experimental, user-confirmed HSR gear-state manager.
+//! Experimental, user-confirmed HSR Relic-state manager.
+//!
+//! Relic identity is produced by the screenshot scanner's gear path
+//! (`HsrScanner::scan_gear`). This module only plans extra lock/unlock (and
+//! reversible discard-mark) clicks from that observation. It does not parse
+//! Relic panels itself.
+//!
+//! Implemented: (1) lock/unlock Relics per instruction.
+//! Not yet: (2) equip Relics onto characters, (3) trigger a recent-Relics scan.
 //!
 //! This module deliberately contains no game-specific click coordinates.  It
 //! plans mutations from a fresh visible inventory observation and executes

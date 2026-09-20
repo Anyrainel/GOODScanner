@@ -9,16 +9,17 @@ use std::{
 use hsr_scanner::{
     capture::import_reliquary_archive_file,
     data_cache::load_data_cache,
+    export_observations,
     manager::{
         apply_manager_envelope, build_manager_plan, load_manager_recovery_plan,
         validate_manager_envelope_reference, AppendOnlyJsonJournalStore, ApplyAuthorization,
         HsrControllerLease, ManagerInstructionsEnvelope, ManagerJournalStore, ManagerPlan,
         MutationScope,
     },
-    pipeline::{build_export, write_export_create_new},
+    pipeline::write_json_create_new,
     reference::ReferenceCache,
     scanner::{HsrScanner, ScanConfig, ScanTargets},
-    HsrError, Language,
+    CaptureExportDetails, HsrError, Language, ValidatedObservationSnapshot,
 };
 
 use crate::config::StarRailSettings;
@@ -161,11 +162,89 @@ pub fn load_references() -> Result<ReferenceCache, HsrError> {
     Ok(references)
 }
 
-pub fn next_export_path(output_dir: &Path) -> PathBuf {
+pub fn next_scan_export_path(output_dir: &Path) -> PathBuf {
     output_dir.join(format!(
-        "star_rail_export_{}.json",
+        "star_rail_scan_{}.json",
         genshin_scanner::cli::chrono_timestamp()
     ))
+}
+
+struct V4ExportFile {
+    path: PathBuf,
+    counts: (usize, usize, usize, usize),
+}
+
+fn write_v4_export(
+    observations: &ValidatedObservationSnapshot,
+    references: &ReferenceCache,
+    output_dir: &Path,
+    details: &CaptureExportDetails,
+) -> Result<V4ExportFile, UiError> {
+    let export = export_observations(observations, references, details, None).map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "扫描结果无法转换为 HSR-Scanner v4 JSON。",
+                "The scan result could not be converted into HSR-Scanner v4 JSON.",
+            ),
+            error,
+        )
+    })?;
+    let path = next_scan_export_path(output_dir);
+    write_json_create_new(&path, &export).map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "星穹铁道导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
+                "The Star Rail export file could not be written. Check the output folder, disk space, and file permissions.",
+            ),
+            error,
+        )
+    })?;
+    Ok(V4ExportFile {
+        counts: v4_inventory_counts(&export),
+        path,
+    })
+}
+
+fn v4_inventory_counts(export: &serde_json::Value) -> (usize, usize, usize, usize) {
+    let characters = export["characters"].as_array().map(Vec::len).unwrap_or(0);
+    let light_cones = export["light_cones"].as_array().map(Vec::len).unwrap_or(0);
+    let relics = export["relics"].as_array();
+    let planar = relics
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| matches!(item["slot"].as_str(), Some("Planar Sphere" | "Link Rope")))
+                .count()
+        })
+        .unwrap_or(0);
+    let cavern = relics.map(Vec::len).unwrap_or(0).saturating_sub(planar);
+    (characters, light_cones, cavern, planar)
+}
+
+fn v4_export_message(imported: bool, counts: (usize, usize, usize, usize), path: &Path) -> UiText {
+    if imported {
+        UiText::new(
+            format!(
+                "导入并导出完成：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品。输出：{}",
+                counts.0, counts.1, counts.2, counts.3, path.display()
+            ),
+            format!(
+                "Import and export complete: {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments. Output: {}",
+                counts.0, counts.1, counts.2, counts.3, path.display()
+            ),
+        )
+    } else {
+        UiText::new(
+            format!(
+                "已导出：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品。输出：{}",
+                counts.0, counts.1, counts.2, counts.3, path.display()
+            ),
+            format!(
+                "Exported {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments. Output: {}",
+                counts.0, counts.1, counts.2, counts.3, path.display()
+            ),
+        )
+    }
 }
 
 /// Preserve a fully reconciled journal under a unique completed name so the
@@ -280,56 +359,13 @@ pub fn spawn_scan(settings: &StarRailSettings, status: Arc<Mutex<TaskStatus>>) -
             if user_aborted(&cancel) {
                 return Ok(stopped(TaskKind::Scanner));
             }
-            let export = build_export(result.observations, &references).map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "扫描结果无法转换为 GGStarRail 导入文件。",
-                        "The scan result could not be converted into a GGStarRail import file.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let summary = UiText::new(
-                format!(
-                    "已导出：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品",
-                    export.characters.len(),
-                    export.light_cones.len(),
-                    export.relics.len(),
-                    export.planar_ornaments.len()
-                ),
-                format!(
-                    "Exported {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments",
-                    export.characters.len(),
-                    export.light_cones.len(),
-                    export.relics.len(),
-                    export.planar_ornaments.len()
-                ),
-            );
-            let path = next_export_path(&output_dir);
-            write_export_create_new(&path, &export).map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "星穹铁道导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
-                        "The Star Rail export file could not be written. Check the output folder, disk space, and file permissions.",
-                    ),
-                    error,
-                )
-            })?;
-            Ok(UiText::new(
-                format!(
-                    "{}。输出：{}",
-                    summary.text(super::state::Lang::Zh),
-                    path.display()
-                ),
-                format!(
-                    "{}. Output: {}",
-                    summary.text(super::state::Lang::En),
-                    path.display()
-                ),
-            ))
+            let export = write_v4_export(
+                &result.observations,
+                &references,
+                &output_dir,
+                &result.export_details,
+            )?;
+            Ok(v4_export_message(false, export.counts, &export.path))
         },
     )
 }
@@ -390,54 +426,13 @@ pub fn spawn_offline_import(
             if user_aborted(&cancel) {
                 return Ok(stopped(TaskKind::Scanner));
             }
-            let export = build_export(imported.into_observations(), &references).map_err(
-                |error| {
-                    hsr_ui_error(
-                        UiText::new(
-                            "导入内容无法转换为 GGStarRail 导入文件。",
-                            "The imported data could not be converted into a GGStarRail import file.",
-                        ),
-                        error,
-                    )
-                },
+            let export = write_v4_export(
+                &imported.into_observations(),
+                &references,
+                &output_dir,
+                &CaptureExportDetails::default(),
             )?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let counts = (
-                export.characters.len(),
-                export.light_cones.len(),
-                export.relics.len(),
-                export.planar_ornaments.len(),
-            );
-            let path = next_export_path(&output_dir);
-            write_export_create_new(&path, &export).map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "星穹铁道导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
-                        "The Star Rail export file could not be written. Check the output folder, disk space, and file permissions.",
-                    ),
-                    error,
-                )
-            })?;
-            Ok(UiText::new(
-                format!(
-                    "导入并导出完成：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品。输出：{}",
-                    counts.0,
-                    counts.1,
-                    counts.2,
-                    counts.3,
-                    path.display()
-                ),
-                format!(
-                    "Import and export complete: {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments. Output: {}",
-                    counts.0,
-                    counts.1,
-                    counts.2,
-                    counts.3,
-                    path.display()
-                ),
-            ))
+            Ok(v4_export_message(true, export.counts, &export.path))
         },
     )
 }

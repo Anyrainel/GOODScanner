@@ -447,7 +447,7 @@ fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
         .unwrap()
         .to_str()
         .unwrap()
-        .starts_with("star_rail_export_"));
+        .starts_with("star_rail_capture_"));
     assert_eq!(common["achievements"], serde_json::json!([achievement_id]));
     let extras: Vec<_> = fs::read_dir(&output_dir)
         .unwrap()

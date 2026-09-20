@@ -103,8 +103,8 @@ pub fn show(
     }
     ui.label(
         egui::RichText::new(lang.t(
-            "扫描角色、光锥、隧洞遗器和位面饰品，并生成可直接导入 GGStarRail 的隐私安全 JSON。",
-            "Scan Characters, Light Cones, Cavern Relics, and Planar Ornaments into a privacy-safe JSON file for GGStarRail.",
+            "扫描角色、光锥、隧洞遗器和位面饰品，并生成与抓包相同的 HSR-Scanner v4 JSON（star_rail_scan_*.json）。",
+            "Scan Characters, Light Cones, Cavern Relics, and Planar Ornaments into the same HSR-Scanner v4 JSON as capture (star_rail_scan_*.json).",
         ))
         .color(egui::Color32::from_rgb(120, 120, 120)),
     );
@@ -287,8 +287,8 @@ pub fn show(
                             .add_enabled(
                                 !game_busy && !settings.offline_import_path.trim().is_empty(),
                                 egui::Button::new(lang.t(
-                                    "导入并导出 GGStarRail JSON",
-                                    "Import and Export GGStarRail JSON",
+                                    "导入并导出 HSR-Scanner v4 JSON",
+                                    "Import and Export HSR-Scanner v4 JSON",
                                 )),
                             )
                             .clicked()

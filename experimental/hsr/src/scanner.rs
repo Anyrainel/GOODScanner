@@ -19,10 +19,12 @@ use crate::{
     },
     observation::ValidatedObservationSnapshot,
     ocr::{
-        detect_discard_state, detect_icon_state, InventoryKind, OcrField, OcrReader, PaddleOcrReader,
-        PanelParser, ParsedGearPanel, StatsPanelLayout, MANAGED_ICON_CONFIDENCE_THRESHOLD,
+        detect_discard_state, detect_icon_state, InventoryKind, OcrField, OcrReader,
+        PaddleOcrReader, PanelParser, ParsedGearPanel, StatsPanelLayout,
+        MANAGED_ICON_CONFIDENCE_THRESHOLD,
     },
     reference::ReferenceCache,
+    scanner_export::{path_name, trailblazer_gender, CaptureExportDetails},
     vision::{
         classify_inventory_scroll, discover_inventory_grid, frame_fingerprint, frames_similar,
         inventory_scrollbar_bottom_confidence, selected_cell, GridGeometry, NormRect,
@@ -37,6 +39,7 @@ const MENU_TRANSITION: Duration = Duration::from_millis(1_000);
 const INVENTORY_OPEN: Duration = Duration::from_millis(1_500);
 const TAB_SWITCH: Duration = Duration::from_millis(1_500);
 const DETAILS_OPEN: Duration = Duration::from_millis(500);
+const TRACES_OPEN: Duration = Duration::from_millis(2_000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanTargets {
@@ -113,6 +116,7 @@ pub struct ScanResult {
     pub observations: ValidatedObservationSnapshot,
     pub gear_items: Vec<ScannedGearItem>,
     pub coverage: InventoryCoverage,
+    pub export_details: CaptureExportDetails,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -168,9 +172,12 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         &self.references
     }
 
-    /// Capture a fresh, complete gear inventory for manager preview. The
-    /// ordinal is deliberately discarded: manager identity is the complete
-    /// visible matcher, never scan order.
+    /// Capture a fresh, complete Relic inventory for manager lock/unlock.
+    /// Identity comes from [`Self::scan_gear`] — the same parser and crops as
+    /// the screenshot scanner. The extra manager step is requiring complete
+    /// coverage before any mutation clicks.
+    ///
+    /// Equip-for-character and recent-Relic rescan are not implemented yet.
     pub fn scan_manager_inventory(&mut self) -> HsrResult<Vec<ManagedGearObservation>> {
         annotator::init(self.config.dump_images);
         let result = self.scan_manager_inventory_inner();
@@ -214,9 +221,11 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         let mut light_cones = Vec::new();
         let mut gear_items = Vec::new();
 
+        let mut export_details = CaptureExportDetails::default();
         let character_coverage = if self.config.targets.characters {
             let scan = self.scan_characters()?;
             characters = scan.items;
+            export_details = scan.details;
             scan.coverage
         } else {
             CoverageLevel::Unknown
@@ -259,6 +268,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             observations: ValidatedObservationSnapshot::from_screen_capture(snapshot)?,
             gear_items,
             coverage,
+            export_details,
         })
     }
 
@@ -843,6 +853,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             .unwrap_or(self.config.max_characters)
             .min(self.config.max_characters);
         let mut items = Vec::new();
+        let mut export_details = CaptureExportDetails::default();
         let mut seen = BTreeSet::new();
         let mut terminal_proven = false;
         let mut coverage_degraded = false;
@@ -876,6 +887,15 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     // explicit expected count it cannot prove that no distinct
                     // panel was skipped by navigation or OCR.
                     break;
+                }
+                if let Some(trace_details) = self.read_character_traces(&parsed.reference.path)? {
+                    export_details
+                        .characters
+                        .insert(parsed.observation.character_id, trace_details);
+                }
+                if trailblazer_gender(parsed.observation.character_id).is_some() {
+                    export_details.current_trailblazer_path =
+                        Some(path_name(&parsed.reference.path)?.to_string());
                 }
                 items.push(parsed.observation);
             }
@@ -917,7 +937,11 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             "Character scan complete: {} entries.",
             items.len()
         );
-        Ok(CharacterScan { items, coverage })
+        Ok(CharacterScan {
+            items,
+            details: export_details,
+            coverage,
+        })
     }
 
     fn probe_character_wrap(
@@ -977,6 +1001,27 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             hints::SCREEN_INVALID,
             format!("failed after character ordinal={ordinal}; {detail}"),
         ))
+    }
+
+    fn read_character_traces(
+        &mut self,
+        path: &str,
+    ) -> HsrResult<Option<crate::scanner_export::CharacterDetails>> {
+        self.issue_input(InputCommand::Click(layout::TRACES_BUTTON))?;
+        self.wait_attended(self.config.navigation_delay + TRACES_OPEN)?;
+        let frame = self.capture_stable()?;
+        match self.parser.parse_character_traces(&frame, path) {
+            Ok(details) => Ok(Some(details)),
+            Err(error) if traces_unreadable(&error) => {
+                yas::log_warn!(
+                    "行迹等级无法从画面读出，已省略该角色的 skills/traces。完整错误详情：{}",
+                    "Trace levels could not be read from the screen; skills/traces for this character were omitted. Full error details: {}",
+                    error
+                );
+                Ok(None)
+            },
+            Err(error) => Err(error),
+        }
     }
 
     fn read_eidolon_count(&mut self) -> HsrResult<u8> {
@@ -1111,12 +1156,17 @@ fn dump_parsed_item<T: std::fmt::Debug>(
 fn chrome_settled(left: &RgbImage, right: &RgbImage) -> bool {
     [layout::UI_CHROME_LEFT, layout::UI_CHROME_RIGHT]
         .into_iter()
-        .all(|rect| {
-            match (rect.crop(left), rect.crop(right)) {
-                (Ok(left_crop), Ok(right_crop)) => frames_similar(&left_crop, &right_crop),
-                _ => false,
-            }
+        .all(|rect| match (rect.crop(left), rect.crop(right)) {
+            (Ok(left_crop), Ok(right_crop)) => frames_similar(&left_crop, &right_crop),
+            _ => false,
         })
+}
+
+fn traces_unreadable(error: &HsrError) -> bool {
+    matches!(
+        error.code(),
+        "HSR-OCR-SCRIPT" | "HSR-OCR-SEMANTIC" | "HSR-OCR-INFERENCE"
+    )
 }
 
 impl<D: HsrDevice, R: OcrReader> ManagerMutationDevice for HsrScanner<D, R> {
@@ -1599,6 +1649,7 @@ impl InventoryCursor {
 
 struct CharacterScan {
     items: Vec<ObservedCharacter>,
+    details: CaptureExportDetails,
     coverage: CoverageLevel,
 }
 
@@ -2050,6 +2101,10 @@ mod tests {
         frame
     }
 
+    fn settle(frame: &RgbImage) -> [RgbImage; 2] {
+        [frame.clone(), frame.clone()]
+    }
+
     fn two_character_references() -> ReferenceCache {
         let mut snapshot: ReferenceSnapshot =
             serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json")).unwrap();
@@ -2094,16 +2149,14 @@ mod tests {
     fn character_repetition_without_expected_count_remains_unknown() {
         let first = character_frame(Rgb([90, 120, 170]));
         let visually_changed_same_id = character_frame(Rgb([170, 90, 120]));
-        let frames = vec![
-            first.clone(),
-            first.clone(),
-            first.clone(),
-            first,
-            visually_changed_same_id.clone(),
-            visually_changed_same_id.clone(),
-            visually_changed_same_id.clone(),
-            visually_changed_same_id,
-        ];
+        let frames = [
+            settle(&first),
+            settle(&first),
+            settle(&first),
+            settle(&visually_changed_same_id),
+            settle(&visually_changed_same_id),
+        ]
+        .concat();
         let scan = run_character_simulation(frames, &["三月七", "三月七"], None, 3);
         assert_eq!(scan.items.len(), 1);
         assert_eq!(scan.coverage, CoverageLevel::Unknown);
@@ -2114,18 +2167,16 @@ mod tests {
         let first = character_frame(Rgb([90, 120, 170]));
         let second = character_frame(Rgb([170, 90, 120]));
         let extra = character_frame(Rgb([90, 170, 120]));
-        let frames = vec![
-            first.clone(),
-            first.clone(),
-            first.clone(),
-            first,
-            second.clone(),
-            second.clone(),
-            second.clone(),
-            second.clone(),
-            extra.clone(),
-            extra,
-        ];
+        let frames = [
+            settle(&first),
+            settle(&first),
+            settle(&first),
+            settle(&second),
+            settle(&second),
+            settle(&second),
+            settle(&extra),
+        ]
+        .concat();
         let scan = run_character_simulation(frames, &["三月七", "希儿"], Some(2), 3);
         assert_eq!(scan.items.len(), 2);
         assert_eq!(scan.coverage, CoverageLevel::Unknown);
@@ -2135,18 +2186,16 @@ mod tests {
     fn expected_character_count_plus_stable_wrap_proves_complete() {
         let first = character_frame(Rgb([90, 120, 170]));
         let second = character_frame(Rgb([170, 90, 120]));
-        let frames = vec![
-            first.clone(),
-            first.clone(),
-            first.clone(),
-            first.clone(),
-            second.clone(),
-            second.clone(),
-            second.clone(),
-            second,
-            first.clone(),
-            first,
-        ];
+        let frames = [
+            settle(&first),
+            settle(&first),
+            settle(&first),
+            settle(&second),
+            settle(&second),
+            settle(&second),
+            settle(&first),
+        ]
+        .concat();
         let scan = run_character_simulation(frames, &["三月七", "希儿"], Some(2), 3);
         assert_eq!(scan.items.len(), 2);
         assert_eq!(scan.coverage, CoverageLevel::Complete);

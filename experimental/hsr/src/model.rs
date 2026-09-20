@@ -219,6 +219,9 @@ pub struct ObservationSnapshot {
     pub gear: Vec<ObservedGear>,
 }
 
+/// Internal inventory companion used by tests and packet-capture adapters.
+/// User-facing scanner and capture files are HSR-Scanner v4 via
+/// [`crate::scanner_export`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HsrInventoryExport {

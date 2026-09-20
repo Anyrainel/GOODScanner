@@ -50,6 +50,9 @@ pub use reference::{
     load_gilore_reference_bundle, GiloreBundleReferenceProvider, JsonFileReferenceProvider,
     ReferenceCache, ReferenceProvider,
 };
+pub use scanner_export::{
+    build_scanner_export, export_observations, CaptureExportDetails, CharacterDetails,
+};
 
 pub mod data_cache;
 pub mod packet_reference;

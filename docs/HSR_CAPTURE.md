@@ -42,15 +42,16 @@ with numbered `.bin` protobuf bodies. Each capture gets its own folder. This is
 an explicit diagnostic dump, separate from sanitized exports; it is not a PCAP
 or ETL transport recording. A write failure is surfaced with its full path.
 
-Each completed capture writes one file: `star_rail_export_<timestamp>.json`.
+Each completed capture writes one file: `star_rail_capture_<timestamp>.json`.
 That file is HSR-Scanner format v4 plus GOODScanner extensions (achievements,
 Trailblazer gender and current path). See [`HSR_EXPORT.md`](HSR_EXPORT.md).
-Unchecked categories are omitted rather than reported as empty-complete.
-Existing `star_rail_export_`, `star_rail_fribbels_`, and
-`star_rail_achievements_` files are removed only after the new file has been
-written and synced. Cleanup matches generated HSR filenames and dates,
-excludes newer/current exports, directories and symlinks, and never matches
-`genshin_export_` or packet dumps.
+Screenshot scans write `star_rail_scan_<timestamp>.json` instead, so the two
+flows cannot overwrite each other. Unchecked categories are omitted rather
+than reported as empty-complete. Existing `star_rail_capture_`, legacy
+`star_rail_export_`, `star_rail_fribbels_`, and `star_rail_achievements_`
+files are removed only after the new capture file has been written and
+synced. Cleanup never deletes `star_rail_scan_` files, `genshin_export_`
+files, packet dumps, directories, or symlinks.
 
 Fribbels currently allowlists `HSR-Scanner` as a source string. The interchange
 file uses that required v4 compatibility discriminator and its compatible

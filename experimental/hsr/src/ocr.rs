@@ -13,6 +13,7 @@ use crate::{
         ObservedSubstat, StatReference, StatValueKind,
     },
     reference::ReferenceCache,
+    scanner_export::CharacterDetails,
     vision::NormRect,
 };
 
@@ -32,6 +33,7 @@ pub enum OcrField {
     LightConeLevel,
     LightConeSuperimposition,
     LightConeEquipped,
+    CharacterSkill(&'static str),
 }
 
 impl OcrField {
@@ -51,6 +53,7 @@ impl OcrField {
             Self::LightConeLevel => "light_cone_level".to_string(),
             Self::LightConeSuperimposition => "light_cone_superimposition".to_string(),
             Self::LightConeEquipped => "light_cone_equipped".to_string(),
+            Self::CharacterSkill(name) => format!("character_skill_{name}"),
         }
     }
 }
@@ -296,8 +299,8 @@ impl<R: OcrReader> PanelParser<R> {
         let rarity_rect = layout.panel.relative(layout::RELIC_RARITY);
         let rarity_crop = rarity_rect.crop(frame)?;
         let name_color_crop = layout.crop(frame, layout::RELIC_NAME)?;
-        let rarity = detect_rarity(&rarity_crop)
-            .or_else(|| detect_rarity_from_name_color(&name_color_crop));
+        let rarity =
+            detect_rarity(&rarity_crop).or_else(|| detect_rarity_from_name_color(&name_color_crop));
         annotator::record_ocr(
             "gear_rarity",
             rarity_rect,
@@ -575,6 +578,40 @@ impl<R: OcrReader> PanelParser<R> {
         })
     }
 
+    pub fn parse_character_traces(
+        &mut self,
+        frame: &RgbImage,
+        path: &str,
+    ) -> HsrResult<CharacterDetails> {
+        let layout = layout::traces_for_path(path)
+            .ok_or_else(|| ocr_semantic(format!("no traces layout for path={path}")))?;
+        let mut skills = BTreeMap::new();
+        let mut memosprite = BTreeMap::new();
+        for &(key, x, y) in layout.skills {
+            let rect = layout::skill_level_rect(x, y);
+            let crop = rect.crop(frame)?;
+            let field = OcrField::CharacterSkill(key);
+            let text = self.reader.read(field, &crop)?;
+            annotator::record_ocr(&field.dump_name(), rect, &text);
+            let level = parse_trace_level(&text, key)?;
+            if let Some(memo_key) = key.strip_prefix("memosprite_") {
+                memosprite.insert(memo_key.to_string(), u32::from(level));
+            } else {
+                skills.insert(key.to_string(), u32::from(level));
+            }
+        }
+        let mut traces = BTreeMap::new();
+        for &(key, x, y) in layout.unlocks {
+            traces.insert(key.to_string(), trace_node_unlocked(frame, x, y));
+        }
+        Ok(CharacterDetails {
+            ability_version: None,
+            skills,
+            traces,
+            memosprite: (!memosprite.is_empty()).then_some(memosprite),
+        })
+    }
+
     fn read_crop(
         &mut self,
         field: OcrField,
@@ -588,6 +625,33 @@ impl<R: OcrReader> PanelParser<R> {
         yas::log_debug!("OCR {} = {}", "OCR {} = {}", field.dump_name(), text);
         Ok(text)
     }
+}
+
+fn parse_trace_level(text: &str, key: &str) -> HsrResult<u8> {
+    if !text.contains('/') {
+        return Err(ocr_semantic(format!(
+            "trace level for {key} missing slash; got {text:?}"
+        )));
+    }
+    let maximum = match key {
+        "basic" | "memosprite_skill" | "memosprite_talent" => 6,
+        _ => 10,
+    };
+    parse_first_u8(text, maximum, &format!("trace {key}"))
+}
+
+fn trace_node_unlocked(image: &RgbImage, x: f64, y: f64) -> bool {
+    let [r, g, b] = sample_pixel(image, x, y);
+    let dist = |tr: i32, tg: i32, tb: i32| {
+        (i32::from(r) - tr).pow(2) + (i32::from(g) - tg).pow(2) + (i32::from(b) - tb).pow(2)
+    };
+    dist(255, 255, 255).min(dist(178, 200, 255)) < 3000
+}
+
+fn sample_pixel(image: &RgbImage, x: f64, y: f64) -> [u8; 3] {
+    let px = ((x * f64::from(image.width())).round() as u32).min(image.width().saturating_sub(1));
+    let py = ((y * f64::from(image.height())).round() as u32).min(image.height().saturating_sub(1));
+    image.get_pixel(px, py).0
 }
 
 fn parse_first_u8(text: &str, maximum: u8, label: &str) -> HsrResult<u8> {
@@ -838,10 +902,7 @@ pub fn detect_discard_state(image: &RgbImage) -> (Option<bool>, f64) {
         return (Some(true), (red_ratio * 8.0).min(1.0));
     }
     if white_ratio >= 0.022 && white_ratio > gold_ratio && white_ratio >= red_ratio * 3.0 {
-        return (
-            Some(false),
-            ((white_ratio - red_ratio) * 12.0).min(1.0),
-        );
+        return (Some(false), ((white_ratio - red_ratio) * 12.0).min(1.0));
     }
     if gray_ratio >= 0.08 && red_ratio < 0.03 && gray_ratio >= gold_ratio * 0.30 {
         return (Some(false), (gray_ratio * 6.0).min(1.0));
@@ -1187,6 +1248,25 @@ mod tests {
         assert_eq!(parse_display_number("+38.8%", "value").unwrap(), 38.8);
         assert!(parse_level_and_cap("garbled").is_err());
         assert!(parse_first_u8("S9", 5, "superimposition").is_err());
+    }
+
+    #[test]
+    fn character_traces_read_visible_levels_and_unlock_pixels() {
+        let frame = RgbImage::from_pixel(1920, 1080, Rgb([255, 255, 255]));
+        let mut parser = PanelParser::new(
+            ScriptedOcrReader::default()
+                .with(OcrField::CharacterSkill("basic"), ["1/6"])
+                .with(OcrField::CharacterSkill("skill"), ["5/10"])
+                .with(OcrField::CharacterSkill("ult"), ["8/10"])
+                .with(OcrField::CharacterSkill("talent"), ["8/10"]),
+        );
+        let details = parser.parse_character_traces(&frame, "Knight").unwrap();
+        assert_eq!(details.skills["basic"], 1);
+        assert_eq!(details.skills["skill"], 5);
+        assert!(details.ability_version.is_none());
+        assert_eq!(details.traces.len(), 13);
+        assert!(details.traces.values().all(|unlocked| *unlocked));
+        assert!(details.memosprite.is_none());
     }
 
     #[test]

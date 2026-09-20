@@ -23,6 +23,10 @@ impl ValidatedObservationSnapshot {
         self.0
     }
 
+    pub(crate) fn as_inner(&self) -> &ObservationSnapshot {
+        &self.0
+    }
+
     /// Construct a scanner-produced snapshot through the same semantic gates
     /// used for fixture input. Callers cannot construct a validated value
     /// without passing this check.

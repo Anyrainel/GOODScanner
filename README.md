@@ -6,7 +6,7 @@
 
 基于 [yas](https://github.com/1803233552/yas) 编写的《原神》与《崩坏：星穹铁道》Windows 扫描、抓包与管理工具
 
-同一套 `GOODScanner.exe` 与 `GOODCapture.exe` 同时服务两款游戏。《原神》数据继续导出为兼容现有工具的 [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc)；《星穹铁道》抓包导出为 [HSR-Scanner v4](docs/HSR_EXPORT.md)（Fribbels / Reliquary 互通格式，并扩展成就与开拓者性别/命途）。
+同一套 `GOODScanner.exe` 与 `GOODCapture.exe` 同时服务两款游戏。《原神》数据继续导出为兼容现有工具的 [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc)；《星穹铁道》扫描与抓包导出为 [HSR-Scanner v4](docs/HSR_EXPORT.md)（Fribbels / Reliquary 互通格式，并扩展成就与开拓者性别/命途）。
 
 [![Build](https://github.com/Anyrainel/GOODScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GOODScanner/actions)
 
@@ -18,7 +18,7 @@
 - **原神扫描与抓包**：角色、武器、圣遗物及现有 GOOD v3 导出能力保持兼容
 - **原神成就抓包**：GOODCapture 默认导出账号已完成的成就 ID
 - **星穹铁道扫描**：角色、光锥、隧洞遗器和位面饰品
-- **星穹铁道导出与管理**：抓包导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)；OCR 扫描与遗器管理仍使用 `goodscanner.hsr` v3
+- **星穹铁道导出与管理**：扫描与抓包都导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)；遗器管理指令仍使用 `goodscanner.hsr.manager-instructions`
 - **星穹铁道成就抓包**：GOODCapture 在程序内捕获并导出已完成的成就，无需另行下载 HSR 程序或抓包辅助程序
 - **双引擎 OCR**：PPOCRv4（通用）+ PPOCRv5（特殊部分专用），自动选择最优结果
 - **副词条验证**：Roll Solver 基于游戏精确度验证词条合法性
@@ -44,7 +44,7 @@
 
 该字段是紧凑的已完成成就 ID 数组。字段存在时（包括空数组）表示导入方应替换成就状态；用户关闭“成就”导出选项时字段会省略，导入方应保留原有成就状态。标准 GOOD v3 字段和版本号保持不变。
 
-《星穹铁道》抓包导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)：可选的 `achievements` 是紧凑的已完成成就 ID 数组。字段省略表示本次没有观测成就；字段存在（包括 `[]`）表示完整替换。OCR 扫描与遗器管理仍使用 `goodscanner.hsr` v3。
+《星穹铁道》扫描与抓包都导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)：可选的 `achievements` 是紧凑的已完成成就 ID 数组。字段省略表示本次没有观测成就；字段存在（包括 `[]`）表示完整替换。遗器管理指令仍使用 `goodscanner.hsr.manager-instructions`。
 
 ### 使用步骤
 

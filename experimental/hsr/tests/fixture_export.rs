@@ -1,10 +1,10 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use hsr_scanner::reference::GiloreBundleReferenceProvider;
 use hsr_scanner::{
-    build_export, parse_sanitized_fixture, EvidenceKind, FixtureObservationSource,
-    JsonFileReferenceProvider, Language, ObservationSnapshot, ObservationSource, ReferenceCache,
-    ValidatedObservationSnapshot,
+    build_export, export_observations, parse_sanitized_fixture, CaptureExportDetails,
+    CharacterDetails, EvidenceKind, FixtureObservationSource, JsonFileReferenceProvider, Language,
+    ObservationSnapshot, ObservationSource, ReferenceCache, ValidatedObservationSnapshot,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -103,6 +103,87 @@ fn unknown_status_is_preserved_instead_of_inventing_false() {
         actual.pointer("/planarOrnaments/0/discard"),
         Some(&Value::Null)
     );
+}
+
+#[test]
+fn screenshot_export_uses_the_same_v4_envelope_as_capture() {
+    let cache = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(fixture(
+        "gilore_bundle",
+    )))
+    .expect("GIlore bundle fixture must be valid");
+    let observations = FixtureObservationSource::new(fixture("observations.json"))
+        .load()
+        .expect("observation fixture must be valid");
+    let export = export_observations(
+        &observations,
+        &cache,
+        &CaptureExportDetails::default(),
+        None,
+    )
+    .expect("v4 export must resolve");
+
+    assert_eq!(export["source"], "HSR-Scanner");
+    assert_eq!(export["build"], "v1.2.0");
+    assert_eq!(export["version"], 4);
+    assert_eq!(export["generator"]["name"], "GOODScanner");
+    assert!(export["metadata"]["uid"].is_null());
+    assert!(export.get("schema").is_none());
+    assert!(export.get("schemaVersion").is_none());
+    assert!(export.get("planarOrnaments").is_none());
+    assert!(export.get("planar_ornaments").is_none());
+    assert!(export.get("achievements").is_none());
+    assert!(export["characters"][0].get("skills").is_none());
+    assert!(export["characters"][0].get("traces").is_none());
+    assert_eq!(export["light_cones"][0]["lock"], true);
+    assert_eq!(export["relics"][1]["lock"], false);
+    for key in [
+        "characters",
+        "light_cones",
+        "relics",
+        "coverage",
+        "metadata",
+        "generator",
+    ] {
+        assert!(export.get(key).is_some(), "missing v4 field {key}");
+    }
+}
+
+#[test]
+fn screenshot_export_includes_visible_traces_and_omits_packet_only_fields() {
+    let cache = ReferenceCache::from_provider(&GiloreBundleReferenceProvider::new(fixture(
+        "gilore_bundle",
+    )))
+    .expect("GIlore bundle fixture must be valid");
+    let observations = FixtureObservationSource::new(fixture("observations.json"))
+        .load()
+        .expect("observation fixture must be valid");
+    let mut details = CaptureExportDetails::default();
+    details.characters.insert(
+        1001,
+        CharacterDetails {
+            ability_version: None,
+            skills: BTreeMap::from([
+                ("basic".into(), 1),
+                ("skill".into(), 5),
+                ("ult".into(), 8),
+                ("talent".into(), 8),
+            ]),
+            traces: BTreeMap::from([("ability_1".into(), true), ("stat_1".into(), false)]),
+            memosprite: None,
+        },
+    );
+    details.current_trailblazer_path = Some("Remembrance".into());
+    let export =
+        export_observations(&observations, &cache, &details, None).expect("v4 export must resolve");
+
+    assert_eq!(export["characters"][0]["skills"]["basic"], 1);
+    assert_eq!(export["characters"][0]["traces"]["ability_1"], true);
+    assert!(export["characters"][0].get("ability_version").is_none());
+    assert_eq!(
+        export["metadata"]["current_trailblazer_path"],
+        "Remembrance"
+    );
+    assert!(export.get("achievements").is_none());
 }
 
 #[test]

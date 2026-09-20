@@ -20,7 +20,7 @@ Genshin Impact and Star Rail.
 - In-process read-only capture of completed achievements in `GOODCapture`.
   This uses Windows `pktmon` on HSR UDP ports `23301` and `23302`; no helper
   download is required.
-- Versioned [HSR-Scanner v4](../../docs/HSR_EXPORT.md) capture export for Fribbels
+- Versioned [HSR-Scanner v4](../../docs/HSR_EXPORT.md) scanner and capture export for Fribbels
   and Reliquary clients, with optional achievement IDs and Trailblazer gender/path.
 
 - 通过截图扫描角色、光锥、隧洞遗器和位面饰品，并分别记录各分类的覆盖状态。
@@ -28,7 +28,7 @@ Genshin Impact and Star Rail.
   分解、删除、消耗、装备等破坏性操作不在功能范围内。
 - `GOODCapture` 可在进程内只读抓取已完成成就。程序通过 Windows `pktmon` 监听 HSR UDP
   端口 `23301` 和 `23302`，无需额外下载辅助程序。
-- 抓包导出 [HSR-Scanner v4](../../docs/HSR_EXPORT.md)，供 Fribbels / Reliquary 客户端使用，
+- 扫描与抓包都导出 [HSR-Scanner v4](../../docs/HSR_EXPORT.md)，供 Fribbels / Reliquary 客户端使用，
   并可附带成就 ID 与开拓者性别/当前命途。
 
 The older Reliquary/Fribbels v4 JSON importer remains available as an optional
