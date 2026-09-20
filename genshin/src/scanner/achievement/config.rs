@@ -3,6 +3,8 @@
 pub const DEFAULT_SCROLL_DELAY: u64 = 80;
 /// Wait after clicking a left-side category (ms).
 pub const DEFAULT_CATEGORY_DELAY: u64 = 400;
+/// Wait after opening the achievement screen from the Paimon menu (ms).
+pub const DEFAULT_OPEN_DELAY: u64 = 1500;
 
 /// Achievement scanner configuration.
 ///
@@ -17,6 +19,8 @@ pub struct GoodAchievementScannerConfig {
     pub scroll_delay: u64,
     /// Wait after clicking a left-side category (ms).
     pub category_delay: u64,
+    /// Wait after opening the Paimon-menu achievement screen (ms).
+    pub open_delay: u64,
     pub continue_on_failure: bool,
     pub log_progress: bool,
     pub dump_images: bool,
@@ -31,6 +35,7 @@ impl Default for GoodAchievementScannerConfig {
             ocr_backend: "ppocrv4".to_string(),
             scroll_delay: DEFAULT_SCROLL_DELAY,
             category_delay: DEFAULT_CATEGORY_DELAY,
+            open_delay: DEFAULT_OPEN_DELAY,
             continue_on_failure: false,
             log_progress: false,
             dump_images: false,

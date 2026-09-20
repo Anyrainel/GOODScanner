@@ -57,8 +57,8 @@ pub fn show(
 
         ui.add_space(8.0);
 
-        // === Scan Targets (collapsible, horizontal) ===
-        egui::CollapsingHeader::new(l.t("扫描目标", "Scan Targets"))
+        // === Export Settings (collapsible, horizontal) ===
+        egui::CollapsingHeader::new(l.t("导出设置", "Export Settings"))
             .default_open(true)
             .show(ui, |ui| {
                 ui.add_enabled_ui(!is_scanning, |ui| {
@@ -76,12 +76,16 @@ pub fn show(
                         ui.colored_label(
                             egui::Color32::from_rgb(160, 160, 160),
                             l.t(
-                                "成就扫描会先进行：请先打开成就界面任意分类。",
-                                "Achievements scan first: open any achievement category before starting.",
+                                "成就扫描会先进行，并从暂停菜单自动打开成就界面。",
+                                "Achievements scan first and open the screen from the pause menu.",
                             ),
                         );
                     }
                     ui.checkbox(&mut state.hdr_mode, l.t("我的原神在使用HDR", "HDR mode"));
+                    ui.checkbox(
+                        &mut state.only_keep_latest_export,
+                        l.t("仅保留最新导出", "Only keep latest export"),
+                    );
                 });
             });
 
@@ -106,6 +110,8 @@ pub fn show(
                         widgets::inventory_delays(&mut cols[1], state, l);
                     });
                     widgets::delay_group(ui, "achievement_delays", l.t("成就", "Achievements"), l, &mut [
+                        (l.t("打开界面", "Open screen"), &mut state.user_config.achievement_open_delay, defaults.achievement_open_delay,
+                            l.t("从暂停菜单打开成就界面后的等待", "Wait after opening the achievement screen from the pause menu")),
                         (l.t("列表滚动", "List scroll"), &mut state.user_config.achievement_scroll_delay, defaults.achievement_scroll_delay,
                             l.t("成就列表每次滚轮后的等待，与背包翻页无关", "Wait after each achievement-list wheel tick, independent of backpack scrolling")),
                         (l.t("分类切换", "Category switch"), &mut state.user_config.achievement_category_delay, defaults.achievement_category_delay,

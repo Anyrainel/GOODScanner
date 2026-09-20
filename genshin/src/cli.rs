@@ -12,6 +12,7 @@ use yas::game_info::{GameInfo, GameInfoBuilder};
 
 use crate::scanner::achievement::{
     GoodAchievementScannerConfig, DEFAULT_CATEGORY_DELAY as DEFAULT_ACHIEVEMENT_CATEGORY_DELAY,
+    DEFAULT_OPEN_DELAY as DEFAULT_ACHIEVEMENT_OPEN_DELAY,
     DEFAULT_SCROLL_DELAY as DEFAULT_ACHIEVEMENT_SCROLL_DELAY,
 };
 use crate::scanner::artifact::GoodArtifactScannerConfig;
@@ -407,6 +408,9 @@ fn default_achievement_scroll_delay() -> u64 {
 fn default_achievement_category_delay() -> u64 {
     DEFAULT_ACHIEVEMENT_CATEGORY_DELAY
 }
+fn default_achievement_open_delay() -> u64 {
+    DEFAULT_ACHIEVEMENT_OPEN_DELAY
+}
 
 fn default_mgr_transition() -> u64 {
     1500
@@ -519,6 +523,9 @@ fn is_default_achievement_scroll_delay(v: &u64) -> bool {
 fn is_default_achievement_category_delay(v: &u64) -> bool {
     *v == DEFAULT_ACHIEVEMENT_CATEGORY_DELAY
 }
+fn is_default_achievement_open_delay(v: &u64) -> bool {
+    *v == DEFAULT_ACHIEVEMENT_OPEN_DELAY
+}
 
 /// Fields in GoodUserConfig that must be unsigned integers.
 /// If the JSON has an invalid value (e.g. empty string from old config versions),
@@ -537,6 +544,7 @@ const U64_FIELDS: &[&str] = &[
     "artifact_extra_delay",
     "achievement_scroll_delay",
     "achievement_category_delay",
+    "achievement_open_delay",
     "mgr_transition_delay",
     "mgr_action_delay",
     "mgr_cell_delay",
@@ -689,6 +697,14 @@ pub struct GoodUserConfig {
     )]
     pub achievement_category_delay: u64,
 
+    /// Achievement screen: wait after opening from the Paimon menu (ms).
+    #[serde(
+        default = "default_achievement_open_delay",
+        skip_serializing_if = "is_default_achievement_open_delay",
+        deserialize_with = "deserialize_u64_lenient"
+    )]
+    pub achievement_open_delay: u64,
+
     // --- Manager delay settings ---
     /// Screen transition delay for the manager (ms). Default: 1500.
     #[serde(
@@ -744,6 +760,8 @@ pub struct GoodUserConfig {
     pub dump_job_data: bool,
     #[serde(default)]
     pub save_on_cancel: bool,
+    #[serde(default = "default_true")]
+    pub only_keep_latest_export: bool,
     #[serde(default)]
     pub char_max_count: usize,
     #[serde(default)]
@@ -770,7 +788,7 @@ pub struct GoodUserConfig {
     pub capture_include_achievements: bool,
     #[serde(default)]
     pub capture_dump_packets: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub capture_only_keep_latest_export: bool,
 
     /// Advanced: force OCR v5 pool size. 0 = auto-detect from RAM. Non-zero forces that size.
@@ -844,6 +862,7 @@ impl Default for GoodUserConfig {
             artifact_extra_delay: default_artifact_extra_delay(),
             achievement_scroll_delay: default_achievement_scroll_delay(),
             achievement_category_delay: default_achievement_category_delay(),
+            achievement_open_delay: default_achievement_open_delay(),
             mgr_transition_delay: default_mgr_transition(),
             mgr_action_delay: default_mgr_action(),
             mgr_cell_delay: default_mgr_cell(),
@@ -861,6 +880,7 @@ impl Default for GoodUserConfig {
             capture_method: Default::default(),
             dump_job_data: false,
             save_on_cancel: false,
+            only_keep_latest_export: true,
             char_max_count: 0,
             weapon_max_count: 0,
             artifact_max_count: 0,
@@ -873,7 +893,7 @@ impl Default for GoodUserConfig {
             capture_include_artifacts: true,
             capture_include_achievements: true,
             capture_dump_packets: false,
-            capture_only_keep_latest_export: false,
+            capture_only_keep_latest_export: true,
             ocr_pool_v5_override: 0,
             ocr_pool_v4_override: 0,
         }
@@ -1009,7 +1029,7 @@ pub struct GoodScannerConfig {
     /// 扫描成就 / Scan achievements
     #[arg(
         long = "achievements",
-        help = "扫描成就（请先打开成就界面）\nScan achievements (open the achievement screen first)",
+        help = "扫描成就\nScan achievements",
         help_heading = "扫描目标 / Scan Targets"
     )]
     pub scan_achievements: bool,
@@ -1265,6 +1285,7 @@ impl GoodScannerApplication {
                 .unwrap_or_else(|| "ppocrv4".to_string()),
             scroll_delay: user_config.achievement_scroll_delay,
             category_delay: user_config.achievement_category_delay,
+            open_delay: user_config.achievement_open_delay,
             continue_on_failure: config.continue_on_failure,
             log_progress: config.log_progress,
             dump_images: config.dump_images,
@@ -1609,7 +1630,25 @@ pub fn run_scan_core(
     let timestamp = chrono_timestamp();
     let output_dir = PathBuf::from(&config.output_dir);
     std::fs::create_dir_all(&output_dir)?;
-    let filename = format!("good_export_{}.json", timestamp);
+    if user_config.only_keep_latest_export {
+        let removed = crate::fs_utils::remove_previous_exports(
+            &output_dir,
+            crate::fs_utils::SCANNER_EXPORT_PREFIX,
+        )?;
+        if removed > 0 {
+            log_info!(
+                "仅保留最新导出：已删除 {} 个旧导出",
+                "Only keep latest dump: removed {} old export(s)",
+                removed
+            );
+        }
+    }
+    let filename = format!(
+        "{}{}{}",
+        crate::fs_utils::SCANNER_EXPORT_PREFIX,
+        timestamp,
+        crate::fs_utils::EXPORT_JSON_SUFFIX
+    );
     let path = output_dir.join(&filename);
 
     std::fs::write(&path, &json)?;
@@ -1818,7 +1857,8 @@ mod tests {
         assert!(defaults.capture_include_artifacts);
         assert!(defaults.capture_include_achievements);
         assert!(!defaults.capture_dump_packets);
-        assert!(!defaults.capture_only_keep_latest_export);
+        assert!(defaults.only_keep_latest_export);
+        assert!(defaults.capture_only_keep_latest_export);
 
         let cfg: GoodUserConfig = serde_json::from_str(
             r#"{
@@ -1827,7 +1867,8 @@ mod tests {
                 "capture_include_artifacts": false,
                 "capture_include_achievements": false,
                 "capture_dump_packets": true,
-                "capture_only_keep_latest_export": true
+                "capture_only_keep_latest_export": false,
+                "only_keep_latest_export": false
             }"#,
         )
         .unwrap();
@@ -1837,7 +1878,8 @@ mod tests {
         assert!(!cfg.capture_include_artifacts);
         assert!(!cfg.capture_include_achievements);
         assert!(cfg.capture_dump_packets);
-        assert!(cfg.capture_only_keep_latest_export);
+        assert!(!cfg.capture_only_keep_latest_export);
+        assert!(!cfg.only_keep_latest_export);
 
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["capture_include_characters"], false);
@@ -1845,6 +1887,7 @@ mod tests {
         assert_eq!(json["capture_include_artifacts"], false);
         assert_eq!(json["capture_include_achievements"], false);
         assert_eq!(json["capture_dump_packets"], true);
-        assert_eq!(json["capture_only_keep_latest_export"], true);
+        assert_eq!(json["capture_only_keep_latest_export"], false);
+        assert_eq!(json["only_keep_latest_export"], false);
     }
 }

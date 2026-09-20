@@ -636,6 +636,7 @@ pub struct AppState {
     pub hdr_mode: bool,
     pub dump_job_data: bool,
     pub save_on_cancel: bool,
+    pub only_keep_latest_export: bool,
     pub output_dir: String,
     pub char_max_count: usize,
     pub weapon_max_count: usize,
@@ -693,6 +694,7 @@ impl AppState {
             hdr_mode: user_config.hdr_mode,
             dump_job_data: user_config.dump_job_data,
             save_on_cancel: user_config.save_on_cancel,
+            only_keep_latest_export: user_config.only_keep_latest_export,
             char_max_count: user_config.char_max_count,
             weapon_max_count: user_config.weapon_max_count,
             artifact_max_count: user_config.artifact_max_count,
@@ -742,6 +744,7 @@ impl AppState {
             genshin_scanner::cli::capture_method_for_hdr_mode(self.hdr_mode);
         self.user_config.dump_job_data = self.dump_job_data;
         self.user_config.save_on_cancel = self.save_on_cancel;
+        self.user_config.only_keep_latest_export = self.only_keep_latest_export;
         self.user_config.char_max_count = self.char_max_count;
         self.user_config.weapon_max_count = self.weapon_max_count;
         self.user_config.artifact_max_count = self.artifact_max_count;

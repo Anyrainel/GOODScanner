@@ -202,8 +202,8 @@ pub fn run_scan_phases(
     let mut artifacts = ScanPhaseResult::NotAttempted;
     let mut achievements = ScanPhaseResult::NotAttempted;
 
-    // Achievements first: the user is expected to already be on an achievement
-    // page (cocogoat's workflow). Later phases return to the main UI themselves.
+    // Achievements first: they open the pause menu themselves, then later
+    // phases return to the main UI on their own.
     if config.scan_achievements {
         achievements = if scan_cancelled(&cancel_token, ctrl) {
             ScanPhaseResult::Incomplete

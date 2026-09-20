@@ -10,7 +10,8 @@ use super::catalog::AchievementCatalog;
 use super::config::GoodAchievementScannerConfig;
 use super::layout::{
     CATEGORY_FIRST_Y, CATEGORY_STEP_Y, CATEGORY_VISIBLE, CATEGORY_X, IDLE_FRAMES_BEFORE_STOP,
-    LIST_TITLE_RECT, MAX_CATEGORIES,
+    LIST_TITLE_RECT, MAX_CATEGORIES, OVERVIEW_FIRST_CATEGORY_POS, PAIMON_ACHIEVEMENT_POS,
+    PAIMON_MENU_DELAY,
 };
 use super::recognize::recognize_row;
 use super::split::{crop_row, detect_list_rect, split_row_bands, PixelRect};
@@ -32,7 +33,7 @@ impl GoodAchievementScanner {
         Ok(Self { config, catalog })
     }
 
-    /// Scan the currently open achievement page, then walk remaining left-side
+    /// Open the achievement list from any game screen, then walk left-side
     /// categories. Returns sorted unique completed achievement IDs.
     ///
     /// Control loop is the native port of cocogoat CaptureScanner:
@@ -44,16 +45,14 @@ impl GoodAchievementScanner {
         pools: &SharedOcrPools,
         progress_fn: Option<&ProgressFn<'_>>,
     ) -> Result<Vec<u32>> {
-        log_info!(
-            "[achievement] 开始扫描成就页。请先打开成就界面任意分类。",
-            "[achievement] starting. Open any achievement category first."
-        );
+        log_info!("[achievement] 开始扫描成就", "[achievement] starting scan");
 
         let cancel = ctrl.cancel_token();
         ctrl.focus_game_window();
         if cancel.check_rmb() {
             bail!("cancelled");
         }
+        self.open_achievement_screen(ctrl)?;
 
         let mut completed: BTreeSet<u32> = BTreeSet::new();
         let mut seen_rows: BTreeSet<String> = BTreeSet::new();
@@ -118,6 +117,60 @@ impl GoodAchievementScanner {
         Ok(ids)
     }
 
+    /// Return to the overworld, open the Paimon menu, enter 成就, then open
+    /// the first category list the rest of the scan walks.
+    fn open_achievement_screen(&self, ctrl: &mut GenshinGameController) -> Result<()> {
+        let cancel = ctrl.cancel_token();
+        ctrl.return_to_main_ui(8);
+        if cancel.check_rmb() {
+            bail!("cancelled");
+        }
+
+        for attempt in 0..3 {
+            if cancel.check_rmb() {
+                bail!("cancelled");
+            }
+            ctrl.key_press(enigo::Key::Escape);
+            yas::utils::sleep(PAIMON_MENU_DELAY);
+            ctrl.click_at(PAIMON_ACHIEVEMENT_POS.0, PAIMON_ACHIEVEMENT_POS.1);
+            yas::utils::sleep(self.config.open_delay as u32);
+
+            let frame = ctrl.capture_game()?;
+            if detect_list_rect(&frame).is_some() {
+                log_info!(
+                    "[achievement] 成就列表已打开，第{}次尝试",
+                    "[achievement] achievement list opened on attempt {}",
+                    attempt + 1
+                );
+                return Ok(());
+            }
+
+            // Overview grid: click 天地万象 to enter the left-sidebar list.
+            ctrl.click_at(OVERVIEW_FIRST_CATEGORY_POS.0, OVERVIEW_FIRST_CATEGORY_POS.1);
+            yas::utils::sleep(self.config.open_delay as u32);
+            let frame = ctrl.capture_game()?;
+            if detect_list_rect(&frame).is_some() {
+                log_info!(
+                    "[achievement] 成就列表已打开，第{}次尝试",
+                    "[achievement] achievement list opened on attempt {}",
+                    attempt + 1
+                );
+                return Ok(());
+            }
+
+            log_debug!(
+                "[achievement] 未检测到成就列表（第{}次尝试），重试中...",
+                "[achievement] achievement list not detected (attempt {}), retrying...",
+                attempt + 1
+            );
+            ctrl.return_to_main_ui(4);
+        }
+
+        bail!(
+            "无法打开成就界面。请确认游戏在前台且未遮挡暂停菜单。 / Failed to open the achievement screen. Make sure the game is focused and the pause menu is not covered."
+        )
+    }
+
     fn scan_open_list(
         &self,
         ctrl: &mut GenshinGameController,
@@ -140,11 +193,11 @@ impl GoodAchievementScanner {
             }
 
             let frame = ctrl.capture_game()?;
-            let list_rect = detect_list_rect(&frame);
+            let Some(list_rect) = detect_list_rect(&frame) else {
+                bail!("未找到成就列表 / Achievement list not found");
+            };
             let Some(list_img) = crop_pixel(&frame, list_rect) else {
-                bail!(
-                    "未找到成就列表。请先打开成就界面任意分类。 / Achievement list not found. Open any achievement category first."
-                );
+                bail!("未找到成就列表 / Achievement list not found");
             };
 
             if click_pos.is_none() {

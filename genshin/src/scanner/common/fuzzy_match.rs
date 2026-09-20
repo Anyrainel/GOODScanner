@@ -366,18 +366,12 @@ mod tests {
         // "里云" is 1 edit distance from both "重云" and "闲云".
         // But "里" is in the same visual group as "重".
         // So it should match "重云".
-        assert_eq!(
-            fuzzy_match_map("里云", &map),
-            Some("Chongyun".to_string())
-        );
+        assert_eq!(fuzzy_match_map("里云", &map), Some("Chongyun".to_string()));
 
         // "问云" is 1 edit distance from both "重云" and "闲云".
         // But "问" is in the same visual group as "闲".
         // So it should match "闲云".
-        assert_eq!(
-            fuzzy_match_map("问云", &map),
-            Some("Xianyun".to_string())
-        );
+        assert_eq!(fuzzy_match_map("问云", &map), Some("Xianyun".to_string()));
     }
 
     #[test]

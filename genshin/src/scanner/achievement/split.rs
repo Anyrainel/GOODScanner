@@ -7,8 +7,8 @@
 use image::{GenericImageView, Rgb, RgbImage};
 
 use super::layout::{
-    LIST_MIN_HEIGHT_RATIO, LIST_MIN_WIDTH_RATIO, LIST_PANEL_GRAY, LIST_RECT,
-    PARTIAL_ROW_HEIGHT_RATIO, ROW_SEPARATOR_GRAY,
+    LIST_MIN_HEIGHT_RATIO, LIST_MIN_WIDTH_RATIO, LIST_PANEL_GRAY, PARTIAL_ROW_HEIGHT_RATIO,
+    ROW_SEPARATOR_GRAY,
 };
 
 /// Axis-aligned rectangle in image pixels.
@@ -31,11 +31,11 @@ pub struct RowBand {
 /// Cocogoat thresholds at 200, finds contours wider than half the image and
 /// taller than 75% of it, then insets. Here we take the bounding box of the
 /// bright rows in the center band and apply the same inset.
-pub fn detect_list_rect(image: &RgbImage) -> PixelRect {
+pub fn detect_list_rect(image: &RgbImage) -> Option<PixelRect> {
     let width = image.width();
     let height = image.height();
     if width < 32 || height < 32 {
-        return fallback_rect(width, height);
+        return None;
     }
 
     let mut row_bright = vec![0.0f32; height as usize];
@@ -78,7 +78,7 @@ pub fn detect_list_rect(image: &RgbImage) -> PixelRect {
     }
 
     if (best.1 as f32) < height as f32 * LIST_MIN_HEIGHT_RATIO {
-        return fallback_rect(width, height);
+        return None;
     }
 
     let y0 = best.0;
@@ -94,16 +94,16 @@ pub fn detect_list_rect(image: &RgbImage) -> PixelRect {
         }
     }
     if max_x <= min_x {
-        return fallback_rect(width, height);
+        return None;
     }
     let panel_w = max_x - min_x + 1;
     let panel_h = y1 - y0;
     if (panel_w as f32) < width as f32 * LIST_MIN_WIDTH_RATIO {
-        return fallback_rect(width, height);
+        return None;
     }
     // Nearly full-window contours are rejected in cocogoat.
     if panel_w + width / 100 >= width && panel_h + width / 100 >= height {
-        return fallback_rect(width, height);
+        return None;
     }
 
     let inset_x = panel_w / 30;
@@ -114,23 +114,7 @@ pub fn detect_list_rect(image: &RgbImage) -> PixelRect {
     let h = panel_h.saturating_sub(inset_y * 2).max(8);
     let w = w.min(width.saturating_sub(x));
     let h = h.min(height.saturating_sub(y));
-    PixelRect { x, y, w, h }
-}
-
-fn fallback_rect(width: u32, height: u32) -> PixelRect {
-    let (bx, by, bw, bh) = LIST_RECT;
-    let sx = width as f64 / 1920.0;
-    let sy = height as f64 / 1080.0;
-    let x = (bx * sx) as u32;
-    let y = (by * sy) as u32;
-    let w = (bw * sx) as u32;
-    let h = (bh * sy) as u32;
-    PixelRect {
-        x: x.min(width.saturating_sub(1)),
-        y: y.min(height.saturating_sub(1)),
-        w: w.max(8).min(width.saturating_sub(x)),
-        h: h.max(8).min(height.saturating_sub(y)),
-    }
+    Some(PixelRect { x, y, w, h })
 }
 
 /// Split a list-panel crop into card rows.
@@ -288,10 +272,16 @@ mod tests {
     fn detects_a_large_bright_panel() {
         let mut img = RgbImage::from_pixel(1920, 1080, Rgb([20, 20, 20]));
         fill_rect(&mut img, 400, 100, 1100, 850, Rgb([220, 220, 220]));
-        let rect = detect_list_rect(&img);
+        let rect = detect_list_rect(&img).expect("bright panel");
         assert!(rect.w > 900, "w={}", rect.w);
         assert!(rect.h > 700, "h={}", rect.h);
         assert!(rect.x < 500, "x={}", rect.x);
+    }
+
+    #[test]
+    fn ignores_screens_without_a_list_panel() {
+        let img = RgbImage::from_pixel(1920, 1080, Rgb([20, 20, 20]));
+        assert!(detect_list_rect(&img).is_none());
     }
 
     #[test]

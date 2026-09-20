@@ -3,9 +3,18 @@
 //! These numbers are **not** shared with backpack/character scanners. The
 //! achievement UI is a left-hand category column plus a right-hand card list.
 
-/// Fallback list panel when auto-detect cannot find a large bright rectangle.
-/// `(x, y, w, h)` at 1920×1080.
-pub const LIST_RECT: (f64, f64, f64, f64) = (416.0, 118.0, 1064.0, 860.0);
+/// Paimon menu "成就" tile center at 1920×1080.
+///
+/// Calibrated from an Esc-menu screenshot: 4th column, first row of the icon
+/// grid (trophy tile). ~34.5% from the left, ~34.7% from the top.
+pub const PAIMON_ACHIEVEMENT_POS: (f64, f64) = (663.0, 375.0);
+
+/// First category card ("天地万象") on the achievement overview grid.
+/// Clicking this opens the left-sidebar list the rest of the scanner walks.
+pub const OVERVIEW_FIRST_CATEGORY_POS: (f64, f64) = (217.0, 195.0);
+
+/// Wait after Escape before the Paimon menu tiles are clickable (ms).
+pub const PAIMON_MENU_DELAY: u32 = 800;
 
 /// Category title strip at the top of the right-hand list.
 pub const LIST_TITLE_RECT: (f64, f64, f64, f64) = (430.0, 78.0, 420.0, 36.0);
