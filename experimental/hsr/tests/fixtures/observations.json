@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "evidence": {
+    "kind": "sanitizedFixture",
+    "revision": "sanitized-gilore-v2",
+    "coverage": {
+      "characters": "complete",
+      "lightCones": "complete",
+      "relics": "complete"
+    }
+  },
+  "characters": [
+    {
+      "characterId": 1001,
+      "level": 80,
+      "ascension": 6,
+      "eidolon": 2
+    }
+  ],
+  "lightCones": [
+    {
+      "lightConeId": 23005,
+      "level": 80,
+      "ascension": 6,
+      "superimposition": 3,
+      "equippedCharacterId": 1001,
+      "lock": true
+    }
+  ],
+  "gear": [
+    {
+      "pieceId": 61011,
+      "level": 15,
+      "mainStatKey": "HPDelta",
+      "mainStatValue": 705.6,
+      "substats": [
+        {
+          "statKey": "SpeedDelta",
+          "value": 5.1
+        },
+        {
+          "statKey": "CriticalChanceBase",
+          "value": 8.7
+        }
+      ],
+      "equippedCharacterId": null,
+      "lock": false,
+      "discard": true
+    },
+    {
+      "pieceId": 63015,
+      "level": 12,
+      "mainStatKey": "AttackAddedRatio",
+      "mainStatValue": 35.9424,
+      "substats": [
+        {
+          "statKey": "SpeedDelta",
+          "value": 4.0
+        }
+      ],
+      "equippedCharacterId": 1001,
+      "lock": null,
+      "discard": null
+    }
+  ]
+}

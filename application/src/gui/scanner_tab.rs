@@ -11,7 +11,7 @@ pub fn show(
     game_busy: bool,
     restart_required: bool,
 ) {
-    let is_scanning = scan_handle.as_ref().map_or(false, |h| !h.is_finished());
+    let is_scanning = scan_handle.as_ref().is_some_and(|h| !h.is_finished());
     let native_failure = scan_handle.as_ref().and_then(TaskHandle::native_failure);
     let l = state.lang;
 
@@ -228,7 +228,7 @@ fn action_bar(
 
     ui.horizontal(|ui| {
         if is_scanning {
-            let is_stopping = scan_handle.as_ref().map_or(false, |h| h.is_stopping());
+            let is_stopping = scan_handle.as_ref().is_some_and(|h| h.is_stopping());
             let label = if is_stopping {
                 l.t("⏳ 正在停止...", "⏳ Stopping...")
             } else {

@@ -4,9 +4,9 @@
 
 **[中文](README.md) | English**
 
-Genshin Impact GOOD Format Scanner, based on [yas](https://github.com/wormtql/yas)
+Windows scanner, capture, and manager for Genshin Impact and Honkai: Star Rail, based on [yas](https://github.com/wormtql/yas)
 
-Scans in-game character, weapon, and artifact data and exports it as [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc) JSON for use with optimizer tools like [GGArtifact](https://ggartifact.com/), [Genshin Optimizer](https://frzyc.github.io/genshin-optimizer/).
+The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data remains compatible [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc); Star Rail scanner and capture write [HSR-Scanner v4](docs/HSR_EXPORT.md) (the Fribbels / Reliquary interchange, plus achievement and Trailblazer gender/path extensions).
 
 [![Build](https://github.com/Anyrainel/GOODScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GOODScanner/actions)
 
@@ -14,10 +14,12 @@ Scans in-game character, weapon, and artifact data and exports it as [GOOD v3](h
 
 ## Features
 
-- **Character scanning**: level, ascension, constellation, talents
-- **Weapon scanning**: name, level, ascension, refinement, equipped character, lock status
-- **Artifact scanning**: set, slot, main stat, substats, level, rarity, lock, astral mark, elixir crafted flag, unactivated substats
-- **Achievement capture**: GOODCapture exports the account's completed achievement IDs by default
+- **Game switcher**: equal-width Genshin and Star Rail choices at the top of the window; each game keeps its own settings and current page
+- **Genshin scanning and capture**: existing Character, Weapon, Artifact, and GOOD v3 export behavior remains compatible
+- **Genshin achievement capture**: GOODCapture exports the account's completed achievement IDs by default
+- **Star Rail scanning**: Characters, Light Cones, Cavern Relics, and Planar Ornaments
+- **Star Rail export and manager**: scanner and capture both write [HSR-Scanner v4](docs/HSR_EXPORT.md); Relic manager instructions still use `goodscanner.hsr.manager-instructions`
+- **Star Rail achievement capture**: GOODCapture captures completed achievements in process; no separate HSR application or packet-capture helper download is required
 - **Dual-engine OCR**: PPOCRv4 (general) + PPOCRv5 (level-specific), automatically picks the best result
 - **Substat validation**: Roll Solver verifies substat combinations against game mechanics
 
@@ -25,14 +27,16 @@ Scans in-game character, weapon, and artifact data and exports it as [GOOD v3](h
 
 ### Download
 
-The releases page provides two executables:
+The releases page provides two executables. Both let you switch between Genshin and Star Rail at the top of the window:
 
-- `GOODScanner.exe` — OCR Scanner + Manager
-- `GOODCapture.exe` — Capture + OCR Scanner + Manager
+- `GOODScanner.exe` — OCR scanning, export, and manager flows for both games
+- `GOODCapture.exe` — all of the above plus Genshin data capture and completed-achievement capture for both games
 
-Download them from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page.
+Download them from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page. **There is no separate HSR executable to download.**
 
-GOODCapture stores achievements in a backwards-compatible GOOD v3 extension field:
+### Achievement export semantics
+
+Genshin continues to store achievements in a backwards-compatible GOOD v3 extension field:
 
 ```json
 {"achievements":[80001,80002,81001]}
@@ -40,17 +44,22 @@ GOODCapture stores achievements in a backwards-compatible GOOD v3 extension fiel
 
 The field is a compact array of completed achievement IDs. When present, including as an empty array, importers should replace achievement state. When the user disables the Achievements export option, the field is omitted and importers should preserve existing achievement state. Standard GOOD v3 fields and the format version remain unchanged.
 
+Star Rail scanner and capture both write [HSR-Scanner v4](docs/HSR_EXPORT.md). Its optional `achievements` field is a compact array of completed IDs. An omitted field means achievements were not observed; a present array, including `[]`, is authoritative replacement data. Relic manager instructions still use `goodscanner.hsr.manager-instructions`.
+
 ### Usage
 
-1. Run the executable you need **as administrator**
-2. On first run, you'll be prompted for custom character names (Traveler, Wanderer, etc.). Config is saved to `data/good_config.json`
-3. Make sure Genshin Impact is running, then press Enter to start (the program will automatically focus the game window and open the correct screens)
-4. **Right-click to abort** during scanning
-5. Results are saved as `GOODv3.json` in the current directory
+1. Run the executable you need **as administrator**; launching it without command-line arguments opens the GUI
+2. Select Genshin or Star Rail at the top, then open that game's Scanner, Manager, or Capture page
+3. For Genshin, enter custom Character names (Traveler, Wanderer, and so on) when first prompted; the existing settings remain in `data/good_config.json`
+4. Star Rail settings are kept separately in `data/good_app_config.json`. The shared binaries include a verified GIlore reference snapshot; the reference-folder field is only an advanced override
+5. Make sure the selected game is running. **Right-click to abort** during scanning
+6. Genshin still writes `GOODv3.json`; choose the Star Rail output folder on its page
+
+The built-in Star Rail reference is the complete public GIlore `1.2.0` snapshot used to validate inventory and achievement IDs. An explicitly selected override must be a complete checksummed GIlore bundle; invalid overrides fail closed instead of falling back silently. No reference-data download is required for normal use.
 
 ### Scan Targets
 
-By default, all categories are scanned. You can also pick specific ones:
+These command-line flags remain Genshin-only and preserve their existing GOOD v3 behavior. By default, all categories are scanned; you can also pick specific ones:
 
 ```shell
 GOODScanner.exe                    # Scan all
@@ -63,7 +72,7 @@ GOODScanner.exe --characters --weapons  # Combine targets
 ## Requirements
 
 - **Administrator privileges** (required for input simulation)
-- **Simplified Chinese** game client only
+- Genshin scanning supports the **Simplified Chinese** client; Star Rail recognizes English and Chinese UI labels
 - **16:9 resolution** recommended (1920x1080, 2560x1440, etc.)
 - Do not move the mouse during scanning
 - Artifacts below 4-star are skipped by default (adjustable via `--artifact-min-rarity`)
@@ -122,12 +131,18 @@ rustup default stable
 # Make sure Git LFS is installed
 git lfs pull
 
-# Build
-cargo build --release
+# Build the normal shared scanner
+cargo build --locked --release -p good_tools_app --bin GOODScanner
 
-# Binaries are at target/release/GOODScanner.exe and
-# target/release/GOODCapture.exe (with --features capture)
+# Build the shared capture edition
+cargo build --locked --release -p good_tools_app --features capture --bin GOODCapture
+
+# The existing output paths remain:
+# target/release/GOODScanner.exe
+# target/release/GOODCapture.exe
 ```
+
+Fixtures and replay tests prove parser, export, and simulated-interaction behavior only. They do not prove live scanning, capture, or manager behavior against the current Star Rail client.
 
 ## Acknowledgments
 

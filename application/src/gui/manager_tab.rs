@@ -13,7 +13,7 @@ pub fn show(
     scan_running: bool,
     restart_required: bool,
 ) {
-    let is_server_running = server_handle.as_ref().map_or(false, |h| !h.is_finished());
+    let is_server_running = server_handle.as_ref().is_some_and(|h| !h.is_finished());
     let native_failure = server_handle.as_ref().and_then(TaskHandle::native_failure);
     let l = state.lang;
 
@@ -228,27 +228,23 @@ fn action_bar(
                     ),
                 );
             }
-        } else {
-            if ui
-                .button(l.t("▶ 启动HTTP服务器", "▶ Start HTTP Server"))
-                .clicked()
-            {
-                if let Err(e) = super::privilege::ensure_admin_for_action() {
-                    *state.server_status.lock().unwrap() = TaskStatus::Failed(
-                        UiError::from_anyhow(
-                            UiText::new(
-                                "管理器需要管理员权限才能控制游戏。请以管理员身份重新启动程序。",
-                                "The manager needs administrator access to control the game. Restart the application as administrator.",
-                            ),
-                            &e,
-                        ),
-                    );
-                } else {
-                    state.server_enabled.store(true, Ordering::Relaxed);
-                    // Force immediate save before starting server
-                    state.persist_config_now();
-                    *server_handle = Some(worker::spawn_server(state));
-                }
+        } else if ui
+            .button(l.t("▶ 启动HTTP服务器", "▶ Start HTTP Server"))
+            .clicked()
+        {
+            if let Err(e) = super::privilege::ensure_admin_for_action() {
+                *state.server_status.lock().unwrap() = TaskStatus::Failed(UiError::from_anyhow(
+                    UiText::new(
+                        "管理器需要管理员权限才能控制游戏。请以管理员身份重新启动程序。",
+                        "The manager needs administrator access to control the game. Restart the application as administrator.",
+                    ),
+                    &e,
+                ));
+            } else {
+                state.server_enabled.store(true, Ordering::Relaxed);
+                // Force immediate save before starting server
+                state.persist_config_now();
+                *server_handle = Some(worker::spawn_server(state));
             }
         }
     });

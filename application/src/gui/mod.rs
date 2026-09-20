@@ -1,16 +1,26 @@
 #[cfg(feature = "capture")]
 pub mod capture_tab;
 pub mod credits;
+pub mod game_switcher;
 pub mod log_bridge;
 pub mod log_panel;
 pub mod manager_tab;
 mod privilege;
 pub mod scanner_tab;
+#[cfg(feature = "capture")]
+pub mod star_rail_capture_tab;
+#[cfg(feature = "capture")]
+pub mod star_rail_exports;
+pub mod star_rail_manager_tab;
+pub mod star_rail_scanner_tab;
+pub mod star_rail_state;
+pub mod star_rail_worker;
 pub mod state;
 pub mod update_banner;
 pub mod widgets;
 pub mod worker;
 
+use crate::config::{ApplicationConfigStore, Game, ToolTab};
 use eframe::egui;
 use state::{AppState, Lang, UpdateState};
 use worker::TaskHandle;
@@ -28,6 +38,7 @@ pub fn run_gui() {
     worker::install_seh_handler();
 
     let state = AppState::new();
+    let (app_config, app_config_warning) = ApplicationConfigStore::for_running_executable();
 
     // Set global language from config
     yas::lang::set_lang(state.lang.to_str());
@@ -48,6 +59,17 @@ pub fn run_gui() {
         );
         show_startup_error(PRODUCT_NAME, state.lang, &failure);
         return;
+    }
+
+    if let Some(error) = app_config_warning {
+        let warning = state::UiError::from_anyhow(
+            state::UiText::new(
+                "星穹铁道设置无法读取，因此本次启动使用默认值且不会覆盖原文件。请检查完整错误；如需重置，请先手动重命名原文件。",
+                "Star Rail settings could not be read, so defaults are used for this session and the original file will not be overwritten. Check the full error; to reset, manually rename the original file first.",
+            ),
+            &error,
+        );
+        log::warn!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", warning.copy_text(state.lang));
     }
 
     // Install a panic hook that writes to the log file (the default hook
@@ -96,7 +118,7 @@ pub fn run_gui() {
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
-            Ok(Box::new(GuiApp::new(state)))
+            Ok(Box::new(GuiApp::new(state, app_config)))
         }),
     ) {
         let lang = if yas::lang::is_en() {
@@ -167,18 +189,10 @@ fn install_panic_hook() {
     }));
 }
 
-#[derive(PartialEq)]
-enum ActiveTab {
-    Scanner,
-    Manager,
-    #[cfg(feature = "capture")]
-    Capture,
-    Credits,
-}
-
 struct GuiApp {
     state: AppState,
-    active_tab: ActiveTab,
+    app_config: ApplicationConfigStore,
+    star_rail: star_rail_state::StarRailState,
     scan_handle: Option<TaskHandle>,
     server_handle: Option<TaskHandle>,
     #[cfg(feature = "capture")]
@@ -186,16 +200,16 @@ struct GuiApp {
 }
 
 impl GuiApp {
-    fn new(state: AppState) -> Self {
+    fn new(state: AppState, app_config: ApplicationConfigStore) -> Self {
         #[cfg(feature = "capture")]
         let capture_tab_state =
             capture_tab::CaptureTabState::from_config(state.output_dir.clone(), &state.user_config);
+        let star_rail =
+            star_rail_state::StarRailState::new(app_config.config.star_rail.output_dir.clone());
         Self {
             state,
-            #[cfg(feature = "capture")]
-            active_tab: ActiveTab::Capture,
-            #[cfg(not(feature = "capture"))]
-            active_tab: ActiveTab::Scanner,
+            app_config,
+            star_rail,
             scan_handle: None,
             server_handle: None,
             #[cfg(feature = "capture")]
@@ -210,26 +224,72 @@ impl eframe::App for GuiApp {
         #[cfg(feature = "capture")]
         self.capture_tab.sync_to_config(&mut self.state.user_config);
         self.state.auto_save_tick();
+        if let Err(error) = self.app_config.auto_save_tick() {
+            let failure = state::UiError::from_anyhow(
+                state::UiText::new(
+                    "星穹铁道设置无法保存；本次更改可能在重启后丢失。",
+                    "Star Rail settings could not be saved; these changes may be lost after restart.",
+                ),
+                &error,
+            );
+            log::warn!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", failure.copy_text(self.state.lang));
+        }
+        #[cfg(feature = "capture")]
+        self.star_rail.capture.tick();
 
         let l = self.state.lang;
 
+        let is_scan_running = self
+            .scan_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished());
+        let is_server_running = self
+            .server_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished());
+        #[cfg(feature = "capture")]
+        let is_capture_busy = self.capture_tab.is_busy();
+        #[cfg(not(feature = "capture"))]
+        let is_capture_busy = false;
+        let genshin_busy = is_scan_running || is_server_running || is_capture_busy;
+        let star_rail_scan_running = self.star_rail.scan_running();
+        let star_rail_manager_running = self.star_rail.manager_running();
+        #[cfg(feature = "capture")]
+        let star_rail_capture_busy = self.star_rail.capture.is_busy();
+        #[cfg(not(feature = "capture"))]
+        let star_rail_capture_busy = false;
+        let star_rail_busy =
+            star_rail_scan_running || star_rail_manager_running || star_rail_capture_busy;
+        let game_task_busy = genshin_busy || star_rail_busy;
+
+        egui::TopBottomPanel::top("game_switcher").show(ctx, |ui| {
+            game_switcher::show(
+                ui,
+                l,
+                &mut self.app_config.config.navigation.active_game,
+                !game_task_busy,
+            );
+        });
+
         // Top bar with tabs + language toggle
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            let mut active_tab = self.app_config.config.navigation.active_tab();
+            let original_active_tab = active_tab;
             ui.horizontal(|ui| {
                 #[cfg(feature = "capture")]
                 ui.selectable_value(
-                    &mut self.active_tab,
-                    ActiveTab::Capture,
+                    &mut active_tab,
+                    ToolTab::Capture,
                     egui::RichText::new(l.t("抓包器", "Capture")).size(20.0),
                 );
                 ui.selectable_value(
-                    &mut self.active_tab,
-                    ActiveTab::Scanner,
+                    &mut active_tab,
+                    ToolTab::Scanner,
                     egui::RichText::new(l.t("扫描器", "Scanner")).size(20.0),
                 );
                 ui.selectable_value(
-                    &mut self.active_tab,
-                    ActiveTab::Manager,
+                    &mut active_tab,
+                    ToolTab::Manager,
                     egui::RichText::new(l.t("管理器", "Manager")).size(20.0),
                 );
 
@@ -248,21 +308,29 @@ impl eframe::App for GuiApp {
                         yas::lang::set_lang(self.state.lang.to_str());
                     }
                     ui.selectable_value(
-                        &mut self.active_tab,
-                        ActiveTab::Credits,
+                        &mut active_tab,
+                        ToolTab::Credits,
                         egui::RichText::new(l.t("致谢", "Credits")).size(20.0),
                     );
-                    let ggartifact_label = l.t("打开GGArtifact", "Open GGArtifact");
-                    if ui
-                        .button(egui::RichText::new(format!("{ggartifact_label} ↗")).size(16.0))
-                        .on_hover_text("https://ggartifact.com")
-                        .clicked()
-                    {
-                        ui.ctx()
-                            .open_url(egui::OpenUrl::new_tab("https://ggartifact.com"));
+                    if self.app_config.config.navigation.active_game == Game::Genshin {
+                        let ggartifact_label = l.t("打开GGArtifact", "Open GGArtifact");
+                        if ui
+                            .button(egui::RichText::new(format!("{ggartifact_label} ↗")).size(16.0))
+                            .on_hover_text("https://ggartifact.com")
+                            .clicked()
+                        {
+                            ui.ctx()
+                                .open_url(egui::OpenUrl::new_tab("https://ggartifact.com"));
+                        }
                     }
                 });
             });
+            // `active_tab()` may be a runtime fallback (GOODScanner cannot
+            // show Capture). Preserve the raw saved GOODCapture tab unless
+            // the user explicitly chooses another available tab.
+            if active_tab != original_active_tab {
+                self.app_config.config.navigation.select_tab(active_tab);
+            }
         });
 
         // Update banner (between tabs and content)
@@ -271,8 +339,10 @@ impl eframe::App for GuiApp {
         // Bottom panel: per-tab log area.
         // Manager tab shows manager logs; everything else shows scanner logs
         // (scanner/capture tabs, credits, plus startup/update logs).
-        let log_buf = match self.active_tab {
-            ActiveTab::Manager => &self.state.manager_log_lines,
+        let active_game = self.app_config.config.navigation.active_game;
+        let active_tab = self.app_config.config.navigation.active_tab();
+        let log_buf = match active_tab {
+            ToolTab::Manager => &self.state.manager_log_lines,
             _ => &self.state.scanner_log_lines,
         };
         egui::TopBottomPanel::bottom("logs")
@@ -283,69 +353,93 @@ impl eframe::App for GuiApp {
                 log_panel::show_with(ui, self.state.lang, log_buf);
             });
 
-        // Check cross-tab running states for mutual exclusion
-        let is_scan_running = self
-            .scan_handle
-            .as_ref()
-            .map_or(false, |h| !h.is_finished());
-        let is_server_running = self
-            .server_handle
-            .as_ref()
-            .map_or(false, |h| !h.is_finished());
         // A native worker crash exits the thread without running Rust/native
         // cleanup. Block every game-facing task until the whole application
         // is restarted; retrying in the same process is not safe.
         let restart_required = self
             .scan_handle
             .as_ref()
-            .map_or(false, TaskHandle::requires_restart)
+            .is_some_and(TaskHandle::requires_restart)
             || self
                 .server_handle
                 .as_ref()
-                .map_or(false, TaskHandle::requires_restart);
+                .is_some_and(TaskHandle::requires_restart);
         #[cfg(feature = "capture")]
         let restart_required = restart_required || self.capture_tab.requires_restart();
-        #[cfg(feature = "capture")]
-        let is_capture_busy = self.capture_tab.is_busy();
-        #[cfg(not(feature = "capture"))]
-        let is_capture_busy = false;
+        let restart_required = restart_required || self.star_rail.requires_restart();
 
         // Central panel: active tab content
-        egui::CentralPanel::default().show(ctx, |ui| match self.active_tab {
-            ActiveTab::Scanner => {
+        egui::CentralPanel::default().show(ctx, |ui| match (active_game, active_tab) {
+            (Game::Genshin, ToolTab::Scanner) => {
                 scanner_tab::show(
                     ui,
                     &mut self.state,
                     &mut self.scan_handle,
-                    is_server_running || is_capture_busy,
+                    is_server_running || is_capture_busy || star_rail_busy,
                     restart_required,
                 );
             },
-            ActiveTab::Manager => {
+            (Game::Genshin, ToolTab::Manager) => {
                 manager_tab::show(
                     ui,
                     &mut self.state,
                     &mut self.server_handle,
-                    is_scan_running || is_capture_busy,
+                    is_scan_running || is_capture_busy || star_rail_busy,
                     restart_required,
                 );
             },
             #[cfg(feature = "capture")]
-            ActiveTab::Capture => {
+            (Game::Genshin, ToolTab::Capture) => {
                 capture_tab::show(
                     ui,
                     self.state.lang,
                     &mut self.capture_tab,
-                    is_scan_running || is_server_running,
+                    is_scan_running || is_server_running || star_rail_busy,
                     restart_required,
                 );
             },
-            ActiveTab::Credits => {
+            (Game::Genshin, ToolTab::Credits) => {
                 #[cfg(feature = "capture")]
                 credits::show(ui, l, credits::CreditSet::Full);
                 #[cfg(not(feature = "capture"))]
                 credits::show(ui, l, credits::CreditSet::Scanner);
             },
+            (Game::StarRail, ToolTab::Scanner) => {
+                star_rail_scanner_tab::show(
+                    ui,
+                    l,
+                    &mut self.app_config.config.star_rail,
+                    &mut self.star_rail,
+                    genshin_busy || star_rail_manager_running || star_rail_capture_busy,
+                    restart_required,
+                );
+            },
+            (Game::StarRail, ToolTab::Manager) => {
+                star_rail_manager_tab::show(
+                    ui,
+                    l,
+                    &mut self.app_config.config.star_rail,
+                    &mut self.star_rail,
+                    genshin_busy || star_rail_scan_running || star_rail_capture_busy,
+                    restart_required,
+                );
+            },
+            #[cfg(feature = "capture")]
+            (Game::StarRail, ToolTab::Capture) => {
+                star_rail_capture_tab::show(
+                    ui,
+                    l,
+                    &mut self.app_config.config.star_rail,
+                    &mut self.star_rail.capture,
+                    genshin_busy || star_rail_scan_running || star_rail_manager_running,
+                    restart_required,
+                );
+            },
+            (Game::StarRail, ToolTab::Credits) => {
+                credits::show(ui, l, credits::CreditSet::StarRail);
+            },
+            #[cfg(not(feature = "capture"))]
+            (_, ToolTab::Capture) => unreachable!("capture tab is normalized for this build"),
         });
 
         // Request repaint while tasks or update check are in progress
@@ -353,10 +447,12 @@ impl eframe::App for GuiApp {
             *self.state.update_state.lock().unwrap(),
             UpdateState::Checking | UpdateState::Downloading | UpdateState::ShowingDialog,
         );
-        let config_save_pending = self.state.config_dirty_since.is_some();
+        let config_save_pending =
+            self.state.config_dirty_since.is_some() || self.app_config.save_pending();
         let any_running = is_scan_running
             || is_server_running
             || is_capture_busy
+            || star_rail_busy
             || update_busy
             || config_save_pending;
         if any_running {
@@ -368,6 +464,16 @@ impl eframe::App for GuiApp {
         #[cfg(feature = "capture")]
         self.capture_tab.sync_to_config(&mut self.state.user_config);
         self.state.persist_config_now();
+        if let Err(error) = self.app_config.persist_now() {
+            let failure = state::UiError::from_anyhow(
+                state::UiText::new(
+                    "星穹铁道设置无法保存；请检查完整错误。",
+                    "Star Rail settings could not be saved. Check the full error.",
+                ),
+                &error,
+            );
+            log::error!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", failure.copy_text(self.state.lang));
+        }
     }
 }
 

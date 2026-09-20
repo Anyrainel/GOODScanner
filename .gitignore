@@ -12,6 +12,7 @@ dumps/
 data/
 scan_output/
 debug_images/
+debug_capture/
 diff_report.md
 *.log
 .claude/

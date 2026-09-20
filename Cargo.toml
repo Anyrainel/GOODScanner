@@ -4,6 +4,7 @@ members = [
     "yas",
     "genshin",
     "application",
+    "experimental/hsr",
 ]
 
 [profile.release]

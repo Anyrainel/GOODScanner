@@ -1,0 +1,102 @@
+{
+  "source": "reliquary_archiver",
+  "build": "0.18.0",
+  "version": 4,
+  "metadata": {
+    "uid": null,
+    "trailblazer": "Stelle"
+  },
+  "gacha": {
+    "stellar_jade": 0,
+    "oneric_shards": 0
+  },
+  "materials": [],
+  "light_cones": [
+    {
+      "id": "23005",
+      "name": "Moment of Victory",
+      "level": 80,
+      "ascension": 6,
+      "superimposition": 1,
+      "location": "1001",
+      "lock": true,
+      "_uid": null
+    }
+  ],
+  "relics": [
+    {
+      "set_id": "301",
+      "name": "Space Sealing Station",
+      "slot": "Planar Sphere",
+      "rarity": 5,
+      "level": 15,
+      "mainstat": "ATK",
+      "substats": [
+        {
+          "key": "SPD",
+          "value": 2.0,
+          "count": 1,
+          "step": 0
+        },
+        {
+          "key": "HP",
+          "value": 38.0,
+          "count": 1,
+          "step": 0
+        }
+      ],
+      "location": "1001",
+      "lock": false,
+      "discard": true,
+      "_uid": null
+    },
+    {
+      "set_id": "101",
+      "name": "Passerby of Wandering Cloud",
+      "slot": "Head",
+      "rarity": 5,
+      "level": 15,
+      "mainstat": "HP",
+      "substats": [
+        {
+          "key": "SPD",
+          "value": 2.0,
+          "count": 1,
+          "step": 0
+        },
+        {
+          "key": "CRIT Rate_",
+          "value": 5.8,
+          "count": 2,
+          "step": 1
+        }
+      ],
+      "location": "",
+      "lock": true,
+      "discard": false,
+      "_uid": null
+    }
+  ],
+  "characters": [
+    {
+      "id": "1001",
+      "name": "March 7th",
+      "path": "Preservation",
+      "level": 80,
+      "ascension": 6,
+      "eidolon": 6,
+      "skills": {
+        "basic": 6,
+        "skill": 10,
+        "ult": 10,
+        "talent": 10
+      },
+      "traces": {
+        "ability_1": true,
+        "ability_2": true,
+        "ability_3": true
+      },
+      "ability_version": 0
+    }
+  ]
+}

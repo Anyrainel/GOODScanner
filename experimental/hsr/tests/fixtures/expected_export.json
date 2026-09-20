@@ -1,0 +1,145 @@
+{
+  "schema": "goodscanner.hsr.experimental",
+  "schemaVersion": 2,
+  "source": {
+    "kind": "screenCapture",
+    "revision": "screen-capture-fixture-v2",
+    "coverage": {
+      "characters": "complete",
+      "lightCones": "complete",
+      "relics": "complete"
+    }
+  },
+  "reference": {
+    "schemaVersion": 1,
+    "provider": "gilore.ggstarrail-reference",
+    "revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992"
+  },
+  "privacy": {
+    "accountIdentifiersIncluded": false,
+    "rawPacketDataIncluded": false,
+    "serverItemIdentifiersIncluded": false
+  },
+  "characters": [
+    {
+      "localId": "character-001",
+      "key": "1001",
+      "gameId": 1001,
+      "name": {
+        "zhCn": "三月七",
+        "en": "March 7th"
+      },
+      "rarity": 4,
+      "path": "Knight",
+      "level": 80,
+      "ascension": 6,
+      "eidolon": 2
+    }
+  ],
+  "lightCones": [
+    {
+      "localId": "light-cone-001",
+      "key": "23005",
+      "gameId": 23005,
+      "name": {
+        "zhCn": "制胜的瞬间",
+        "en": "Moment of Victory"
+      },
+      "rarity": 5,
+      "path": "Knight",
+      "level": 80,
+      "ascension": 6,
+      "superimposition": 3,
+      "locationKey": "1001",
+      "lock": true
+    }
+  ],
+  "relics": [
+    {
+      "localId": "relic-001",
+      "key": "61011",
+      "gameId": 61011,
+      "name": {
+        "zhCn": "过客的逢春木簪",
+        "en": "Passerby's Rejuvenated Wooden Hairstick"
+      },
+      "setKey": "101",
+      "setName": {
+        "zhCn": "云无留迹的过客",
+        "en": "Passerby of Wandering Cloud"
+      },
+      "rarity": 5,
+      "slot": "Head",
+      "level": 15,
+      "mainStat": {
+        "key": "HPDelta",
+        "name": {
+          "zhCn": "生命值",
+          "en": "HP"
+        },
+        "value": 705.6
+      },
+      "substats": [
+        {
+          "key": "CriticalChanceBase",
+          "name": {
+            "zhCn": "暴击率",
+            "en": "CRIT Rate"
+          },
+          "value": 8.7
+        },
+        {
+          "key": "SpeedDelta",
+          "name": {
+            "zhCn": "速度",
+            "en": "SPD"
+          },
+          "value": 5.1
+        }
+      ],
+      "locationKey": null,
+      "lock": false,
+      "discard": true
+    }
+  ],
+  "planarOrnaments": [
+    {
+      "localId": "planar-001",
+      "key": "63015",
+      "gameId": 63015,
+      "name": {
+        "zhCn": "「黑塔」的空间站点",
+        "en": "Herta's Space Station"
+      },
+      "setKey": "301",
+      "setName": {
+        "zhCn": "太空封印站",
+        "en": "Space Sealing Station"
+      },
+      "rarity": 5,
+      "slot": "PlanarSphere",
+      "level": 12,
+      "mainStat": {
+        "key": "AttackAddedRatio",
+        "name": {
+          "zhCn": "攻击力",
+          "en": "ATK"
+        },
+        "value": 35.9424
+      },
+      "substats": [
+        {
+          "key": "SpeedDelta",
+          "name": {
+            "zhCn": "速度",
+            "en": "SPD"
+          },
+          "value": 4.0
+        }
+      ],
+      "locationKey": "1001",
+      "lock": null,
+      "discard": null
+    }
+  ]
+}

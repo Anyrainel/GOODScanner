@@ -206,10 +206,8 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
             ui.add(egui::TextEdit::singleline(&mut state.user_config.manekina_name).desired_width(field_w));
         });
 
-        if state.names_need_attention {
-            if !state.missing_required_character_names() {
-                state.names_need_attention = false;
-            }
+        if state.names_need_attention && !state.missing_required_character_names() {
+            state.names_need_attention = false;
         }
     });
 }
@@ -234,4 +232,21 @@ pub fn inventory_delays(ui: &mut egui::Ui, state: &mut AppState, l: Lang) {
         (l.t("圣遗物额外延迟", "Artifact extra delay"), &mut state.user_config.artifact_extra_delay, defaults.artifact_extra_delay,
             l.t("面板加载完成后、截图前的额外等待（通常为0）", "Extra wait after panel loaded before capturing (usually 0)")),
     ]);
+}
+
+pub fn star_rail_game_data_refresh_control(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    state: &mut RefreshState,
+) {
+    game_data_refresh_control(
+        ui,
+        lang,
+        state,
+        super::state::UiText::new(
+            "无法刷新星穹铁道游戏数据。请检查网络连接，然后重试。",
+            "Star Rail game data could not be refreshed. Check your connection, then retry.",
+        ),
+        || hsr_scanner::data_cache::force_refresh().map_err(anyhow::Error::new),
+    );
 }

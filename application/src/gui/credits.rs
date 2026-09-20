@@ -11,6 +11,8 @@ pub enum CreditSet {
     Capture,
     /// GOODCapture: scanner + capture attributions.
     Full,
+    /// Honkai: Star Rail scanner, import, capture, and manager references.
+    StarRail,
 }
 
 /// Render the credits / third-party attribution panel.
@@ -27,7 +29,7 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
         );
         ui.add_space(4.0);
 
-        if matches!(set, CreditSet::Scanner | CreditSet::Full) {
+        if matches!(set, CreditSet::Scanner | CreditSet::Full | CreditSet::StarRail) {
             entry(
                 ui,
                 l,
@@ -89,6 +91,54 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
                 l.t(
                     "部分控制方法的灵感来源 (MIT)",
                     "Inspiration for some control methods (MIT)",
+                ),
+            );
+        }
+
+        if set == CreditSet::StarRail {
+            #[cfg(feature = "capture")]
+            entry(
+                ui,
+                l,
+                "Reliquary",
+                "IceDynamix contributors",
+                "https://github.com/IceDynamix/reliquary",
+                l.t(
+                    "星穹铁道网络数据解密与角色、库存协议类型",
+                    "Star Rail network decryption and character/inventory protocol types",
+                ),
+            );
+            entry(
+                ui,
+                l,
+                "Reliquary",
+                "IceDynamix contributors",
+                "https://github.com/IceDynamix/reliquary",
+                l.t(
+                    "离线存档导入格式的互操作参考 (MIT)",
+                    "Interoperability reference for offline archive imports (MIT)",
+                ),
+            );
+            entry(
+                ui,
+                l,
+                "Fribbels Star Rail Optimizer",
+                "Fribbels contributors",
+                "https://github.com/fribbels/hsr-optimizer",
+                l.t(
+                    "星穹铁道导入格式的互操作参考 (MIT)",
+                    "Interoperability reference for Star Rail import formats (MIT)",
+                ),
+            );
+            entry(
+                ui,
+                l,
+                "YAS Star Rail",
+                "wormtql",
+                "https://github.com/wormtql/yas/tree/730d8845505c04c7f4c91709de076503401ff40c/yas-starrail",
+                l.t(
+                    "星穹铁道扫描行为的历史参考（未复制代码或资源）",
+                    "Historical reference for Star Rail scanning behavior (no code or assets copied)",
                 ),
             );
         }

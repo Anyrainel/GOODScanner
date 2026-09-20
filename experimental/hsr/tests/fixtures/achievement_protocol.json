@@ -1,0 +1,61 @@
+{
+  "fixtureKind": "syntheticDecryptedCommand",
+  "description": "Generated public-definition IDs only; no account identifiers, session material, or player timestamps; no raw captured packets.",
+  "knownAchievementIds": [
+    4010101,
+    4010102,
+    4010103,
+    4010104,
+    4010105,
+    4010106
+  ],
+  "cases": [
+    {
+      "name": "status-normalization-layout-a",
+      "protoBase64": "+gIKmAEKWPXg9AEQAPoCCpgBC1j24PQBEAH6AhGYAQxY9+D0ARAC6AGC4s+qBvoCEZgBDVj44PQBEAPoAYPiz6oG+gIKmAEOWPng9AEQBPoCEZgBD1j64PQBEALoAYXiz6oG",
+      "expectedCompletedIds": [
+        4010103,
+        4010104,
+        4010106
+      ]
+    },
+    {
+      "name": "rotated-tags-without-sentinel",
+      "protoBase64": "KhKYAQrIBPrg9AEgAtgFgOLPqgYqC5gBC8gE+eD0ASAAKhKYAQzIBPjg9AEgA9gFguLPqgYqC5gBDcgE9+D0ASABKguYAQ7IBPbg9AEgBCoSmAEPyAT14PQBIALYBYXiz6oG",
+      "expectedCompletedIds": [
+        4010101,
+        4010104,
+        4010106
+      ]
+    },
+    {
+      "name": "present-complete-empty",
+      "protoBase64": "YguIAQpI9eD0AYgCAGILiAELSPbg9AGIAgFiC4gBDEj34PQBiAIEYguIAQ1I+OD0AYgCAWILiAEOSPng9AGIAgBiC4gBD0j64PQBiAIE",
+      "expectedCompletedIds": []
+    },
+    {
+      "name": "unknown-reference-id",
+      "protoBase64": "+gIRmAEKWPXg9AEQAugBgOLPqgb6AgqYAQtY9uD0ARAA+gIRmAEMWPfg9AEQA+gBguLPqgb6AgqYAQ1Y+OD0ARAB+gIRmAEOWPng9AEQAugBhOLPqgb6AhGYAQ9Yv5axAhAD6AGF4s+qBg==",
+      "expectedErrorCode": "HSR-ACHIEVEMENT-REFERENCE-STALE"
+    },
+    {
+      "name": "duplicates-sort-and-deduplicate",
+      "protoBase64": "qgERmAEKOPXg9AFAAugBgOLPqgaqAQqYAQs49uD0AUAAqgERmAEMOPfg9AFAA+gBguLPqgaqAQqYAQ04+OD0AUABqgERmAEOOPng9AFAAugBhOLPqgaqARGYAQ84+eD0AUAD6AGF4s+qBg==",
+      "expectedCompletedIds": [
+        4010101,
+        4010103,
+        4010105
+      ]
+    },
+    {
+      "name": "unrelated-noise",
+      "protoBase64": "CAESA2Zvbw==",
+      "expectedAbsent": true
+    },
+    {
+      "name": "truncated-message",
+      "protoBase64": "Cv//",
+      "expectedAbsent": true
+    }
+  ]
+}

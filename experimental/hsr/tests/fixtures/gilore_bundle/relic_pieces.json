@@ -1,0 +1,61 @@
+{
+  "bundle_id": "ggstarrail-reference",
+  "collection": "relic_pieces",
+  "game_id": "honkai_star_rail",
+  "schema_version": "1.1.0",
+  "source_revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992",
+  "value": [
+    {
+      "id": "61011",
+      "set_id": "101",
+      "slot": "HEAD",
+      "rarity": 5,
+      "main_affix_group": 51,
+      "max_level": 15,
+      "icon_path": "SpriteOutput/ItemIcon/RelicIcons/IconRelic_101_1.png",
+      "name": {
+        "en": { "value": "Passerby's Rejuvenated Wooden Hairstick" },
+        "zh-CN": { "value": "过客的逢春木簪" }
+      }
+    },
+    {
+      "id": "63015",
+      "set_id": "301",
+      "slot": "NECK",
+      "rarity": 5,
+      "main_affix_group": 55,
+      "max_level": 15,
+      "icon_path": "SpriteOutput/ItemIcon/RelicIcons/IconRelic_301_5.png",
+      "name": {
+        "en": { "value": "Herta's Space Station" },
+        "zh-CN": { "value": "「黑塔」的空间站点" }
+      }
+    },
+    {
+      "id": "51013",
+      "set_id": "101",
+      "slot": "BODY",
+      "rarity": 4,
+      "main_affix_group": 43,
+      "max_level": 12,
+      "icon_path": "SpriteOutput/ItemIcon/RelicIcons/IconRelic_101_3.png",
+      "name": {
+        "en": { "value": "Passerby's Ragged Embroidered Coat" },
+        "zh-CN": { "value": "过客的残绣风衣" }
+      }
+    },
+    {
+      "id": "55001",
+      "set_id": "101",
+      "slot": "BODY",
+      "rarity": 4,
+      "main_affix_group": 436,
+      "max_level": 12,
+      "icon_path": "SpriteOutput/ItemIcon/RelicIcons/IconRelic_101_3.png",
+      "name": {
+        "en": { "value": "Passerby's Ragged Embroidered Coat" },
+        "zh-CN": { "value": "过客的残绣风衣" }
+      }
+    }
+  ]
+}

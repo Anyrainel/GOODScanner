@@ -4,9 +4,9 @@
 
 **中文 | [English](README_EN.md)**
 
-基于 [yas](https://github.com/1803233552/yas) 编写的原神 GOOD 格式扫描器
+基于 [yas](https://github.com/1803233552/yas) 编写的《原神》与《崩坏：星穹铁道》Windows 扫描、抓包与管理工具
 
-扫描游戏内角色、武器、圣遗物数据，导出为 [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc) 格式 JSON，可直接导入 [GGArtifact](https://ggartifact.com/)、[Genshin Optimizer](https://frzyc.github.io/genshin-optimizer/) 等配装工具。
+同一套 `GOODScanner.exe` 与 `GOODCapture.exe` 同时服务两款游戏。《原神》数据继续导出为兼容现有工具的 [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc)；《星穹铁道》扫描与抓包导出为 [HSR-Scanner v4](docs/HSR_EXPORT.md)（Fribbels / Reliquary 互通格式，并扩展成就与开拓者性别/命途）。
 
 [![Build](https://github.com/Anyrainel/GOODScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GOODScanner/actions)
 
@@ -14,10 +14,12 @@
 
 ## 功能
 
-- **角色扫描**：名称、等级、突破、命座、天赋
-- **武器扫描**：名称、等级、突破、精炼、装备角色、锁定状态
-- **圣遗物扫描**：套装、位置、主词条、副词条、等级、稀有度、锁定、星标、祝圣秘境标记、待激活词条
-- **成就抓包**：GOODCapture 默认导出账号已完成的成就 ID
+- **游戏切换**：窗口顶部以等宽的“原神 / 星穹铁道”选项切换流程，并分别保留两款游戏的设置和当前页面
+- **原神扫描与抓包**：角色、武器、圣遗物及现有 GOOD v3 导出能力保持兼容
+- **原神成就抓包**：GOODCapture 默认导出账号已完成的成就 ID
+- **星穹铁道扫描**：角色、光锥、隧洞遗器和位面饰品
+- **星穹铁道导出与管理**：扫描与抓包都导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)；遗器管理指令仍使用 `goodscanner.hsr.manager-instructions`
+- **星穹铁道成就抓包**：GOODCapture 在程序内捕获并导出已完成的成就，无需另行下载 HSR 程序或抓包辅助程序
 - **双引擎 OCR**：PPOCRv4（通用）+ PPOCRv5（特殊部分专用），自动选择最优结果
 - **副词条验证**：Roll Solver 基于游戏精确度验证词条合法性
 
@@ -25,14 +27,16 @@
 
 ### 下载
 
-发布页提供两个可执行文件：
+发布页提供两个可执行文件；它们都可在窗口顶部切换《原神》和《星穹铁道》：
 
-- `GOODScanner.exe` — OCR 扫描器 + 管理器
-- `GOODCapture.exe` — 抓包 + OCR 扫描器 + 管理器
+- `GOODScanner.exe` — 两款游戏的 OCR 扫描、导出与管理
+- `GOODCapture.exe` — 在上述能力之外，增加《原神》数据抓包及两款游戏的成就抓包
 
-请从 [Releases](https://github.com/Anyrainel/GOODScanner/releases) 页面下载。
+请从 [Releases](https://github.com/Anyrainel/GOODScanner/releases) 页面下载。**无需也不应寻找单独的 HSR 可执行文件。**
 
-GOODCapture 使用一个向后兼容的 GOOD v3 扩展字段保存成就：
+### 成就导出语义
+
+《原神》继续使用向后兼容的 GOOD v3 扩展字段保存成就：
 
 ```json
 {"achievements":[80001,80002,81001]}
@@ -40,17 +44,22 @@ GOODCapture 使用一个向后兼容的 GOOD v3 扩展字段保存成就：
 
 该字段是紧凑的已完成成就 ID 数组。字段存在时（包括空数组）表示导入方应替换成就状态；用户关闭“成就”导出选项时字段会省略，导入方应保留原有成就状态。标准 GOOD v3 字段和版本号保持不变。
 
+《星穹铁道》扫描与抓包都导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)：可选的 `achievements` 是紧凑的已完成成就 ID 数组。字段省略表示本次没有观测成就；字段存在（包括 `[]`）表示完整替换。遗器管理指令仍使用 `goodscanner.hsr.manager-instructions`。
+
 ### 使用步骤
 
-1. 以**管理员身份**运行所需的可执行文件
-2. 首次运行会提示输入自定义角色名（旅行者/流浪者等），配置保存在 `data/good_config.json`
-3. 确保原神已运行，按回车开始扫描（程序会自动切换到游戏窗口并打开对应界面）
-4. 扫描过程中可按**鼠标右键**终止
-5. 结果输出为当前目录下的 `GOODv3.json`
+1. 以**管理员身份**运行所需的可执行文件；不带命令行参数时会打开图形界面
+2. 在窗口顶部选择“原神”或“星穹铁道”，再进入当前游戏的扫描、管理或抓包页面
+3. 首次运行《原神》时填写旅行者、流浪者等自定义角色名；现有配置仍保存在 `data/good_config.json`
+4. 《星穹铁道》设置单独保存在 `data/good_app_config.json`；共用程序已内置并校验 GIlore 参考数据，参考目录仅用于高级自定义覆盖
+5. 确保所选游戏正在运行；扫描过程中可按**鼠标右键**终止
+6. 《原神》结果仍输出为 `GOODv3.json`；《星穹铁道》输出目录可在其页面中设置
+
+程序内置完整的公开 GIlore `1.2.0` 参考快照，用于校验《星穹铁道》的库存与成就 ID。若明确选择自定义参考目录，它必须是完整且校验和正确的 GIlore 数据包；无效覆盖会安全拒绝，不会静默回退。正常使用无需另行下载参考数据。
 
 ### 扫描目标
 
-默认扫描全部（角色 + 武器 + 圣遗物）。也可以指定：
+以下命令行参数继续用于《原神》，其行为和 GOOD v3 输出保持不变。默认扫描全部（角色 + 武器 + 圣遗物），也可以指定：
 
 ```shell
 GOODScanner.exe                    # 扫描全部
@@ -63,7 +72,7 @@ GOODScanner.exe --characters --weapons  # 组合扫描
 ## 注意事项
 
 - 需要**管理员权限**（用于模拟键鼠输入）
-- 仅支持**简体中文**游戏客户端
+- 《原神》扫描仅支持**简体中文**客户端；《星穹铁道》识别中英文界面文字
 - 推荐 **16:9** 分辨率（1920×1080、2560×1440 等）
 - 扫描过程中请勿操作鼠标
 - 默认 4 星以下圣遗物不扫描（可通过 `--artifact-min-rarity` 调整）
@@ -122,12 +131,18 @@ rustup default stable
 # 确保安装 Git LFS
 git lfs pull
 
-# 构建
-cargo build --release
+# 构建两款游戏共用的普通扫描版
+cargo build --locked --release -p good_tools_app --bin GOODScanner
 
-# 产物位于 target/release/GOODScanner.exe；使用 --features capture 时还会生成
+# 构建包含两款游戏成就抓包的抓包版
+cargo build --locked --release -p good_tools_app --features capture --bin GOODCapture
+
+# 产物仍为以下两个既有路径：
+# target/release/GOODScanner.exe
 # target/release/GOODCapture.exe
 ```
+
+夹具与回放测试只能证明解析、导出及模拟交互契约，不能证明当前《星穹铁道》客户端上的实时扫描、抓包或管理操作已经通过实机验证。
 
 ## 致谢
 

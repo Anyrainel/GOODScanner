@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "provider": "gilore.ggstarrail-reference",
+  "revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992",
+  "characters": [
+    {
+      "gameId": 1001,
+      "key": "1001",
+      "name": {
+        "zhCn": "三月七",
+        "en": "March 7th"
+      },
+      "rarity": 4,
+      "path": "Knight"
+    }
+  ],
+  "lightCones": [
+    {
+      "gameId": 23005,
+      "key": "23005",
+      "name": {
+        "zhCn": "制胜的瞬间",
+        "en": "Moment of Victory"
+      },
+      "rarity": 5,
+      "path": "Knight"
+    }
+  ],
+  "gearPieces": [
+    {
+      "gameId": 61011,
+      "key": "61011",
+      "name": {
+        "zhCn": "过客的逢春木簪",
+        "en": "Passerby's Rejuvenated Wooden Hairstick"
+      },
+      "iconPath": "SpriteOutput/ItemIcon/RelicIcons/IconRelic_101_1.png",
+      "setKey": "101",
+      "setName": {
+        "zhCn": "云无留迹的过客",
+        "en": "Passerby of Wandering Cloud"
+      },
+      "rarity": 5,
+      "category": "relic",
+      "slot": "Head"
+    },
+    {
+      "gameId": 63015,
+      "key": "63015",
+      "name": {
+        "zhCn": "「黑塔」的空间站点",
+        "en": "Herta's Space Station"
+      },
+      "iconPath": "SpriteOutput/ItemIcon/RelicIcons/IconRelic_301_5.png",
+      "setKey": "301",
+      "setName": {
+        "zhCn": "太空封印站",
+        "en": "Space Sealing Station"
+      },
+      "rarity": 5,
+      "category": "planarOrnament",
+      "slot": "PlanarSphere"
+    }
+  ],
+  "stats": [
+    {
+      "key": "HPDelta",
+      "name": {
+        "zhCn": "生命值",
+        "en": "HP"
+      }
+    },
+    {
+      "key": "AttackAddedRatio",
+      "name": {
+        "zhCn": "攻击力",
+        "en": "ATK"
+      }
+    },
+    {
+      "key": "CriticalChanceBase",
+      "name": {
+        "zhCn": "暴击率",
+        "en": "CRIT Rate"
+      }
+    },
+    {
+      "key": "SpeedDelta",
+      "name": {
+        "zhCn": "速度",
+        "en": "SPD"
+      }
+    }
+  ]
+}

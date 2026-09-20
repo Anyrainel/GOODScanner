@@ -1,0 +1,25 @@
+{
+  "bundle_id": "ggstarrail-reference",
+  "collection": "relic_sets",
+  "game_id": "honkai_star_rail",
+  "schema_version": "1.1.0",
+  "source_revision": "014e33e2404f8cd668bf06fc2ea6db53b6bc3992",
+  "value": [
+    {
+      "id": "101",
+      "name": {
+        "en": { "value": "Passerby of Wandering Cloud" },
+        "zh-CN": { "value": "云无留迹的过客" }
+      },
+      "kind": "cavern_relic"
+    },
+    {
+      "id": "301",
+      "name": {
+        "en": { "value": "Space Sealing Station" },
+        "zh-CN": { "value": "太空封印站" }
+      },
+      "kind": "planar_ornament"
+    }
+  ]
+}
