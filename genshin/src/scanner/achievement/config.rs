@@ -1,6 +1,6 @@
-/// Wait after a list scroll tick, before the next capture (ms).
-/// Cocogoat measured ~80–160 ms of wheel latency; stay on the low side.
-pub const DEFAULT_SCROLL_DELAY: u64 = 80;
+/// Wait after a 11-tick list wheel burst, before the next capture (ms).
+/// Cocogoat measured 80–160 ms of wheel latency.
+pub const DEFAULT_SCROLL_DELAY: u64 = 100;
 /// Wait after clicking a left-side category (ms).
 pub const DEFAULT_CATEGORY_DELAY: u64 = 400;
 /// Wait after opening the achievement screen from the Paimon menu (ms).
@@ -15,7 +15,7 @@ pub const DEFAULT_OPEN_DELAY: u64 = 1500;
 pub struct GoodAchievementScannerConfig {
     pub verbose: bool,
     pub ocr_backend: String,
-    /// Wait after a list scroll tick, before the next capture (ms).
+    /// Wait after an 11-tick list wheel burst, before the next capture (ms).
     pub scroll_delay: u64,
     /// Wait after clicking a left-side category (ms).
     pub category_delay: u64,

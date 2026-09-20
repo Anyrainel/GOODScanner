@@ -1,8 +1,7 @@
-//! Achievement name/description → id catalog.
+//! Achievement name → id catalog from ggartifact `mapping_achievements.json`.
 //!
-//! Isolated from `MappingManager` (characters/weapons/sets). Fetches the
-//! Chinese achievement JSON files from dvaJi/genshin-data, the same family of
-//! tables cocogoat matches OCR text against.
+//! Isolated from `MappingManager` (characters/weapons/sets). Cache path, TTL,
+//! and stale-cache fallback match `mappings.json`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -15,10 +14,9 @@ use yas::{log_debug, log_info, log_warn};
 
 use crate::scanner::common::fuzzy_match::fuzzy_match_map;
 
-const CATALOG_URL: &str =
-    "https://api.github.com/repos/dvaJi/genshin-data/contents/src/data/chinese-simplified/achievements";
-const CATALOG_CACHE_PATH: &str = "data/achievements.json";
-const CATALOG_META_PATH: &str = "data/achievements_meta.json";
+const CATALOG_URL: &str = "https://ggartifact.com/good/mapping_achievements.json";
+const CATALOG_CACHE_PATH: &str = "data/mapping_achievements.json";
+const CATALOG_META_PATH: &str = "data/mapping_achievements_meta.json";
 const CATALOG_TTL_SECS: u64 = 24 * 3600;
 
 /// Punctuation stripped before matching, same set as cocogoat `filter`.
@@ -30,31 +28,23 @@ struct CatalogMeta {
     last_fetch_time: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct CachedCatalog {
-    achievements: Vec<CatalogEntry>,
+#[derive(Debug, Deserialize)]
+struct MappingAchievementsFile {
+    achievements: Vec<MappingAchievement>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct CatalogEntry {
+#[derive(Debug, Deserialize)]
+struct MappingAchievement {
     id: u32,
-    name: String,
-    desc: String,
+    n: LocalizedNames,
 }
 
 #[derive(Debug, Deserialize)]
-struct GitHubContent {
-    name: String,
-    download_url: Option<String>,
+struct LocalizedNames {
+    zh: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RemoteCategoryFile {
-    achievements: Vec<RemoteAchievement>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteAchievement {
+struct CatalogEntry {
     id: u32,
     name: String,
     desc: String,
@@ -98,11 +88,32 @@ impl AchievementCatalog {
     }
 
     fn load_from_cache() -> Result<Self> {
-        let raw = fs::read_to_string(CATALOG_CACHE_PATH)
-            .with_context(|| format!("achievement catalog cache missing: {CATALOG_CACHE_PATH}"))?;
-        let cached: CachedCatalog =
-            serde_json::from_str(&raw).context("achievement catalog cache is invalid JSON")?;
-        Ok(Self::from_cached(&cached.achievements))
+        let raw = fs::read_to_string(CATALOG_CACHE_PATH).with_context(|| {
+            format!("achievement catalog cache missing: {CATALOG_CACHE_PATH}")
+        })?;
+        let data: MappingAchievementsFile = serde_json::from_str(&raw)
+            .context("achievement catalog cache is not mapping_achievements.json")?;
+        let entries: Vec<CatalogEntry> = data
+            .achievements
+            .into_iter()
+            .filter_map(|a| {
+                let name = a.n.zh?;
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(CatalogEntry {
+                        id: a.id,
+                        name,
+                        desc: String::new(),
+                    })
+                }
+            })
+            .collect();
+        if entries.is_empty() {
+            bail!("achievement catalog cache has no Chinese names");
+        }
+        log_info!("已加载 {} 条成就", "Loaded {} achievements", entries.len());
+        Ok(Self::from_cached(&entries))
     }
 
     fn from_cached(entries: &[CatalogEntry]) -> Self {
@@ -117,9 +128,9 @@ impl AchievementCatalog {
                 continue;
             }
             let id = entry.id;
-            title_desc.insert(format!("{name}-{desc}"), id.to_string());
-            titles.entry(name).or_default().push(id);
+            titles.entry(name.clone()).or_default().push(id);
             if !desc.is_empty() {
+                title_desc.insert(format!("{name}-{desc}"), id.to_string());
                 descriptions.entry(desc).or_default().push(id);
             }
         }
@@ -132,7 +143,7 @@ impl AchievementCatalog {
     }
 
     pub fn len(&self) -> usize {
-        self.title_desc.len()
+        self.titles.values().map(|ids| ids.len()).sum()
     }
 
     /// Resolve OCR title + subtitle to an achievement id.
@@ -154,7 +165,7 @@ impl AchievementCatalog {
 
         if !title.is_empty() {
             if let Some(ids) = self.titles.get(&title) {
-                if ids.len() == 1 && !needs_subtitle_disambiguation(&subtitle) {
+                if ids.len() == 1 {
                     return Some(ids[0]);
                 }
             }
@@ -165,9 +176,7 @@ impl AchievementCatalog {
                 .map(|(k, ids)| (k.clone(), ids[0].to_string()))
                 .collect();
             if let Some(id) = fuzzy_match_map(&title, &title_as_map) {
-                if !needs_subtitle_disambiguation(&subtitle) {
-                    return parse_id(&id);
-                }
+                return parse_id(&id);
             }
         }
 
@@ -185,13 +194,6 @@ impl AchievementCatalog {
 
         None
     }
-}
-
-/// True when the description is needed to pick among staged achievements
-/// (cocogoat: desc contains digits or `次`).
-fn needs_subtitle_disambiguation(subtitle: &str) -> bool {
-    !subtitle.is_empty()
-        && (subtitle.chars().any(|c| c.is_ascii_digit()) || subtitle.contains('次'))
 }
 
 pub fn normalize_text(text: &str) -> String {
@@ -214,18 +216,47 @@ fn now_secs() -> u64 {
 }
 
 fn load_meta() -> CatalogMeta {
-    match fs::read_to_string(CATALOG_META_PATH) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => CatalogMeta::default(),
+    let content = match fs::read_to_string(CATALOG_META_PATH) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return CatalogMeta::default()
+        },
+        Err(error) => {
+            log_warn!(
+                "无法读取成就目录缓存状态；将重新检查远程数据。完整错误详情: {:#}",
+                "Achievement catalog cache metadata could not be read; remote data will be checked again. Full error details: {:#}",
+                error,
+            );
+            return CatalogMeta::default();
+        },
+    };
+    match serde_json::from_str::<CatalogMeta>(&content) {
+        Ok(meta) => meta,
+        Err(error) => {
+            log_warn!(
+                "成就目录缓存状态文件已损坏；将重新检查远程数据。完整错误详情: {:#}",
+                "Achievement catalog cache metadata is invalid; remote data will be checked again. Full error details: {:#}",
+                error,
+            );
+            CatalogMeta::default()
+        },
     }
 }
 
 fn save_meta(meta: &CatalogMeta) -> Result<()> {
     if let Some(parent) = Path::new(CATALOG_META_PATH).parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "achievement catalog cache directory could not be created: {}",
+                parent.display()
+            )
+        })?;
     }
-    fs::write(CATALOG_META_PATH, serde_json::to_string(meta)?)?;
-    Ok(())
+    let json = serde_json::to_string(meta)
+        .context("achievement catalog cache metadata serialization failed")?;
+    fs::write(CATALOG_META_PATH, json).with_context(|| {
+        format!("achievement catalog cache metadata could not be written: {CATALOG_META_PATH}")
+    })
 }
 
 fn is_fresh(last_fetch_time: u64, ttl_secs: u64) -> bool {
@@ -241,20 +272,44 @@ fn fetch_if_needed() -> Result<()> {
 
     log_info!("正在获取成就目录...", "Fetching achievement catalog...");
 
-    match download_catalog() {
-        Ok(entries) => {
-            if let Some(parent) = Path::new(CATALOG_CACHE_PATH).parent() {
-                fs::create_dir_all(parent)?;
+    if let Some(parent) = Path::new(CATALOG_CACHE_PATH).parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "achievement catalog cache directory could not be created: {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    match reqwest::blocking::get(CATALOG_URL) {
+        Ok(response) => {
+            if response.status().is_success() {
+                let body = response
+                    .text()
+                    .context("achievement catalog response body could not be read")?;
+                let _: MappingAchievementsFile = serde_json::from_str(&body)
+                    .context("downloaded mapping_achievements.json is invalid")?;
+                fs::write(CATALOG_CACHE_PATH, &body).with_context(|| {
+                    format!("achievement catalog cache could not be written: {CATALOG_CACHE_PATH}")
+                })?;
+                save_meta(&CatalogMeta {
+                    last_fetch_time: now_secs(),
+                })?;
+                log_debug!("成就目录已更新", "Achievement catalog updated");
+            } else if cache_exists {
+                log_warn!(
+                    "获取数据失败 (HTTP {})，使用本地缓存",
+                    "Fetch failed (HTTP {}), using local cache",
+                    response.status()
+                );
+            } else {
+                bail!(
+                    "获取成就目录失败 (HTTP {})，且无本地缓存。请检查网络连接。\n\
+                     / Failed to fetch achievement catalog (HTTP {}), no local cache. Check your network connection.",
+                    response.status(),
+                    response.status()
+                );
             }
-            let json = serde_json::to_string(&CachedCatalog {
-                achievements: entries,
-            })?;
-            fs::write(CATALOG_CACHE_PATH, json)?;
-            save_meta(&CatalogMeta {
-                last_fetch_time: now_secs(),
-            })?;
-            log_debug!("成就目录已更新", "Achievement catalog updated");
-            Ok(())
         },
         Err(e) => {
             if cache_exists {
@@ -263,67 +318,15 @@ fn fetch_if_needed() -> Result<()> {
                     "The latest achievement catalog could not be downloaded; the local cache will be used. Full error details: {:#}",
                     e
                 );
-                Ok(())
             } else {
-                Err(e).context(
-                    "achievement catalog could not be downloaded and no local cache exists",
-                )
+                return Err(e).context(format!(
+                    "achievement catalog could not be downloaded and no local cache exists; source: {CATALOG_URL}"
+                ));
             }
         },
     }
-}
 
-fn http_get(url: &str) -> Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("GOODScanner/achievement-catalog")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("HTTP client for achievement catalog could not be created")?;
-    let response = client
-        .get(url)
-        .send()
-        .with_context(|| format!("achievement catalog request failed: {url}"))?;
-    if !response.status().is_success() {
-        bail!(
-            "achievement catalog fetch failed (HTTP {}) from {url}",
-            response.status()
-        );
-    }
-    response
-        .text()
-        .with_context(|| format!("achievement catalog response body could not be read: {url}"))
-}
-
-fn download_catalog() -> Result<Vec<CatalogEntry>> {
-    let listing_body = http_get(CATALOG_URL)?;
-    let listing: Vec<GitHubContent> =
-        serde_json::from_str(&listing_body).context("GitHub achievement listing is not JSON")?;
-
-    let mut entries = Vec::new();
-    for item in listing {
-        if !item.name.ends_with(".json") {
-            continue;
-        }
-        let Some(url) = item.download_url else {
-            continue;
-        };
-        let body = http_get(&url)?;
-        let file: RemoteCategoryFile = serde_json::from_str(&body)
-            .with_context(|| format!("achievement file is not JSON: {}", item.name))?;
-        for a in file.achievements {
-            entries.push(CatalogEntry {
-                id: a.id,
-                name: a.name,
-                desc: a.desc,
-            });
-        }
-    }
-
-    if entries.is_empty() {
-        bail!("downloaded achievement catalog is empty");
-    }
-    log_info!("已加载 {} 条成就", "Loaded {} achievements", entries.len());
-    Ok(entries)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -366,7 +369,37 @@ mod tests {
     }
 
     #[test]
+    fn ggartifact_title_only_skips_duplicate_names() {
+        let raw = r#"{"achievements":[
+            {"id":81000,"n":{"zh":"俯瞰风景"}},
+            {"id":80127,"n":{"zh":"动物园大亨"}},
+            {"id":80128,"n":{"zh":"动物园大亨"}}
+        ]}"#;
+        let data: MappingAchievementsFile = serde_json::from_str(raw).unwrap();
+        let entries: Vec<CatalogEntry> = data
+            .achievements
+            .into_iter()
+            .map(|a| CatalogEntry {
+                id: a.id,
+                name: a.n.zh.unwrap(),
+                desc: String::new(),
+            })
+            .collect();
+        let cat = AchievementCatalog::from_cached(&entries);
+        assert_eq!(cat.match_text("俯瞰风景", ""), Some(81000));
+        assert_eq!(cat.match_text("动物园大亨", ""), None);
+    }
+
+    #[test]
     fn normalize_strips_cocogoat_punctuation() {
         assert_eq!(normalize_text("「走吧，伙伴」……"), "走吧伙伴");
+    }
+
+    #[test]
+    fn parses_ggartifact_mapping_shape() {
+        let raw = r#"{"achievements":[{"id":81000,"n":{"zh":"俯瞰风景"}}]}"#;
+        let data: MappingAchievementsFile = serde_json::from_str(raw).unwrap();
+        assert_eq!(data.achievements[0].id, 81000);
+        assert_eq!(data.achievements[0].n.zh.as_deref(), Some("俯瞰风景"));
     }
 }

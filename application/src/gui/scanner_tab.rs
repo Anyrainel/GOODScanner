@@ -178,7 +178,11 @@ pub fn show(
                             "无法刷新扫描器使用的游戏数据。请检查网络连接，然后重试。",
                             "The scanner's game data could not be refreshed. Check the network connection, then retry.",
                         ),
-                        genshin_scanner::scanner::common::mappings::force_refresh,
+                        || {
+                            genshin_scanner::scanner::common::mappings::force_refresh()?;
+                            genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()?;
+                            Ok(())
+                        },
                     );
                 });
             });
