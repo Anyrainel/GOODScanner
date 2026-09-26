@@ -333,8 +333,8 @@ impl LockManager {
         }
 
         // Use shared OCR pools (v5 for level, v4 for everything else).
-        let ocr_pool = self.pools.v5().clone();
-        let substat_pool = self.pools.v4().clone();
+        let ocr_pool = self.pools.artifact().v5().clone();
+        let substat_pool = self.pools.artifact().v4().clone();
         // Borrow a model from the v5 pool for reading item count
         let count_ocr_guard = ocr_pool.get();
 

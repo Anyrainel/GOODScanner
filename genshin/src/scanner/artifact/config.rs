@@ -1,3 +1,5 @@
+use crate::scanner::common::ocr_pool::{DEFAULT_ARTIFACT_LEVEL_OCR, DEFAULT_ARTIFACT_OCR};
+
 /// Artifact scanner configuration.
 ///
 /// All fields are set by the orchestrator (`cli.rs`) from global CLI flags
@@ -6,9 +8,9 @@
 pub struct GoodArtifactScannerConfig {
     pub min_rarity: i32,
     pub verbose: bool,
-    /// OCR backend for artifact level (v5 default — better at "+N" text)
+    /// OCR backend for artifact level
     pub ocr_backend: String,
-    /// OCR backend for all other fields: name, main stat, set, equip, substats (v4 default)
+    /// OCR backend for all other fields: name, main stat, set, equip, substats
     pub substat_ocr_backend: String,
     pub delay_scroll: u64,
     pub delay_tab: u64,
@@ -33,8 +35,8 @@ impl Default for GoodArtifactScannerConfig {
         Self {
             min_rarity: 4,
             verbose: false,
-            ocr_backend: "ppocrv5".to_string(),
-            substat_ocr_backend: "ppocrv4".to_string(),
+            ocr_backend: DEFAULT_ARTIFACT_LEVEL_OCR.to_string(),
+            substat_ocr_backend: DEFAULT_ARTIFACT_OCR.to_string(),
             delay_scroll: 200,
             delay_tab: 400,
             open_delay: 1200,

@@ -1,3 +1,5 @@
+use crate::scanner::common::ocr_pool::DEFAULT_WEAPON_OCR;
+
 /// Weapon scanner configuration.
 ///
 /// All fields are set by the orchestrator (`cli.rs`) from global CLI flags
@@ -23,7 +25,7 @@ impl Default for GoodWeaponScannerConfig {
         Self {
             min_rarity: 3,
             verbose: false,
-            ocr_backend: "ppocrv4".to_string(),
+            ocr_backend: DEFAULT_WEAPON_OCR.to_string(),
             delay_scroll: 200,
             delay_tab: 400,
             open_delay: 1200,

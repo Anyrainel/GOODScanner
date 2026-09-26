@@ -55,7 +55,8 @@ impl EquipManager {
         targets: &[EquipTarget],
         progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
     ) -> Vec<InstructionResult> {
-        let ocr = self.pools.v4().get();
+        // Reads character names, where only the character engine handles 魈.
+        let ocr = self.pools.character().v4().get();
 
         let scaler = ctrl.scaler.clone();
         let mut results: HashMap<String, InstructionResult> = HashMap::new();

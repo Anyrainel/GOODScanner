@@ -1571,7 +1571,7 @@ impl GoodArtifactScanner {
         let worker_cancel = ctrl.cancel_token();
 
         // Borrow a model from the v5 pool for reading item count
-        let count_ocr_guard = pools.v5().get();
+        let count_ocr_guard = pools.artifact().v5().get();
 
         let total_count = if !skip_open_backpack {
             // Use shared opening sequence (focus → main UI → open → tab → count with retry)
@@ -1655,8 +1655,8 @@ impl GoodArtifactScanner {
         let scaler = bp.scaler().clone();
 
         // Use shared OCR pools (v5 for level, v4 for everything else).
-        let ocr_pool = pools.v5().clone();
-        let substat_ocr_pool = pools.v4().clone();
+        let ocr_pool = pools.artifact().v5().clone();
+        let substat_ocr_pool = pools.artifact().v4().clone();
         log_debug!(
             "[artifact] 使用共享OCR池: v5(等级)={}, v4(通用)={}",
             "[artifact] using shared OCR pools: v5(level)={}, v4(general)={}",

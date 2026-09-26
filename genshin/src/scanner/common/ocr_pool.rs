@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -145,65 +146,172 @@ impl OcrPoolConfig {
     }
 }
 
+/// Character screens: v4 reads names/levels best, v5 cross-checks names and
+/// levels, and v6 tiny cannot read 魈.
+pub const DEFAULT_CHARACTER_OCR: &str = "ppocrv4";
+pub const DEFAULT_CHARACTER_SECONDARY_OCR: &str = "ppocrv5";
+/// Weapons and artifacts: v6 tiny beat v4/v5 on every inventory field and tied
+/// on levels, so it serves both slots.
+pub const DEFAULT_WEAPON_OCR: &str = "ppocrv6tiny";
+pub const DEFAULT_WEAPON_SECONDARY_OCR: &str = "ppocrv6tiny";
+pub const DEFAULT_ARTIFACT_OCR: &str = "ppocrv6tiny";
+pub const DEFAULT_ARTIFACT_LEVEL_OCR: &str = "ppocrv6tiny";
+
+/// Backends for one scan category's two pool slots.
+///
+/// The slots keep their historical names: `v4` is the general text engine,
+/// `v5` the secondary one (character name/level cross-check, weapon equip
+/// fallback, artifact level).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrSlotBackends {
+    pub v5: String,
+    pub v4: String,
+}
+
+/// Per-category OCR backends for a scan session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrBackends {
+    pub character: OcrSlotBackends,
+    pub weapon: OcrSlotBackends,
+    pub artifact: OcrSlotBackends,
+}
+
+impl OcrBackends {
+    /// `secondary_override` replaces every category's secondary (v5-slot)
+    /// backend; each `*_ocr` is that category's general (v4-slot) backend.
+    pub fn resolve(
+        secondary_override: Option<&str>,
+        character_ocr: &str,
+        weapon_ocr: &str,
+        artifact_ocr: &str,
+    ) -> Self {
+        let slots = |general: &str, secondary: &str| OcrSlotBackends {
+            v5: secondary_override.unwrap_or(secondary).to_string(),
+            v4: general.to_string(),
+        };
+        Self {
+            character: slots(character_ocr, DEFAULT_CHARACTER_SECONDARY_OCR),
+            weapon: slots(weapon_ocr, DEFAULT_WEAPON_SECONDARY_OCR),
+            artifact: slots(artifact_ocr, DEFAULT_ARTIFACT_LEVEL_OCR),
+        }
+    }
+}
+
+impl Default for OcrBackends {
+    fn default() -> Self {
+        Self::resolve(
+            None,
+            DEFAULT_CHARACTER_OCR,
+            DEFAULT_WEAPON_OCR,
+            DEFAULT_ARTIFACT_OCR,
+        )
+    }
+}
+
+/// The two pools one scan category draws from.
+///
+/// Workers hold a guard from each slot at the same time, so the slots are
+/// always distinct pools even when both name the same backend (sharing one
+/// pool would deadlock once every instance is checked out).
+#[derive(Clone)]
+pub struct OcrPoolPair {
+    v5_pool: Arc<OcrPool>,
+    v4_pool: Arc<OcrPool>,
+}
+
+impl OcrPoolPair {
+    /// Secondary engine; also used for one-off OCR such as the backpack item count.
+    pub fn v5(&self) -> &Arc<OcrPool> {
+        &self.v5_pool
+    }
+
+    /// General text engine.
+    pub fn v4(&self) -> &Arc<OcrPool> {
+        &self.v4_pool
+    }
+}
+
 /// Shared OCR model pools for the entire scan session.
 ///
 /// Created once, passed by reference to all scanners and managers.
 /// Eliminates per-scanner pool creation/destruction overhead and
-/// prevents OOM on low-memory systems.
-///
-/// The v5 pool is also used for one-off OCR tasks (e.g., reading
-/// the backpack item count) — just call `v5().get()`.
+/// prevents OOM on low-memory systems. Categories whose slots name the same
+/// backend share the same pool instances.
 pub struct SharedOcrPools {
-    v5_pool: Arc<OcrPool>,
-    v4_pool: Arc<OcrPool>,
+    character: OcrPoolPair,
+    weapon: OcrPoolPair,
+    artifact: OcrPoolPair,
     config: OcrPoolConfig,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Slot {
+    V5,
+    V4,
+}
+
 impl SharedOcrPools {
-    /// Create shared pools with the given config.
-    ///
-    /// `v5_backend` and `v4_backend` are the backend strings
-    /// (e.g., "ppocrv5", "ppocrv4").
+    /// Create shared pools with the given config and per-category backends.
     ///
     /// The first `create_ocr_model` call triggers `ort`'s lazy DLL load.
     /// If the DLL or its dependencies (VC++ runtime) are missing, `ort`
     /// **panics** rather than returning an error.  We catch this with
     /// `catch_unwind` and convert it to a diagnosed error.
-    pub fn new(config: OcrPoolConfig, v5_backend: &str, v4_backend: &str) -> Result<Self> {
-        let v5_be = v5_backend.to_string();
-        let v5_pool = Arc::new(create_pool_caught(
-            move || ocr_factory::create_ocr_model(&v5_be),
-            config.v5_count,
-            "v5",
-        )?);
-
-        let v4_be = v4_backend.to_string();
-        let v4_pool = Arc::new(create_pool_caught(
-            move || ocr_factory::create_ocr_model(&v4_be),
-            config.v4_count,
-            "v4",
-        )?);
+    pub fn new(config: OcrPoolConfig, backends: &OcrBackends) -> Result<Self> {
+        let mut created: HashMap<(Slot, String), Arc<OcrPool>> = HashMap::new();
+        let mut pool = |slot: Slot, backend: &str| -> Result<Arc<OcrPool>> {
+            if let Some(existing) = created.get(&(slot, backend.to_string())) {
+                return Ok(existing.clone());
+            }
+            let (count, label) = match slot {
+                Slot::V5 => (config.v5_count, "v5"),
+                Slot::V4 => (config.v4_count, "v4"),
+            };
+            let be = backend.to_string();
+            let new_pool = Arc::new(create_pool_caught(
+                move || ocr_factory::create_ocr_model(&be),
+                count,
+                label,
+            )?);
+            created.insert((slot, backend.to_string()), new_pool.clone());
+            Ok(new_pool)
+        };
+        let mut pair = |slots: &OcrSlotBackends| -> Result<OcrPoolPair> {
+            Ok(OcrPoolPair {
+                v5_pool: pool(Slot::V5, &slots.v5)?,
+                v4_pool: pool(Slot::V4, &slots.v4)?,
+            })
+        };
+        let character = pair(&backends.character)?;
+        let weapon = pair(&backends.weapon)?;
+        let artifact = pair(&backends.artifact)?;
 
         log_debug!(
-            "OCR池已创建: v5={}, v4={}",
-            "OCR pools created: v5={}, v4={}",
+            "OCR池已创建: {:?} (v5槽×{}, v4槽×{})",
+            "OCR pools created: {:?} (v5 slot×{}, v4 slot×{})",
+            backends,
             config.v5_count,
             config.v4_count,
         );
 
         Ok(Self {
-            v5_pool,
-            v4_pool,
+            character,
+            weapon,
+            artifact,
             config,
         })
     }
 
-    pub fn v5(&self) -> &Arc<OcrPool> {
-        &self.v5_pool
+    pub fn character(&self) -> &OcrPoolPair {
+        &self.character
     }
 
-    pub fn v4(&self) -> &Arc<OcrPool> {
-        &self.v4_pool
+    pub fn weapon(&self) -> &OcrPoolPair {
+        &self.weapon
+    }
+
+    pub fn artifact(&self) -> &OcrPoolPair {
+        &self.artifact
     }
 
     pub fn config(&self) -> &OcrPoolConfig {
@@ -325,4 +433,34 @@ fn diagnose_error(msg: String) -> anyhow::Error {
 
     // Unknown error — raw message already logged above
     anyhow::anyhow!("{}", msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slots(v5: &str, v4: &str) -> OcrSlotBackends {
+        OcrSlotBackends {
+            v5: v5.to_string(),
+            v4: v4.to_string(),
+        }
+    }
+
+    #[test]
+    fn defaults_keep_characters_off_v6_tiny() {
+        let backends = OcrBackends::default();
+
+        assert_eq!(backends.character, slots("ppocrv5", "ppocrv4"));
+        assert_eq!(backends.weapon, slots("ppocrv6tiny", "ppocrv6tiny"));
+        assert_eq!(backends.artifact, slots("ppocrv6tiny", "ppocrv6tiny"));
+    }
+
+    #[test]
+    fn secondary_override_applies_to_every_category() {
+        let backends = OcrBackends::resolve(Some("ppocrv5"), "ppocrv4", "ppocrv4", "ppocrv4");
+
+        assert_eq!(backends.character, slots("ppocrv5", "ppocrv4"));
+        assert_eq!(backends.weapon, slots("ppocrv5", "ppocrv4"));
+        assert_eq!(backends.artifact, slots("ppocrv5", "ppocrv4"));
+    }
 }

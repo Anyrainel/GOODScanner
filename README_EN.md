@@ -87,7 +87,7 @@ GOODScanner.exe --characters --weapons  # Combine targets
 | `--continue-on-failure` | Keep scanning when individual items fail |
 | `--log-progress` | Log each item as it is scanned |
 | `--output-dir <DIR>` | Output directory (default: `.`) |
-| `--ocr-backend <NAME>` | Override OCR backend (ppocrv4 or ppocrv5) |
+| `--ocr-backend <NAME>` | Override every category's secondary OCR backend (character name/level check, weapon equip fallback, artifact level) |
 | `--dump-images` | Save OCR region screenshots to `debug_images/` |
 
 ### Scanner Config
@@ -101,7 +101,9 @@ GOODScanner.exe --characters --weapons  # Combine targets
 | `--artifact-max-count <N>` | Max artifacts to scan (0 = unlimited) |
 | `--weapon-skip-delay` | Skip weapon panel delay (faster but lock detection may be inaccurate) |
 | `--artifact-skip-delay` | Skip artifact panel delay (faster but lock/astral detection may be inaccurate) |
-| `--artifact-substat-ocr <NAME>` | Substat OCR backend (default: ppocrv4) |
+| `--char-ocr <NAME>` | Character OCR backend (default: ppocrv4) |
+| `--weapon-ocr <NAME>` | Weapon OCR backend (default: ppocrv6tiny) |
+| `--artifact-substat-ocr <NAME>` | Artifact substat/general OCR backend (default: ppocrv6tiny) |
 
 ### Config File
 

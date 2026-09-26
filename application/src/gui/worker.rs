@@ -1000,8 +1000,7 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
             match genshin_scanner::cli::run_server_core(
                 &user_config,
                 port,
-                None,
-                "ppocrv4",
+                &genshin_scanner::cli::OcrEngineArgs::default(),
                 enabled,
                 shutdown_clone,
                 stop_on_all_matched,

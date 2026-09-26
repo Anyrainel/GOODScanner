@@ -1480,8 +1480,8 @@ impl GoodCharacterScanner {
         log_debug!("[character] 开始扫描...", "[character] starting scan...");
         let now = SystemTime::now();
 
-        let ocr_pool = pools.v4().clone();
-        let v5_pool = pools.v5().clone();
+        let ocr_pool = pools.character().v4().clone();
+        let v5_pool = pools.character().v5().clone();
 
         // Return to main world and open character screen.
         ctrl.focus_game_window();

@@ -530,7 +530,7 @@ impl GoodWeaponScanner {
         }
 
         // Borrow a model from the v4 pool for reading item count
-        let count_ocr_guard = pools.v4().get();
+        let count_ocr_guard = pools.weapon().v4().get();
         let (current_count, _max_capacity) = bp.read_item_count(&count_ocr_guard)?;
 
         // If count is 0, try reopening backpack
@@ -584,8 +584,8 @@ impl GoodWeaponScanner {
         drop(count_ocr_guard);
 
         // Use shared OCR pools (v4 for primary, v5 for equip fallback).
-        let ocr_pool = pools.v4().clone();
-        let equip_fallback_pool = pools.v5().clone();
+        let ocr_pool = pools.weapon().v4().clone();
+        let equip_fallback_pool = pools.weapon().v5().clone();
 
         // Shared context for worker threads
         let worker_mappings = self.mappings.clone();
