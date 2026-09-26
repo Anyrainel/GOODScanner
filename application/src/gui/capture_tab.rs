@@ -173,7 +173,14 @@ impl CaptureTabState {
         matches!(
             self.phase,
             Phase::Initializing | Phase::Waiting | Phase::Stopping | Phase::Exporting
-        )
+        ) || self
+            .handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+    }
+
+    pub fn tick(&mut self) {
+        update_phase(self);
     }
 
     pub fn requires_restart(&self) -> bool {
@@ -323,8 +330,6 @@ pub fn show(
     restart_required: bool,
 ) {
     // --- Phase transitions driven by shared state ---
-    update_phase(tab, l);
-
     let is_busy = tab.is_busy();
 
     // === Action bar (always visible at top) ===
@@ -655,7 +660,7 @@ fn action_bar(
 }
 
 /// Drive phase transitions based on shared capture state.
-fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
+fn update_phase(tab: &mut CaptureTabState) {
     if let Some(error) = tab.native_failure() {
         tab.phase = Phase::Failed(error);
         return;
@@ -671,7 +676,18 @@ fn update_phase(tab: &mut CaptureTabState, _l: Lang) {
 
     // Poll pending export
     if let Some(ref mut pending) = tab.pending_export {
-        match pending.rx.try_recv() {
+        let export_result = pending.rx.try_recv();
+        if !matches!(
+            export_result,
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ) {
+            // The monitor stays in its command loop after replying. Closing
+            // the last sender lets it exit and release the native boundary.
+            if let Some(handle) = &tab.handle {
+                handle.close();
+            }
+        }
+        match export_result {
             Ok(Ok(export)) => {
                 let timestamp = genshin_scanner::cli::chrono_timestamp();
                 let filename = format!(

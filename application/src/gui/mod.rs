@@ -236,6 +236,8 @@ impl eframe::App for GuiApp {
         }
         #[cfg(feature = "capture")]
         self.star_rail.capture.tick();
+        #[cfg(feature = "capture")]
+        self.capture_tab.tick();
 
         let l = self.state.lang;
 
