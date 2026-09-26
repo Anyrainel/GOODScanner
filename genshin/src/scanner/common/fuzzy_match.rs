@@ -20,6 +20,18 @@ const OCR_CONFUSIONS: &[(&str, &str)] = &[
     ("\u{96C9}", "\u{8599}"), // 雉 → 薙 (薙=草+雉, OCR may drop 草字头)
     ("\u{62C9}", "\u{83C8}"), // 拉 → 菈 (菈乌玛: OCR drops 艹 radical, reads 菈 as 拉)
     ("\u{9E1F}", "\u{4E4C}"), // 鸟 → 乌 (菈乌玛: OCR adds stroke, reads 乌 as 鸟)
+    // Achievement titles, one-character misses. Only pairs whose wrong glyph
+    // does not appear in any catalog title — substitution runs before exact match.
+    ("\u{9798}", "\u{97B4}"), // 鞘 → 鞴
+    ("\u{9E45}", "\u{9E2B}"), // 鹅 → 鸫
+    ("\u{636E}", "\u{88FE}"), // 据 → 裾
+    ("\u{7957}", "\u{7947}"), // 祗 → 祇
+    ("\u{54FC}", "\u{549B}"), // 哼 → 咛
+    ("\u{60A6}", "\u{6033}"), // 悦 → 怳
+    ("\u{78FA}", "\u{789B}"), // 磺 → 碛
+    ("\u{7EA4}", "\u{7EA1}"), // 纤 → 纡
+    ("\u{87E0}", "\u{71D4}"), // 蟠 → 燔
+    ("\u{7984}", "\u{6E0C}"), // 禄 → 渌
 ];
 
 /// Fuzzy match OCR text against a name→key map.

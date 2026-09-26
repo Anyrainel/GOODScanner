@@ -32,6 +32,20 @@ impl MacOSControl {
         anyhow::Ok(())
     }
 
+    pub fn mouse_scroll_wheel_delta(&mut self, delta: i32) -> anyhow::Result<()> {
+        let notches = if delta.abs() >= 120 {
+            delta / 120
+        } else if delta == 0 {
+            0
+        } else {
+            delta.signum()
+        };
+        if notches != 0 {
+            self.mouse_scroll(notches)?;
+        }
+        anyhow::Ok(())
+    }
+
     pub fn mac_scroll(&mut self, length: i32, delta: i32, times: i32) {
         let enigo = &mut self.enigo;
 

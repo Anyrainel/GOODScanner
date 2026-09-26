@@ -9,8 +9,8 @@ use image::RgbImage;
 use yas::ocr::ImageToText;
 
 use super::catalog::AchievementCatalog;
-use super::layout::{DATE_FRAC, STATUS_FRAC, SUBTITLE_FRAC, TITLE_FRAC};
-use super::split::crop_frac;
+use super::layout::{STATUS_BAND, SUBTITLE_BAND};
+use super::split::{crop_px, crop_title};
 
 #[derive(Clone, Debug)]
 pub struct RecognizedRow {
@@ -26,29 +26,37 @@ pub fn recognize_row(
     ocr: &dyn ImageToText<RgbImage>,
     row: &RgbImage,
     catalog: &AchievementCatalog,
+    category: Option<&str>,
 ) -> Result<RecognizedRow> {
-    let title = ocr_crop(ocr, row, TITLE_FRAC)?;
-    let subtitle = ocr_crop(ocr, row, SUBTITLE_FRAC)?;
-    let status = ocr_crop(ocr, row, STATUS_FRAC)?;
-    let date = ocr_crop(ocr, row, DATE_FRAC)?;
-    let id = catalog.match_text(&title, &subtitle);
-    let done = is_done(&status, &date);
+    let title = ocr_title(ocr, row)?;
+    let subtitle = ocr_band(ocr, row, SUBTITLE_BAND)?;
+    let status = ocr_band(ocr, row, STATUS_BAND)?;
+    let id = catalog.match_text_in_category(&title, &subtitle, category);
+    let done = is_done(&status, &status);
     Ok(RecognizedRow {
         id,
         title,
         subtitle,
-        status,
-        date,
+        status: status.clone(),
+        date: status,
         done,
     })
 }
 
-fn ocr_crop(
+fn ocr_title(ocr: &dyn ImageToText<RgbImage>, row: &RgbImage) -> Result<String> {
+    let Some(crop) = crop_title(row) else {
+        return Ok(String::new());
+    };
+    let text = ocr.image_to_text(&crop, false)?;
+    Ok(text.trim().to_string())
+}
+
+fn ocr_band(
     ocr: &dyn ImageToText<RgbImage>,
     row: &RgbImage,
-    frac: (f32, f32, f32, f32),
+    band: (f32, u32, f32, u32),
 ) -> Result<String> {
-    let Some(crop) = crop_frac(row, frac) else {
+    let Some(crop) = crop_px(row, band.0, band.1, band.2, band.3) else {
         return Ok(String::new());
     };
     let text = ocr.image_to_text(&crop, false)?;
@@ -79,10 +87,17 @@ pub fn is_done(status: &str, date: &str) -> bool {
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '/' || *c == '-' || *c == '.')
         .collect();
-    if date_clean.len() < 4 {
+    let has_separator = date_clean.contains('/') || date_clean.contains('-') || date_clean.contains('.');
+    if !has_separator || date_clean.len() < 6 {
         return false;
     }
     date_clean.chars().filter(|c| c.is_ascii_digit()).count() >= 4
+}
+
+/// `4/20` and `0/1` are still in progress. They share the corner where a
+/// finished card prints its date, so digit ink alone is not completion.
+pub fn progress_is_open(status: &str) -> bool {
+    parse_slash_pair(status).is_some_and(|(cur, max)| cur < max)
 }
 
 fn parse_slash_pair(text: &str) -> Option<(i32, i32)> {
@@ -118,6 +133,9 @@ mod tests {
     fn not_done_when_progress_incomplete() {
         assert!(!is_done("3/10", "2024/01/02"));
         assert!(!is_done("0/1", ""));
+        assert!(!is_done("20 0/1", "2001"));
+        assert!(progress_is_open("4/20"));
+        assert!(!progress_is_open("达成"));
     }
 
     #[test]

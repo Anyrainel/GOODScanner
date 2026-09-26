@@ -213,7 +213,11 @@ impl GenshinGameController {
     }
 
     #[cfg(target_os = "windows")]
-    fn focus_hwnd(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    fn focus_hwnd(
+        &mut self,
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        settle_ms: u32,
+    ) -> bool {
         if !utils::is_window_handle_valid(hwnd) {
             return false;
         }
@@ -221,7 +225,9 @@ impl GenshinGameController {
         match utils::show_window_and_set_foreground(hwnd) {
             Ok(true) => {
                 self.refresh_window_geometry(hwnd);
-                utils::sleep(500);
+                if settle_ms > 0 {
+                    utils::sleep(settle_ms);
+                }
                 true
             },
             Ok(false) => {
@@ -251,10 +257,21 @@ impl GenshinGameController {
     /// was previously masquerading as "navigation" and caused random input
     /// to unrelated apps.
     pub fn focus_game_window(&mut self) {
+        self.focus_game_window_settle(500);
+    }
+
+    /// Same as [`Self::focus_game_window`] without the 500ms settle. Wheel
+    /// bursts must re-focus after the scanner console steals foreground, but
+    /// that sleep also drops Genshin's scrollbar hover.
+    pub fn focus_game_window_quick(&mut self) {
+        self.focus_game_window_settle(0);
+    }
+
+    fn focus_game_window_settle(&mut self, settle_ms: u32) {
         #[cfg(target_os = "windows")]
         {
             let selected_hwnd = self.game_info.hwnd as windows_sys::Win32::Foundation::HWND;
-            if self.focus_hwnd(selected_hwnd) {
+            if self.focus_hwnd(selected_hwnd, settle_ms) {
                 return;
             }
 
@@ -267,7 +284,7 @@ impl GenshinGameController {
                 if let Some(title) = utils::get_window_title(*hwnd) {
                     let trimmed = title.trim();
                     if window_names.iter().any(|n| trimmed == *n) {
-                        if self.focus_hwnd(*hwnd) {
+                        if self.focus_hwnd(*hwnd, settle_ms) {
                             self.game_info.hwnd = *hwnd as isize;
                             return;
                         }
@@ -282,6 +299,7 @@ impl GenshinGameController {
         }
         #[cfg(not(target_os = "windows"))]
         {
+            let _ = settle_ms;
             // Non-Windows: no focus API available. Move mouse into the game
             // area as a best-effort hint (on Linux/macOS this tends to work
             // for focus-follows-mouse setups).
@@ -433,9 +451,40 @@ impl GenshinGameController {
         self.system_control.key_press(key).unwrap();
     }
 
-    /// Scroll the mouse wheel.
+    /// Scroll the mouse wheel by `amount` detents (enigo multiplies by 120).
     pub fn mouse_scroll(&mut self, amount: i32) {
         self.system_control.mouse_scroll(amount, false).unwrap();
+    }
+
+    /// Scroll by a raw wheel delta. 120 is one detent.
+    pub fn mouse_scroll_wheel_delta(&mut self, delta: i32) {
+        #[cfg(target_os = "windows")]
+        self.post_wheel_to_game(delta);
+        self.system_control
+            .mouse_scroll_wheel_delta(delta)
+            .unwrap();
+    }
+
+    /// Genshin's UI often ignores injected `SendInput` wheel. `WM_MOUSEWHEEL`
+    /// posted to the game hwnd still uses the cursor position in `lParam`.
+    #[cfg(target_os = "windows")]
+    fn post_wheel_to_game(&self, delta: i32) {
+        use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, PostMessageW, WM_MOUSEWHEEL};
+
+        let hwnd = self.game_info.hwnd as HWND;
+        if hwnd.is_null() {
+            return;
+        }
+        let mut pt = POINT { x: 0, y: 0 };
+        unsafe {
+            if GetCursorPos(&mut pt) == 0 {
+                return;
+            }
+            let wparam = ((delta as i16 as u16 as u32) << 16) as WPARAM;
+            let lparam = ((pt.y as u16 as u32) << 16 | (pt.x as u16 as u32)) as LPARAM;
+            let _ = PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam);
+        }
     }
 }
 

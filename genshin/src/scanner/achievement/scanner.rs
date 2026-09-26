@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -12,18 +12,20 @@ use yas::{log_debug, log_info, log_warn};
 use super::catalog::{normalize_text, AchievementCatalog};
 use super::config::GoodAchievementScannerConfig;
 use super::layout::{
-    CATEGORY_FIRST_Y, CATEGORY_STEP_Y, CATEGORY_VISIBLE, CATEGORY_X, IDLE_FRAMES_BEFORE_STOP,
-    LIST_WHEEL_TICKS, MAX_CATEGORIES, MAX_LIST_FRAMES, OVERVIEW_FIRST_CATEGORY_POS,
-    PAIMON_ACHIEVEMENT_POS, PAIMON_MENU_DELAY,
+    ACHIEVEMENT_HEADER_POS, CATEGORY_FIRST_Y, CATEGORY_STEP_Y, CATEGORY_VISIBLE, CATEGORY_X,
+    IDLE_FRAMES_BEFORE_STOP, LIST_HOVER_SETTLE_MS, LIST_SCROLLBAR_INSET, LIST_SCROLLBAR_POS,
+    LIST_TICK_DELAY_MS, LIST_WHEEL_TICKS, MAX_CATEGORIES, MAX_LIST_FRAMES,
+    OVERVIEW_FIRST_CATEGORY_POS, PAIMON_ACHIEVEMENT_POS, PAIMON_MENU_DELAY,
 };
-use super::recognize::recognize_row;
+use super::recognize::{progress_is_open, recognize_row};
 use super::split::{
-    crop_row, detect_list_rect, detect_selected_category_rect, list_nearly_equal, split_row_bands,
-    PixelRect,
+    crop_card, crop_row, crop_title, detect_list_rect, detect_scrollbar_thumb,
+    detect_selected_category_rect, list_nearly_equal, split_row_bands, PixelRect,
 };
 use crate::scanner::common::coord_scaler::CoordScaler;
 use crate::scanner::common::game_controller::GenshinGameController;
-use crate::scanner::common::ocr_pool::SharedOcrPools;
+use crate::scanner::common::ocr_factory;
+use crate::scanner::common::ocr_pool::{OcrPool, SharedOcrPools};
 use crate::scanner::common::progress::ProgressFn;
 
 const DUMP_DIR: &str = "debug_images/achievement";
@@ -44,18 +46,24 @@ impl GoodAchievementScanner {
     /// Open the achievement list from any game screen, then walk left-side
     /// categories. Returns sorted unique completed achievement IDs.
     ///
-    /// List motion follows cocogoat CaptureScanner: capture → split rows →
-    /// OCR → click + 11 wheel ticks → stop after several frames with no new
-    /// rows. Category motion clicks the next left-list row; after the 8th
-    /// visible row the game auto-scrolls, so that same slot is clicked again
-    /// until the right-hand titles are all ones already seen.
+    /// List motion: capture → split rows → OCR → park the cursor on the
+    /// scrollbar (cards enlarge if hovered) → 8 delayed wheel detents.
+    /// Stop after several frames with no new rows. Category motion clicks the
+    /// next left-list row; after the 8th visible row the game auto-scrolls.
     pub fn scan(
         &self,
         ctrl: &mut GenshinGameController,
-        pools: &SharedOcrPools,
+        _pools: &SharedOcrPools,
         progress_fn: Option<&ProgressFn<'_>>,
     ) -> Result<Vec<u32>> {
         log_info!("[achievement] 开始扫描成就", "[achievement] starting scan");
+        let rec_backend = self.config.ocr_backend.clone();
+        log_info!(
+            "[achievement] OCR后端: {}",
+            "[achievement] OCR backend: {}",
+            rec_backend
+        );
+        let rec_pool = OcrPool::new(move || ocr_factory::create_ocr_model(&rec_backend), 2)?;
 
         let cancel = ctrl.cancel_token();
         ctrl.focus_game_window();
@@ -63,14 +71,18 @@ impl GoodAchievementScanner {
             bail!("cancelled");
         }
         self.open_achievement_screen(ctrl)?;
+        if self.config.scroll_calibrate {
+            self.calibrate_list_scroll(ctrl, &rec_pool)?;
+            return Ok(Vec::new());
+        }
 
         let mut completed: BTreeSet<u32> = BTreeSet::new();
         let mut seen_rows: BTreeSet<String> = BTreeSet::new();
         let mut seen_categories: BTreeSet<String> = BTreeSet::new();
-        let mut staged_done: HashMap<String, usize> = HashMap::new();
         let started = SystemTime::now();
         let mut category_slot = 0usize;
         let mut same_name_retries = 0u32;
+        let mut empty_new_streak = 0u32;
         progress_log("scan_start");
 
         let report = |completed_n: usize, current: &str| {
@@ -87,16 +99,15 @@ impl GoodAchievementScanner {
                 break;
             }
 
-            let selected_name = {
+            let (selected_name, category_complete) = {
                 progress_log(&format!("read_selected cat_index={category_index}"));
-                let name = self.read_selected_category(ctrl, pools);
+                let (name, complete) = self.read_selected_category(ctrl, &rec_pool);
                 progress_log(&format!(
-                    "read_selected_done cat_index={category_index} name={}",
+                    "read_selected_done cat_index={category_index} name={} complete={complete}",
                     name.as_deref().unwrap_or("-")
                 ));
-                name
+                (name, complete)
             };
-            let mut name_ok = false;
             if let Some(name) = selected_name.as_deref() {
                 let key = normalize_text(name);
                 if !is_plausible_category_name(&key) {
@@ -143,7 +154,6 @@ impl GoodAchievementScanner {
                     break;
                 } else if !key.is_empty() {
                     same_name_retries = 0;
-                    name_ok = true;
                     seen_categories.insert(key);
                     log_info!(
                         "[achievement] 扫描分类: {}",
@@ -174,13 +184,14 @@ impl GoodAchievementScanner {
             let cat_started = Instant::now();
             self.scan_open_list(
                 ctrl,
-                pools,
+                &rec_pool,
                 &mut completed,
                 &mut seen_rows,
-                &mut staged_done,
                 &report,
                 category_index,
                 &category_label,
+                selected_name.as_deref(),
+                category_complete,
             )?;
             log_info!(
                 "[achievement] 分类结束: {} 新条目={} 完成+={} 用时 {:.1}s",
@@ -199,34 +210,31 @@ impl GoodAchievementScanner {
             if self.config.max_count > 0 && completed.len() >= self.config.max_count {
                 break;
             }
-            // After the last category, clicking slot 8 wraps or stays put.
-            // Right-hand titles then repeat what we already recognized.
-            // Skip this when the left-name OCR was garbage — that re-scans the
-            // current list and would look like a wrap.
-            if category_index > 0 && name_ok && seen_rows.len() == rows_before {
-                log_info!(
-                    "[achievement] 右侧条目均已识别，已到最后一个分类",
-                    "[achievement] right-hand titles already recognized; last category reached"
-                );
+            // A short category can OCR zero new titles (English names, banner
+            // click missing the list). Only treat several empties in a row as wrap.
+            if category_index > 0 && seen_rows.len() == rows_before {
+                empty_new_streak += 1;
                 progress_log(&format!(
-                    "titles_already_seen_stop name={category_label}"
+                    "empty_category name={category_label} streak={empty_new_streak}"
                 ));
-                break;
+                if empty_new_streak >= 3 {
+                    log_info!(
+                        "[achievement] 连续分类无新标题，已到列表末尾",
+                        "[achievement] several categories with no new titles; end of list"
+                    );
+                    progress_log(&format!(
+                        "empty_streak_stop name={category_label} streak={empty_new_streak}"
+                    ));
+                    break;
+                }
+            } else {
+                empty_new_streak = 0;
             }
 
             if category_slot + 1 < CATEGORY_VISIBLE {
                 category_slot += 1;
             }
             self.click_next_category(ctrl, category_slot, category_index);
-        }
-
-        let staged_assigned = self.assign_staged_ids(&mut completed, &staged_done);
-        if staged_assigned > 0 {
-            log_info!(
-                "[achievement] 按同名条目数量补全了 {} 个阶段成就",
-                "[achievement] assigned {} staged achievements from same-title counts",
-                staged_assigned
-            );
         }
 
         let ids: Vec<u32> = completed.into_iter().collect();
@@ -351,21 +359,31 @@ impl GoodAchievementScanner {
     fn scan_open_list(
         &self,
         ctrl: &mut GenshinGameController,
-        pools: &SharedOcrPools,
+        rec: &OcrPool,
         completed: &mut BTreeSet<u32>,
         seen_rows: &mut BTreeSet<String>,
-        staged_done: &mut HashMap<String, usize>,
         report: &dyn Fn(usize, &str),
         category_index: usize,
         category_label: &str,
+        category_name: Option<&str>,
+        mut force_done: bool,
     ) -> Result<()> {
         let cancel = ctrl.cancel_token();
         let mut idle_frames = 0u32;
         let mut frame_idx = 0u32;
-        let mut click_pos: Option<(f64, f64)> = None;
         let mut prev_list: Option<RgbImage> = None;
         let mut ocr_ms_total = 0u128;
+        let mut cat_titles: Vec<String> = Vec::new();
+        let mut matched_titles: BTreeSet<String> = BTreeSet::new();
+        let expected = category_name
+            .and_then(|name| self.catalog.coverage(name, &[]))
+            .map(|cov| cov.expected)
+            .unwrap_or(0);
         let prefix = format!("c{category_index:02}_{category_label}");
+        let groove = self.scrollbar_groove(ctrl);
+        ctrl.click_at(ACHIEVEMENT_HEADER_POS.0, ACHIEVEMENT_HEADER_POS.1);
+        yas::utils::sleep(50);
+        self.park_cursor_on_scrollbar(ctrl, groove);
 
         loop {
             if cancel.check_rmb() {
@@ -394,15 +412,19 @@ impl GoodAchievementScanner {
                 if self.config.dump_images {
                     save_dump(&format!("{prefix}_missing_{frame_idx:03}.png"), &frame);
                 }
-                bail!("未找到成就列表 / Achievement list not found");
+                if frame_idx == 0 {
+                    bail!("未找到成就列表 / Achievement list not found");
+                }
+                log_warn!(
+                    "[achievement] 本帧未找到列表，重试捕捉",
+                    "[achievement] list not detected this frame, recapturing"
+                );
+                yas::utils::sleep(80);
+                continue;
             };
             let Some(list_img) = crop_pixel(&frame, list_rect) else {
                 bail!("未找到成就列表 / Achievement list not found");
             };
-
-            if click_pos.is_none() {
-                click_pos = Some(self.click_pos_for_list(ctrl, list_rect, &list_img));
-            }
 
             let unchanged = prev_list
                 .as_ref()
@@ -411,54 +433,46 @@ impl GoodAchievementScanner {
             if self.config.dump_images && frame_idx == 0 {
                 save_dump(&format!("{prefix}_full.png"), &frame);
             }
-            if self.config.dump_images && (frame_idx == 0 || unchanged || frame_idx % 10 == 0) {
-                let tag = if unchanged { "bottom" } else { "list" };
-                save_dump(&format!("{prefix}_{tag}_{frame_idx:03}.png"), &list_img);
-            }
-
-            if unchanged {
-                log_info!(
-                    "[achievement] 列表画面未变，已到分类底部: {} frame={} capture={}ms idle={}",
-                    "[achievement] list image unchanged, at category bottom: {} frame={} capture={}ms idle={}",
-                    category_label,
-                    frame_idx,
-                    capture_ms,
-                    idle_frames
-                );
-                progress_log(&format!(
-                    "pixel_stop cat={category_label} frame={frame_idx} capture_ms={capture_ms}"
-                ));
-                break;
-            }
-
-            let keep_last = idle_frames >= 1;
-            let bands = split_row_bands(&list_img, keep_last);
+            // Always keep a full last card on the panel edge. Leading scraps
+            // from the previous scroll are dropped inside split_row_bands.
+            let bands = split_row_bands(&list_img, true);
             let new_before = seen_rows.len();
             let mut unmatched = 0usize;
 
             let t_ocr = Instant::now();
-            let rows: Vec<(usize, RgbImage)> = bands
-                .iter()
-                .enumerate()
-                .filter_map(|(i, band)| {
-                    let row = crop_row(&list_img, band)?;
-                    if is_progress_banner(&row) {
-                        None
-                    } else {
-                        Some((i, row))
+            let mut card_rows: Vec<(usize, RgbImage)> = Vec::new();
+            for (i, band) in bands.iter().enumerate() {
+                let Some(row) = crop_row(&list_img, band) else {
+                    continue;
+                };
+                if is_progress_banner(&row) {
+                    if !force_done {
+                        let ocr = rec.get();
+                        if let Ok(text) = ocr.image_to_text(&row, false) {
+                            if category_looks_complete(&text) {
+                                force_done = true;
+                                progress_log(&format!(
+                                    "banner_complete cat={category_label} frame={frame_idx} text={text}"
+                                ));
+                            }
+                        }
                     }
-                })
-                .collect();
+                    continue;
+                }
+                card_rows.push((i, row));
+            }
+            let rows = card_rows;
             progress_log(&format!(
                 "ocr_start cat={category_label} frame={frame_idx} rows={}",
                 rows.len()
             ));
             let catalog = Arc::clone(&self.catalog);
+            let category_owned = category_name.map(|s| s.to_string());
             let recognized: Vec<(usize, RgbImage, super::recognize::RecognizedRow)> = rows
                 .into_par_iter()
                 .filter_map(|(i, row)| {
-                    let ocr = pools.v4().get();
-                    match recognize_row(&ocr, &row, &catalog) {
+                    let ocr = rec.get();
+                    match recognize_row(&ocr, &row, &catalog, category_owned.as_deref()) {
                         Ok(recognized) => Some((i, row, recognized)),
                         Err(_) => None,
                     }
@@ -467,64 +481,54 @@ impl GoodAchievementScanner {
             let ocr_ms = t_ocr.elapsed().as_millis();
             ocr_ms_total += ocr_ms;
 
-            for (i, row, recognized) in recognized {
+            for (_i, row, recognized) in recognized {
                 if !is_plausible_row_title(&recognized.title) {
                     continue;
                 }
+                cat_titles.push(recognized.title.clone());
                 let key = row_key(&recognized.title, &recognized.subtitle);
                 if key.is_empty() {
                     continue;
                 }
-                if !seen_rows.insert(key) {
+                if !seen_rows.insert(key.clone()) {
                     continue;
                 }
 
-                if let Some(id) = recognized.id {
-                    if recognized.done {
-                        completed.insert(id);
+                let done = !progress_is_open(&recognized.status)
+                    && (recognized.done || force_done);
+                let credited = self
+                    .catalog
+                    .completed_ids_for_shown(&recognized.title, done);
+                if !credited.is_empty() {
+                    matched_titles.insert(normalize_text(&recognized.title));
+                    for id in &credited {
+                        completed.insert(*id);
                     }
                     if self.config.verbose || self.config.log_progress {
                         log_info!(
-                            "[achievement] {} id={} done={} title='{}'",
-                            "[achievement] {} id={} done={} title='{}'",
-                            if recognized.done {
-                                "完成"
-                            } else {
-                                "未完成"
-                            },
-                            id,
-                            recognized.done,
+                            "[achievement] {} ids={} done={} title='{}'",
+                            "[achievement] {} ids={} done={} title='{}'",
+                            if done { "完成" } else { "未完成" },
+                            credited.len(),
+                            done,
                             recognized.title
                         );
                     }
                     report(completed.len(), &recognized.title);
                 } else {
                     unmatched += 1;
-                    let staged = self.catalog.title_id_count(&recognized.title);
-                    let reason = if staged > 1 {
-                        format!("staged:{staged}")
-                    } else {
-                        "no-match".to_string()
-                    };
-                    if recognized.done && staged > 1 {
-                        let title_key = normalize_text(&recognized.title);
-                        *staged_done.entry(title_key).or_insert(0) += 1;
+                    progress_log(&format!(
+                        "unmatched cat={category_label} reason=no-match title={} subtitle={}",
+                        recognized.title, recognized.subtitle
+                    ));
+                }
+                if self.config.dump_images {
+                    let slug = dump_slug(&key);
+                    if let Some(card) = crop_card(&row) {
+                        save_dump(&format!("{prefix}_card_{slug}.png"), &card);
                     }
-                    log_warn!(
-                        "[achievement] 未匹配({}): title='{}' subtitle='{}' status='{}' date='{}'",
-                        "[achievement] unmatched({}): title='{}' subtitle='{}' status='{}' date='{}'",
-                        reason,
-                        recognized.title,
-                        recognized.subtitle,
-                        recognized.status,
-                        recognized.date
-                    );
-                    // Staged titles are expected unmatched; dump real OCR misses.
-                    if self.config.dump_images && staged <= 1 {
-                        save_dump(
-                            &format!("{prefix}_miss_{frame_idx:03}_{i}.png"),
-                            &row,
-                        );
+                    if let Some(title) = crop_title(&row) {
+                        save_dump(&format!("{prefix}_title_{slug}.png"), &title);
                     }
                 }
             }
@@ -550,10 +554,33 @@ impl GoodAchievementScanner {
                 completed.len()
             );
             progress_log(&format!(
-                "frame cat={category_label} i={frame_idx} capture_ms={capture_ms} ocr_ms={ocr_ms} rows={} new={new_rows} unmatched={unmatched} idle={idle_frames} done={}",
+                "frame cat={category_label} i={frame_idx} capture_ms={capture_ms} ocr_ms={ocr_ms} rows={} new={new_rows} unmatched={unmatched} idle={idle_frames} done={} unchanged={unchanged}",
                 bands.len(),
                 completed.len()
             ));
+
+            // One unchanged capture is the bottom of a short category. A long
+            // category whose first wheel did nothing (cursor still on the
+            // sidebar after the category click) must be scrolled again.
+            // `matched_titles` is unique catalog hits, so hidden entries that
+            // never appear in the list only cost a few extra scrolls.
+            let behind = expected > matched_titles.len().saturating_add(3);
+            let refocus = unchanged && new_rows == 0 && behind && idle_frames < 4;
+            if unchanged && new_rows == 0 && (!behind || idle_frames >= 4) {
+                log_info!(
+                    "[achievement] 列表画面未变，已到分类底部: {} frame={} capture={}ms ocr={}ms",
+                    "[achievement] list image unchanged, at category bottom: {} frame={} capture={}ms ocr={}ms",
+                    category_label,
+                    frame_idx,
+                    capture_ms,
+                    ocr_ms
+                );
+                progress_log(&format!(
+                    "pixel_stop cat={category_label} frame={frame_idx} capture_ms={capture_ms} ocr_ms={ocr_ms} seen={} expected={expected}",
+                    cat_titles.len()
+                ));
+                break;
+            }
 
             if idle_frames >= IDLE_FRAMES_BEFORE_STOP {
                 log_info!(
@@ -572,49 +599,249 @@ impl GoodAchievementScanner {
                 break;
             }
 
-            if let Some((x, y)) = click_pos {
-                let t_scroll = Instant::now();
-                ctrl.click_at(x, y);
-                for _ in 0..LIST_WHEEL_TICKS {
-                    ctrl.mouse_scroll(1);
-                }
-                yas::utils::sleep(self.config.scroll_delay as u32);
-                let scroll_ms = t_scroll.elapsed().as_millis();
+            let t_scroll = Instant::now();
+            if refocus {
+                ctrl.click_at(ACHIEVEMENT_HEADER_POS.0, ACHIEVEMENT_HEADER_POS.1);
+                yas::utils::sleep(80);
                 progress_log(&format!(
-                    "scroll cat={category_label} frame={frame_idx} ms={scroll_ms}"
+                    "respin cat={category_label} frame={frame_idx} matched={} expected={expected}",
+                    matched_titles.len()
                 ));
-                log_debug!(
-                    "[achievement] 滚轮 {} tick + sleep {}ms 用时 {}ms",
-                    "[achievement] wheel {} ticks + sleep {}ms took {}ms",
-                    LIST_WHEEL_TICKS,
-                    self.config.scroll_delay,
-                    scroll_ms
-                );
             }
+            // Re-detect each step. A short list's thumb is tall; a stale
+            // park from the previous category lands on the cream panel.
+            let groove = self.scrollbar_groove(ctrl);
+            self.scroll_list(ctrl, LIST_WHEEL_TICKS, groove);
+            let scroll_ms = t_scroll.elapsed().as_millis();
+            progress_log(&format!(
+                "scroll cat={category_label} frame={frame_idx} ticks={LIST_WHEEL_TICKS} ms={scroll_ms}"
+            ));
+            log_debug!(
+                "[achievement] 滚轮 {} tick + sleep {}ms 用时 {}ms",
+                "[achievement] wheel {} ticks + sleep {}ms took {}ms",
+                LIST_WHEEL_TICKS,
+                self.config.scroll_delay,
+                scroll_ms
+            );
 
             prev_list = Some(list_img);
             frame_idx += 1;
         }
 
+        if let Some(name) = category_name {
+            if let Some(cov) = self.catalog.coverage(name, &cat_titles) {
+                let missing = cov.missing.join(",");
+                progress_log(&format!(
+                    "coverage cat={} expected={} matched={} missing_n={} missing={}",
+                    cov.name,
+                    cov.expected,
+                    cov.matched,
+                    cov.missing.len(),
+                    missing
+                ));
+                log_info!(
+                    "[achievement] 分类覆盖 {}: 目录{} 识别{} 缺失{}",
+                    "[achievement] category coverage {}: catalog {} recognized {} missing {}",
+                    cov.name,
+                    cov.expected,
+                    cov.matched,
+                    cov.missing.len()
+                );
+                if !cov.missing.is_empty() {
+                    log_warn!(
+                        "[achievement] 未扫到的标题: {}",
+                        "[achievement] missing titles: {}",
+                        missing
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
-    fn click_pos_for_list(
+    fn park_cursor_on_scrollbar(&self, ctrl: &mut GenshinGameController, groove: (f64, f64)) {
+        // Backpack scrolling only move_to's the grid — it does not click.
+        // Clicking the achievement thumb starts a drag and eats the wheel.
+        // Header click (caller) already cleared card hover; the OS cursor on
+        // the groove is what `WM_MOUSEWHEEL` hit-tests.
+        ctrl.focus_game_window_quick();
+        ctrl.move_to(groove.0, groove.1);
+        yas::utils::sleep(LIST_HOVER_SETTLE_MS);
+        progress_log(&format!(
+            "park_scrollbar x={:.0} y={:.0}",
+            groove.0, groove.1
+        ));
+    }
+
+    fn scrollbar_groove(&self, ctrl: &GenshinGameController) -> (f64, f64) {
+        if let Ok(frame) = ctrl.capture_game() {
+            if let Some(list) = detect_list_rect(&frame) {
+                let px = detect_scrollbar_thumb(&frame, list)
+                    .map(|(x, _)| x)
+                    .unwrap_or_else(|| {
+                        list.x
+                            .saturating_add(list.w)
+                            .saturating_add(LIST_SCROLLBAR_INSET)
+                            .min(frame.width().saturating_sub(2))
+                    });
+                // Mid-track: list.y+72 sits beside the namecard banner on
+                // categories like 浮涌的阴影之地, where the wheel hits chrome
+                // and the list never moves.
+                let py = list
+                    .y
+                    .saturating_add(list.h / 2)
+                    .min(frame.height().saturating_sub(2));
+                return pixel_to_base(px, py, &ctrl.scaler);
+            }
+        }
+        LIST_SCROLLBAR_POS
+    }
+
+    /// Same tick path as the backpack scanner: `mouse_scroll(1)` is one detent.
+    /// Sleep after every notch so Windows cannot coalesce 8 ticks into a jump.
+    fn scroll_list(&self, ctrl: &mut GenshinGameController, ticks: i32, groove: (f64, f64)) {
+        self.park_cursor_on_scrollbar(ctrl, groove);
+        for _ in 0..ticks {
+            ctrl.mouse_scroll(1);
+            yas::utils::sleep(LIST_TICK_DELAY_MS);
+        }
+        yas::utils::sleep(self.config.scroll_delay as u32);
+    }
+
+    /// One-tick capture/OCR loop so we can measure pixels and titles per detent.
+    fn calibrate_list_scroll(
+        &self,
+        ctrl: &mut GenshinGameController,
+        rec: &OcrPool,
+    ) -> Result<()> {
+        const NOTCH_FRAMES: u32 = 24;
+        const MICRO_FRAMES: u32 = 8;
+        log_info!(
+            "[achievement] 滚轮标定：先 {} 次整格，再 {} 次 1/8 格",
+            "[achievement] scroll calibrate: {} full notches, then {} 1/8-notch steps",
+            NOTCH_FRAMES,
+            MICRO_FRAMES
+        );
+        progress_log("scroll_calibrate_start");
+        let groove = self.scrollbar_groove(ctrl);
+        ctrl.click_at(ACHIEVEMENT_HEADER_POS.0, ACHIEVEMENT_HEADER_POS.1);
+        yas::utils::sleep(80);
+        self.park_cursor_on_scrollbar(ctrl, groove);
+        if self.config.dump_images {
+            if let Ok(frame) = ctrl.capture_game() {
+                save_dump("scrollcal_full.png", &frame);
+            }
+        }
+
+        let mut prev_titles: Vec<String> = Vec::new();
+        let mut prev_list: Option<RgbImage> = None;
+        for frame_idx in 0..NOTCH_FRAMES {
+            if ctrl.cancel_token().check_rmb() {
+                bail!("cancelled");
+            }
+            let Some((list_img, titles)) = self.capture_list_titles(ctrl, rec) else {
+                bail!("未找到成就列表 / Achievement list not found");
+            };
+            if self.config.dump_images {
+                save_dump(&format!("scrollcal_notch_{frame_idx:03}.png"), &list_img);
+            }
+            let shift = prev_list
+                .as_ref()
+                .and_then(|prev| vertical_shift_hint(prev, &list_img));
+            let appeared = titles.iter().filter(|t| !prev_titles.contains(t)).count();
+            let disappeared = prev_titles.iter().filter(|t| !titles.contains(t)).count();
+            progress_log(&format!(
+                "cal_notch i={frame_idx} titles={} appeared={appeared} disappeared={disappeared} shift={:?} first={}",
+                titles.len(),
+                shift,
+                titles.first().cloned().unwrap_or_default()
+            ));
+            log_info!(
+                "[achievement] notch {} titles={} +{} -{} shift={:?} '{}'",
+                "[achievement] notch {} titles={} +{} -{} shift={:?} '{}'",
+                frame_idx,
+                titles.len(),
+                appeared,
+                disappeared,
+                shift,
+                titles.first().cloned().unwrap_or_default()
+            );
+            prev_titles = titles;
+            prev_list = Some(list_img);
+            self.scroll_list(ctrl, 1, groove);
+        }
+
+        let mut moved = false;
+        for frame_idx in 0..MICRO_FRAMES {
+            if ctrl.cancel_token().check_rmb() {
+                bail!("cancelled");
+            }
+            let Some(list_img) = self.capture_list_image(ctrl) else {
+                break;
+            };
+            if self.config.dump_images {
+                save_dump(&format!("scrollcal_micro_{frame_idx:03}.png"), &list_img);
+            }
+            let shift = prev_list
+                .as_ref()
+                .and_then(|prev| vertical_shift_hint(prev, &list_img));
+            if shift.unwrap_or(0).abs() >= 2 {
+                moved = true;
+            }
+            progress_log(&format!("cal_micro i={frame_idx} shift={shift:?}"));
+            log_info!(
+                "[achievement] 1/8-notch {} shift={:?}",
+                "[achievement] 1/8-notch {} shift={:?}",
+                frame_idx,
+                shift
+            );
+            prev_list = Some(list_img);
+            self.scroll_list(ctrl, 1, groove);
+        }
+        if !moved {
+            log_info!(
+                "[achievement] Genshin 忽略小于 WHEEL_DELTA 的滚轮增量，整格滚动即可",
+                "[achievement] Genshin ignores sub-notch wheel deltas; stay on full detents"
+            );
+            progress_log("cal_micro_ignored");
+        }
+        progress_log("scroll_calibrate_done");
+        Ok(())
+    }
+
+    fn capture_list_image(&self, ctrl: &GenshinGameController) -> Option<RgbImage> {
+        let frame = ctrl.capture_game().ok()?;
+        let list_rect = detect_list_rect(&frame)?;
+        crop_pixel(&frame, list_rect)
+    }
+
+    fn capture_list_titles(
         &self,
         ctrl: &GenshinGameController,
-        list_rect: PixelRect,
-        list_img: &RgbImage,
-    ) -> (f64, f64) {
-        let bands = split_row_bands(list_img, true);
-        let (px, py) = if let Some(band) = bands.first() {
-            (
-                list_rect.x + band.rect.x + band.rect.w / 3,
-                list_rect.y + band.rect.y + band.rect.h * 2 / 3,
-            )
-        } else {
-            (list_rect.x + list_rect.w / 3, list_rect.y + list_rect.h / 8)
-        };
-        pixel_to_base(px, py, &ctrl.scaler)
+        rec: &OcrPool,
+    ) -> Option<(RgbImage, Vec<String>)> {
+        let list_img = self.capture_list_image(ctrl)?;
+        let bands = split_row_bands(&list_img, true);
+        let mut titles = Vec::new();
+        for band in &bands {
+            let Some(row) = crop_row(&list_img, band) else {
+                continue;
+            };
+            if is_progress_banner(&row) {
+                continue;
+            }
+            let ocr = rec.get();
+            if let Some(crop) = crop_title(&row) {
+                if let Ok(text) = ocr.image_to_text(&crop, false) {
+                    let text = text.trim().to_string();
+                    if !text.is_empty() {
+                        titles.push(text);
+                    }
+                }
+            }
+        }
+        Some((list_img, titles))
     }
 
     fn click_next_category(
@@ -669,48 +896,34 @@ impl GoodAchievementScanner {
     fn read_selected_category(
         &self,
         ctrl: &GenshinGameController,
-        pools: &SharedOcrPools,
-    ) -> Option<String> {
-        let crop = self.capture_selected_category(ctrl)?;
-        let ocr = pools.v4().get();
-        let text = ocr.image_to_text(&crop, false).ok()?;
-        let trimmed = text.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
+        rec: &OcrPool,
+    ) -> (Option<String>, bool) {
+        let Some(crop) = self.capture_selected_category(ctrl) else {
+            return (None, false);
+        };
+        let ocr = rec.get();
+        let Ok(text) = ocr.image_to_text(&crop, false) else {
+            return (None, false);
+        };
+        let mut complete = category_looks_complete(&text);
+        if !complete {
+            // Percentage sits on the second line; a single OCR pass often drops it.
+            let h = crop.height();
+            let y = h / 2;
+            if h > y {
+                let bottom = crop.view(0, y, crop.width(), h - y).to_image();
+                if let Ok(bottom_text) = ocr.image_to_text(&bottom, false) {
+                    complete = category_looks_complete(&bottom_text);
+                }
+            }
         }
+        (pick_category_name(&text), complete)
     }
 
     fn capture_selected_category(&self, ctrl: &GenshinGameController) -> Option<RgbImage> {
         let frame = ctrl.capture_game().ok()?;
         let rect = detect_selected_category_rect(&frame)?;
         crop_pixel(&frame, rect)
-    }
-
-    /// ggartifact titles repeat across stages and have no descriptions.
-    /// Count completed same-title rows and take that many IDs in catalog order.
-    fn assign_staged_ids(
-        &self,
-        completed: &mut BTreeSet<u32>,
-        staged_done: &HashMap<String, usize>,
-    ) -> usize {
-        let mut assigned = 0usize;
-        for (title, count) in staged_done {
-            if *count == 0 {
-                continue;
-            }
-            let ids = self.catalog.ids_for_title(title);
-            if ids.len() < 2 {
-                continue;
-            }
-            for id in ids.into_iter().take(*count) {
-                if completed.insert(id) {
-                    assigned += 1;
-                }
-            }
-        }
-        assigned
     }
 }
 
@@ -723,26 +936,58 @@ fn is_plausible_category_name(name: &str) -> bool {
 }
 
 fn is_plausible_row_title(title: &str) -> bool {
-    normalize_text(title)
+    let text = normalize_text(title);
+    if text.contains("达成进度") {
+        return false;
+    }
+    let cjk = text
         .chars()
         .filter(|c| *c >= '\u{4e00}' && *c <= '\u{9fff}')
-        .count()
-        >= 2
+        .count();
+    let letters = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    cjk >= 2 || letters >= 3
+}
+
+fn pick_category_name(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if is_plausible_category_name(&normalize_text(trimmed)) {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn category_looks_complete(text: &str) -> bool {
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("100%") || compact.contains("100％")
 }
 
 fn is_progress_banner(row: &RgbImage) -> bool {
     if row.width() < 32 || row.height() < 16 {
         return false;
     }
-    let y = row.height() / 2;
-    let mut gold = 0u32;
-    for x in 0..row.width() {
-        let p = row.get_pixel(x, y);
-        if p[0] > 180 && p[1] > 140 && p[2] < 110 {
-            gold += 1;
+    // The gold bar sits in the lower half of the namecard banner. Mid-row
+    // samples hit the "达成进度" title and miss it.
+    for y_num in [4u32, 5, 6, 7, 8] {
+        let y = (row.height() * y_num / 10).min(row.height().saturating_sub(1));
+        let mut gold = 0u32;
+        let mut x = 0u32;
+        while x < row.width() {
+            let p = row.get_pixel(x, y);
+            if p[0] > 180 && p[1] > 140 && p[2] < 110 {
+                gold += 1;
+            }
+            x += 2;
+        }
+        if gold > row.width() / 16 {
+            return true;
         }
     }
-    gold > row.width() / 8
+    false
 }
 
 fn pixel_to_base(px: u32, py: u32, scaler: &CoordScaler) -> (f64, f64) {
@@ -775,12 +1020,56 @@ fn row_key(title: &str, subtitle: &str) -> String {
     }
 }
 
+fn vertical_shift_hint(a: &RgbImage, b: &RgbImage) -> Option<i32> {
+    if a.dimensions() != b.dimensions() {
+        return None;
+    }
+    let (w, h) = a.dimensions();
+    if h < 32 || w < 32 {
+        return None;
+    }
+    let x0 = ((w as f32) * 0.12) as u32;
+    let x1 = ((w as f32) * 0.55).max(x0 as f32 + 1.0) as u32;
+    let max_shift = 400i32.min(h as i32 / 2);
+    let mut best = (u64::MAX, 0i32);
+    for s in -max_shift..=max_shift {
+        let mut sum = 0u64;
+        let mut n = 0u64;
+        let (ay0, by0, rows) = if s >= 0 {
+            (s as u32, 0u32, h.saturating_sub(s as u32))
+        } else {
+            (0u32, (-s) as u32, h.saturating_sub((-s) as u32))
+        };
+        let mut y = 0u32;
+        while y < rows {
+            let mut x = x0;
+            while x < x1 {
+                let pa = a.get_pixel(x, ay0 + y);
+                let pb = b.get_pixel(x, by0 + y);
+                sum += pa[0].abs_diff(pb[0]) as u64
+                    + pa[1].abs_diff(pb[1]) as u64
+                    + pa[2].abs_diff(pb[2]) as u64;
+                n += 1;
+                x += 8;
+            }
+            y += 8;
+        }
+        if n > 0 {
+            let mean = sum / n;
+            if mean < best.0 {
+                best = (mean, s);
+            }
+        }
+    }
+    Some(best.1)
+}
+
 fn dump_slug(name: &str) -> String {
     let s: String = name
         .chars()
         .map(|c| if r#"\/:*?"<>|"#.contains(c) { '_' } else { c })
         .filter(|c| !c.is_control())
-        .take(24)
+        .take(80)
         .collect();
     let s = s.trim().to_string();
     if s.is_empty() {

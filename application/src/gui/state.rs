@@ -809,6 +809,7 @@ impl AppState {
             artifact_max_count: self.artifact_max_count,
             achievement_max_count: self.achievement_max_count,
             artifact_keep_five_star_filter: false,
+            debug_ach_scroll: false,
         }
     }
 }

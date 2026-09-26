@@ -51,6 +51,6 @@ tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"], optiona
 tokio-util = { version = "0.7", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
 pktmon = { version = "0.6", features = ["tokio"], optional = true }
 futures = { version = "0.3", optional = true }

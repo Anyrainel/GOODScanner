@@ -7,6 +7,7 @@ use yas::ocr::ImageToText;
 ///
 /// Supported backends:
 /// - `"ppocrv4"` / `"paddlev4"`: PaddleOCR v4 (11M, best for substats)
+/// - `"ppocrv6tiny"` / `"ppocrv6"`: PaddleOCR v6 tiny (1.1M, CTC 48×320)
 /// - `"ppocrv5"` / `"paddlev5"` / default: PaddleOCR v5 (16M, best for names/text)
 ///
 /// All model weights are embedded at compile time via `include_bytes!`.
@@ -21,6 +22,17 @@ pub fn create_ocr_model(backend: &str) -> Result<Box<dyn ImageToText<RgbImage> +
             let model = yas::ocr::PPOCRModel::new(model_bytes, dict_vec)
                 .context("ONNX v4模型初始化失败，请确认onnxruntime.dll存在且版本正确\
                          / ONNX v4 model init failed — ensure onnxruntime.dll exists and is the correct version")?;
+            Ok(Box::new(model))
+        },
+        "paddlev6tiny" | "ppocrv6tiny" | "ppocrv6" => {
+            let model_bytes = include_bytes!("models/PP-OCRv6_tiny_rec.onnx");
+            let dict_str = include_str!("models/ppocrv6_tiny_dict.txt");
+            let mut dict_vec: Vec<String> =
+                dict_str.lines().map(|l| l.trim().to_string()).collect();
+            dict_vec.push(String::from(" "));
+            let model = yas::ocr::PPOCRModel::new(model_bytes, dict_vec)
+                .context("ONNX v6 tiny模型初始化失败，请确认onnxruntime.dll存在且版本正确\
+                         / ONNX v6 tiny model init failed — ensure onnxruntime.dll exists and is the correct version")?;
             Ok(Box::new(model))
         },
         _ => {

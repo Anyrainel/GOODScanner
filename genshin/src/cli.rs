@@ -1080,7 +1080,7 @@ pub struct GoodScannerConfig {
     /// 覆盖OCR后端 / Override OCR backend
     #[arg(
         long = "ocr-backend",
-        help = "覆盖OCR后端（ppocrv4 或 ppocrv5）\nOverride OCR backend (ppocrv4 or ppocrv5)",
+        help = "覆盖OCR后端（ppocrv4、ppocrv5 或 ppocrv6tiny）\nOverride OCR backend (ppocrv4, ppocrv5, or ppocrv6tiny)",
         help_heading = "通用选项 / Global Options"
     )]
     pub ocr_backend: Option<String>,
@@ -1170,6 +1170,14 @@ pub struct GoodScannerConfig {
 
     #[clap(skip = false)]
     pub artifact_keep_five_star_filter: bool,
+
+    /// One-tick achievement list scroll calibration (dumps, then exits)
+    #[arg(
+        long = "debug-ach-scroll",
+        help = "逐格滚动成就列表并保存截图后退出\nDump one-tick achievement list scrolls, then exit",
+        help_heading = "调试 / Debug"
+    )]
+    pub debug_ach_scroll: bool,
 }
 
 // ================================================================
@@ -1282,7 +1290,7 @@ impl GoodScannerApplication {
             ocr_backend: config
                 .ocr_backend
                 .clone()
-                .unwrap_or_else(|| "ppocrv4".to_string()),
+                .unwrap_or_else(|| "ppocrv6tiny".to_string()),
             scroll_delay: user_config.achievement_scroll_delay,
             category_delay: user_config.achievement_category_delay,
             open_delay: user_config.achievement_open_delay,
@@ -1290,6 +1298,7 @@ impl GoodScannerApplication {
             log_progress: config.log_progress,
             dump_images: config.dump_images,
             max_count: config.achievement_max_count,
+            scroll_calibrate: config.debug_ach_scroll,
         }
     }
 
@@ -1316,19 +1325,32 @@ impl GoodScannerApplication {
             && !config.scan_weapons
             && !config.scan_artifacts
             && !config.scan_achievements
-            && !config.scan_all;
+            && !config.scan_all
+            && !config.debug_ach_scroll;
 
         let scan_config = ScanCoreConfig {
-            scan_characters: config.scan_characters || config.scan_all || no_flags,
-            scan_weapons: config.scan_weapons || config.scan_all || no_flags,
-            scan_artifacts: config.scan_artifacts || config.scan_all || no_flags,
-            scan_achievements: config.scan_achievements,
+            scan_characters: if config.debug_ach_scroll {
+                false
+            } else {
+                config.scan_characters || config.scan_all || no_flags
+            },
+            scan_weapons: if config.debug_ach_scroll {
+                false
+            } else {
+                config.scan_weapons || config.scan_all || no_flags
+            },
+            scan_artifacts: if config.debug_ach_scroll {
+                false
+            } else {
+                config.scan_artifacts || config.scan_all || no_flags
+            },
+            scan_achievements: config.scan_achievements || config.debug_ach_scroll,
             weapon_min_rarity: config.weapon_min_rarity,
             artifact_min_rarity: config.artifact_min_rarity,
             verbose: config.verbose,
             continue_on_failure: config.continue_on_failure,
             log_progress: config.log_progress,
-            dump_images: config.dump_images,
+            dump_images: config.dump_images || config.debug_ach_scroll,
             hdr_mode: config.hdr_mode || user_config.hdr_mode,
             hdr_white_point: DEFAULT_HDR_WHITE_POINT,
             capture_method: capture_method_for_hdr_mode(config.hdr_mode || user_config.hdr_mode),
@@ -1341,6 +1363,7 @@ impl GoodScannerApplication {
             achievement_max_count: config.achievement_max_count,
             artifact_keep_five_star_filter: false,
             save_on_cancel: false,
+            debug_ach_scroll: config.debug_ach_scroll,
         };
 
         run_scan_core(&user_config, &scan_config, None, None)?;
@@ -1464,6 +1487,8 @@ pub struct ScanCoreConfig {
     pub artifact_keep_five_star_filter: bool,
     /// If true, export partial results when the user cancels mid-scan.
     pub save_on_cancel: bool,
+    /// Dump one-tick achievement list scrolls, then exit.
+    pub debug_ach_scroll: bool,
 }
 
 impl Default for ScanCoreConfig {
@@ -1491,6 +1516,7 @@ impl Default for ScanCoreConfig {
             achievement_max_count: 0,
             artifact_keep_five_star_filter: false,
             save_on_cancel: false,
+            debug_ach_scroll: false,
         }
     }
 }
@@ -1520,6 +1546,7 @@ impl ScanCoreConfig {
             achievement_max_count: self.achievement_max_count,
             artifact_substat_ocr: self.artifact_substat_ocr.clone(),
             artifact_keep_five_star_filter: self.artifact_keep_five_star_filter,
+            debug_ach_scroll: self.debug_ach_scroll,
         }
     }
 }

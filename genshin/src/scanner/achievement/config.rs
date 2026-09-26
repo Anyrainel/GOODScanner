@@ -1,4 +1,4 @@
-/// Wait after a 11-tick list wheel burst, before the next capture (ms).
+/// Wait after a list wheel burst, before the next capture (ms).
 /// Cocogoat measured 80–160 ms of wheel latency.
 pub const DEFAULT_SCROLL_DELAY: u64 = 100;
 /// Wait after clicking a left-side category (ms).
@@ -15,7 +15,7 @@ pub const DEFAULT_OPEN_DELAY: u64 = 1500;
 pub struct GoodAchievementScannerConfig {
     pub verbose: bool,
     pub ocr_backend: String,
-    /// Wait after an 11-tick list wheel burst, before the next capture (ms).
+    /// Wait after a list wheel burst, before the next capture (ms).
     pub scroll_delay: u64,
     /// Wait after clicking a left-side category (ms).
     pub category_delay: u64,
@@ -26,13 +26,15 @@ pub struct GoodAchievementScannerConfig {
     pub dump_images: bool,
     /// Stop after this many completed achievements (0 = unlimited).
     pub max_count: usize,
+    /// Dump one-tick list motion + OCR titles, then exit (no full scan).
+    pub scroll_calibrate: bool,
 }
 
 impl Default for GoodAchievementScannerConfig {
     fn default() -> Self {
         Self {
             verbose: false,
-            ocr_backend: "ppocrv4".to_string(),
+            ocr_backend: "ppocrv6tiny".to_string(),
             scroll_delay: DEFAULT_SCROLL_DELAY,
             category_delay: DEFAULT_CATEGORY_DELAY,
             open_delay: DEFAULT_OPEN_DELAY,
@@ -40,6 +42,7 @@ impl Default for GoodAchievementScannerConfig {
             log_progress: false,
             dump_images: false,
             max_count: 0,
+            scroll_calibrate: false,
         }
     }
 }
