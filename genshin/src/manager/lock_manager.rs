@@ -234,7 +234,7 @@ fn spawn_identify_artifact_task(
     rayon::spawn(move || {
         let _native_crash_context = yas::native_crash::inherit_current_task();
         annotator::begin_item("artifacts", idx, &scaler);
-        annotator::add_image("panel", &frame.image);
+        annotator::add_frame("panel", &frame);
         if let Some(ref ann) = grid_annotation {
             annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
         }

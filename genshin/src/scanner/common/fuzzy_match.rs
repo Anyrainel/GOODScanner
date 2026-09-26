@@ -194,9 +194,10 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
     for (cn, val) in map.iter() {
         let cn_chars: Vec<char> = cn.chars().collect();
         let dist = edit_distance_chars(&cleaned_chars, &cn_chars);
-        // 30% threshold, min 1 for short strings
+        // 30% threshold, min 1 for short strings — but at least one char must
+        // survive, otherwise any 1-char OCR result matches any 1-char name.
         let threshold = std::cmp::max(1, cn_chars.len() * 3 / 10);
-        if dist <= threshold {
+        if dist <= threshold && dist < cn_chars.len() {
             if dist < min_dist {
                 min_dist = dist;
                 candidates.clear();
@@ -421,6 +422,16 @@ mod tests {
         map.insert("赌徒".to_string(), "Gambler".to_string());
         // OCR misreads "教官" as "教e" — should match via Levenshtein (distance 1)
         assert_eq!(fuzzy_match_map("教e", &map), Some("Instructor".to_string()));
+    }
+
+    #[test]
+    fn test_levenshtein_rejects_full_substitution_of_single_char_name() {
+        let mut map = HashMap::new();
+        map.insert("琴".to_string(), "Jean".to_string());
+        map.insert("魈".to_string(), "Xiao".to_string());
+        // 魈 misread as 道 must not become 琴 via a 1-edit substitution
+        assert_eq!(fuzzy_match_map("风元素道", &map), None);
+        assert_eq!(fuzzy_match_map("道", &map), None);
     }
 
     #[test]

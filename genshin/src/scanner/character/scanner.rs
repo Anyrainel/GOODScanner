@@ -39,6 +39,8 @@ struct ScanMeta {
     raw_burst: i32,
     /// True when the attributes panel produced no level text.
     level_ocr_failed: bool,
+    /// True when any talent overview OCR failed and its level defaulted to 1.
+    talent_overview_failed: bool,
     /// True when constellation pixel detection was non-monotonic.
     constellation_non_monotonic: bool,
 }
@@ -65,6 +67,9 @@ struct ScanCaptures {
 struct RescanCaptures {
     /// Index in the `characters` vec.
     char_index: usize,
+    /// Roster position of the phase-1 scan; differs from `char_index` once
+    /// any earlier character was skipped, and keys the dump folder.
+    viewed_index: usize,
     name: String,
     old: GoodCharacter,
     attrs_image: RgbImage,
@@ -682,7 +687,7 @@ impl GoodCharacterScanner {
             return true;
         }
         if let Some(m) = meta {
-            if m.level_ocr_failed || m.constellation_non_monotonic {
+            if m.level_ocr_failed || m.talent_overview_failed || m.constellation_non_monotonic {
                 return true;
             }
             if m.talent_suspicious {
@@ -1132,7 +1137,8 @@ impl GoodCharacterScanner {
         let skill = if skill_lv > 0 { skill_lv } else { 1 };
         let burst = if burst_lv > 0 { burst_lv } else { 1 };
 
-        if auto_lv == 0 || skill_lv == 0 || burst_lv == 0 {
+        let talent_overview_failed = auto_lv == 0 || skill_lv == 0 || burst_lv == 0;
+        if talent_overview_failed {
             let mut missing = Vec::new();
             if auto_lv == 0 {
                 missing.push("auto");
@@ -1206,6 +1212,7 @@ impl GoodCharacterScanner {
             raw_skill: skill,
             raw_burst: burst,
             level_ocr_failed,
+            talent_overview_failed,
             constellation_non_monotonic,
         };
 
@@ -1229,6 +1236,7 @@ impl GoodCharacterScanner {
     ) -> CharacterResult {
         let RescanCaptures {
             char_index,
+            viewed_index,
             name,
             old,
             attrs_image,
@@ -1239,8 +1247,9 @@ impl GoodCharacterScanner {
             talent_detail_images,
         } = captures;
 
-        // Begin annotation frame for rescan (overwrites phase 1 dump for same character)
-        annotator::begin_item("characters", char_index, scaler);
+        // Separate folder: the rescan skips name/talent-overview OCR, so the
+        // phase 1 dump is the only record of those crops.
+        annotator::begin_item("characters_rescan", viewed_index, scaler);
         annotator::add_image("attributes", &attrs_image);
 
         let ocr = ocr_pool.get();
@@ -2264,6 +2273,7 @@ impl GoodCharacterScanner {
             // 7. Send to worker.
             let rescan = RescanCaptures {
                 char_index: char_idx,
+                viewed_index: viewed_idx,
                 name,
                 old,
                 attrs_image,

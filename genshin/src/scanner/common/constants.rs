@@ -153,10 +153,11 @@ pub const ITEM_COUNT_RECT: (f64, f64, f64, f64) = (1545.0, 30.0, 263.0, 38.0);
 pub const TAB_WEAPON: (f64, f64) = (585.0, 50.0);
 pub const TAB_ARTIFACT: (f64, f64) = (675.0, 50.0);
 
-/// "5-star sort by acquired time" filter toggle knob.
-/// Sample the ON-side knob, not the dark gutter to the right of the control;
-/// (1248, 140) sits in that gutter and always reads inactive.
-pub const ARTIFACT_FIVE_STAR_FILTER_POS: (f64, f64) = (1228.0, 135.0);
+/// "5-star sort by acquired time" filter toggle, sampled on the track just
+/// left of the ON-state knob. OFF: dark track (~64) with the white knob on the
+/// left, so x≤1230 hits that knob and reads bright in both states. ON: beige
+/// track (~185). Also the click target for toggling.
+pub const ARTIFACT_FIVE_STAR_FILTER_POS: (f64, f64) = (1236.0, 135.0);
 
 // ================================================================
 // Artifact scanner coordinates (at 1920x1080 base resolution)

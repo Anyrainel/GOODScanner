@@ -197,7 +197,8 @@ pub fn detect_dark_icon(
 }
 
 /// Check if the "5-star sort by acquired time" filter is active.
-/// When active, the pixel at ARTIFACT_FIVE_STAR_FILTER_POS is light (not dark).
+/// When active, the pixel at ARTIFACT_FIVE_STAR_FILTER_POS is the light track;
+/// when inactive it is the dark track.
 /// HDR WGC dumps make the active checkmark pixel much darker than SDR:
 /// RGB(117,129,145), brightness 130 on the sampled 4K captures. Use a
 /// profile-specific threshold so that detector has margin in both modes.
@@ -949,16 +950,18 @@ mod tests {
     }
 
     #[test]
-    fn five_star_filter_samples_the_toggle_knob() {
+    fn five_star_filter_distinguishes_track_from_off_knob() {
         let mut image = make_1080p_image();
         let scaler = make_1080p_scaler();
-        // Dark gutter at the old probe, bright ON knob at the current probe.
-        set_pixel(&mut image, 1248, 140, [53, 61, 79]);
+        // OFF (1080p SDR capture): white knob on the left, dark track at the probe.
         set_pixel(&mut image, 1228, 135, [236, 229, 216]);
-        assert!(is_five_star_filter_active(&image, &scaler));
-
-        set_pixel(&mut image, 1228, 135, [53, 61, 79]);
+        set_pixel(&mut image, 1236, 135, [53, 61, 79]);
         assert!(!is_five_star_filter_active(&image, &scaler));
+
+        // ON: beige track across the probe, knob moved right.
+        set_pixel(&mut image, 1228, 135, [212, 189, 142]);
+        set_pixel(&mut image, 1236, 135, [222, 197, 146]);
+        assert!(is_five_star_filter_active(&image, &scaler));
     }
 
     #[test]

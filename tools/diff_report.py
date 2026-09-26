@@ -478,38 +478,55 @@ def images_for_field(folder, field, category="artifact", act_art=None):
     return refs
 
 
-def diff_characters(expected, actual):
-    """Match and diff characters by key."""
-    results = []
-    exp_map = {c["key"]: c for c in expected}
-    act_map = {c["key"]: c for c in actual}
-    all_keys = sorted(set(list(exp_map.keys()) + list(act_map.keys())))
+def diff_single_character(exp, act):
+    diffs = []
+    for field in ["level", "constellation", "ascension", "element"]:
+        ev = exp.get(field)
+        av = act.get(field)
+        if ev is not None and ev != av:
+            diffs.append((field, str(ev), str(av)))
+    exp_t = exp.get("talent", {})
+    act_t = act.get("talent", {})
+    for tf in ["auto", "skill", "burst"]:
+        ev = exp_t.get(tf)
+        av = act_t.get(tf)
+        if ev is not None and ev != av:
+            diffs.append((f"talent.{tf}", str(ev), str(av)))
+    return diffs
 
-    for key in all_keys:
-        exp = exp_map.get(key)
-        act = act_map.get(key)
-        if exp is None:
-            results.append((key, [("_status", "", "EXTRA in actual")]))
-            continue
-        if act is None:
+
+def diff_characters(expected, actual):
+    """Match and diff characters by key.
+
+    Keys can repeat on either side (capture exports include the unplayed
+    Traveler twin; a misread name duplicates another key), so entries sharing
+    a key are paired by fewest field differences instead of collapsed.
+    """
+    results = []
+    exp_groups = defaultdict(list)
+    act_groups = defaultdict(list)
+    for c in expected:
+        exp_groups[c["key"]].append(c)
+    for c in actual:
+        act_groups[c["key"]].append(c)
+
+    for key in sorted(set(exp_groups) | set(act_groups)):
+        exps = list(exp_groups.get(key, []))
+        acts = list(act_groups.get(key, []))
+        while exps and acts:
+            pairs = [
+                (len(diff_single_character(e, a)), ei, ai)
+                for ei, e in enumerate(exps)
+                for ai, a in enumerate(acts)
+            ]
+            _, ei, ai = min(pairs)
+            diffs = diff_single_character(exps.pop(ei), acts.pop(ai))
+            if diffs:
+                results.append((key, diffs))
+        for _ in exps:
             results.append((key, [("_status", "MISSING from actual", "")]))
-            continue
-        diffs = []
-        for field in ["level", "constellation", "ascension", "element"]:
-            ev = exp.get(field)
-            av = act.get(field)
-            if ev is not None and ev != av:
-                diffs.append((field, str(ev), str(av)))
-        # Compare talents
-        exp_t = exp.get("talent", {})
-        act_t = act.get("talent", {})
-        for tf in ["auto", "skill", "burst"]:
-            ev = exp_t.get(tf)
-            av = act_t.get(tf)
-            if ev is not None and ev != av:
-                diffs.append((f"talent.{tf}", str(ev), str(av)))
-        if diffs:
-            results.append((key, diffs))
+        for _ in acts:
+            results.append((key, [("_status", "", "EXTRA in actual")]))
     return results
 
 

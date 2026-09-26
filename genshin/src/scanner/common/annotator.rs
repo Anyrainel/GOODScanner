@@ -42,6 +42,7 @@ use std::sync::Mutex;
 
 use image::RgbImage;
 
+use super::capture_frame::CaptureFrame;
 use super::coord_scaler::CoordScaler;
 use super::debug_dump::DumpCollector;
 use super::grid_icon_detector::GridCellAnnotation;
@@ -115,6 +116,14 @@ pub fn begin_item(category: &str, index: usize, scaler: &CoordScaler) {
 pub fn add_image(label: &str, image: &RgbImage) {
     with_ctx(|ctx| {
         ctx.current_img = ctx.collector.add_image(label, image);
+    });
+}
+
+/// Register a region capture. Later `record_*` calls keep using window
+/// coordinates; they are translated by the frame origin.
+pub fn add_frame(label: &str, frame: &CaptureFrame) {
+    with_ctx(|ctx| {
+        ctx.current_img = ctx.collector.add_frame(label, frame);
     });
 }
 

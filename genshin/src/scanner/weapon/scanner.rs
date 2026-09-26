@@ -605,7 +605,7 @@ impl GoodWeaponScanner {
                     }
 
                     annotator::begin_item("weapons", work_item.index, &worker_scaler);
-                    annotator::add_image("panel", &work_item.frame.image);
+                    annotator::add_frame("panel", &work_item.frame);
                     if let Some(ref ann) = work_item.grid_annotation {
                         annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
                     }
