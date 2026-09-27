@@ -392,15 +392,11 @@ const ORT_LINUX_DOWNLOAD_URLS: &[&str] = &[
     "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
 ];
 
-/// Standard system library directories probed for a package-manager install.
+/// Standard sonames probed via the dynamic loader for a package-manager
+/// install (dlopen honors ldconfig and LD_LIBRARY_PATH, so no hardcoded
+/// library directories are needed).
 #[cfg(target_os = "linux")]
-const ORT_SYSTEM_DIRS: &[&str] = &[
-    "/usr/local/lib",
-    "/usr/lib",
-    "/usr/lib64",
-    "/usr/lib/x86_64-linux-gnu",
-    "/usr/lib/aarch64-linux-gnu",
-];
+const ORT_SYSTEM_SONAMES: &[&str] = &[ORT_SO_NAME, "libonnxruntime.so.1"];
 
 #[cfg(target_os = "linux")]
 pub fn check_onnxruntime() -> bool {
@@ -451,18 +447,17 @@ pub fn check_onnxruntime() -> bool {
     //    matching API version; an incompatible system copy fails at OCR init
     //    with a clear ort version error, after which the user can re-run and
     //    let this tool download its own copy.
-    for dir in ORT_SYSTEM_DIRS {
-        for name in [ORT_SO_NAME, "libonnxruntime.so.1"] {
-            let candidate = std::path::Path::new(dir).join(name);
-            if candidate.is_file() {
-                log_info!(
-                    "使用系统安装的 ONNX Runtime: {}",
-                    "Using system-installed ONNX Runtime: {}",
-                    candidate.display()
-                );
-                std::env::set_var("ORT_DYLIB_PATH", &candidate);
-                return true;
-            }
+    for soname in ORT_SYSTEM_SONAMES {
+        // Probe-only load; the library is dropped immediately and ort loads
+        // it again through ORT_DYLIB_PATH.
+        if unsafe { libloading::Library::new(soname) }.is_ok() {
+            log_info!(
+                "使用系统安装的 ONNX Runtime: {}",
+                "Using system-installed ONNX Runtime: {}",
+                soname,
+            );
+            std::env::set_var("ORT_DYLIB_PATH", soname);
+            return true;
         }
     }
 

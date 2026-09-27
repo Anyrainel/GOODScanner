@@ -19,8 +19,9 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
+use evdev::KeyCode;
 
-// evdev event/type codes.
+// evdev event/type codes (protocol level; key codes come from `evdev`).
 pub const EV_SYN: u16 = 0x00;
 pub const EV_KEY: u16 = 0x01;
 pub const EV_REL: u16 = 0x02;
@@ -28,72 +29,6 @@ pub const SYN_REPORT: u16 = 0x00;
 pub const REL_X: u16 = 0x00;
 pub const REL_Y: u16 = 0x01;
 pub const REL_WHEEL: u16 = 0x08;
-
-// Buttons (evdev BTN_*).
-pub const BTN_LEFT: u16 = 0x110;
-pub const BTN_RIGHT: u16 = 0x111;
-pub const BTN_MIDDLE: u16 = 0x112;
-
-// Common evdev key codes (linux/input-event-codes.h).
-pub const KEY_ESC: u16 = 1;
-pub const KEY_1: u16 = 2;
-pub const KEY_9: u16 = 10;
-pub const KEY_0: u16 = 11;
-pub const KEY_MINUS: u16 = 12;
-pub const KEY_EQUAL: u16 = 13;
-pub const KEY_BACKSPACE: u16 = 14;
-pub const KEY_TAB: u16 = 15;
-pub const KEY_Q: u16 = 16;
-pub const KEY_E: u16 = 18;
-pub const KEY_R: u16 = 19;
-pub const KEY_T: u16 = 20;
-pub const KEY_Y: u16 = 21;
-pub const KEY_U: u16 = 22;
-pub const KEY_I: u16 = 23;
-pub const KEY_O: u16 = 24;
-pub const KEY_P: u16 = 25;
-pub const KEY_LEFTBRACE: u16 = 26;
-pub const KEY_RIGHTBRACE: u16 = 27;
-pub const KEY_ENTER: u16 = 28;
-pub const KEY_LEFTCTRL: u16 = 29;
-pub const KEY_A: u16 = 30;
-pub const KEY_S: u16 = 31;
-pub const KEY_D: u16 = 32;
-pub const KEY_F: u16 = 33;
-pub const KEY_G: u16 = 34;
-pub const KEY_H: u16 = 35;
-pub const KEY_J: u16 = 36;
-pub const KEY_K: u16 = 37;
-pub const KEY_L: u16 = 38;
-pub const KEY_SEMICOLON: u16 = 39;
-pub const KEY_APOSTROPHE: u16 = 40;
-pub const KEY_GRAVE: u16 = 41;
-pub const KEY_LEFTSHIFT: u16 = 42;
-pub const KEY_BACKSLASH: u16 = 43;
-pub const KEY_Z: u16 = 44;
-pub const KEY_X: u16 = 45;
-pub const KEY_C: u16 = 46;
-pub const KEY_V: u16 = 47;
-pub const KEY_B: u16 = 48;
-pub const KEY_N: u16 = 49;
-pub const KEY_M: u16 = 50;
-pub const KEY_COMMA: u16 = 51;
-pub const KEY_DOT: u16 = 52;
-pub const KEY_SLASH: u16 = 53;
-pub const KEY_SPACE: u16 = 57;
-pub const KEY_CAPSLOCK: u16 = 58;
-pub const KEY_F1: u16 = 59;
-pub const KEY_LEFTMETA: u16 = 125;
-pub const KEY_HOME: u16 = 102;
-pub const KEY_UP: u16 = 103;
-pub const KEY_PAGEUP: u16 = 104;
-pub const KEY_LEFT: u16 = 105;
-pub const KEY_RIGHT: u16 = 106;
-pub const KEY_END: u16 = 107;
-pub const KEY_DOWN: u16 = 108;
-pub const KEY_PAGEDOWN: u16 = 109;
-pub const KEY_DELETE: u16 = 111;
-pub const KEY_LEFTALT: u16 = 56;
 
 const INT32_MIN: i32 = i32::MIN;
 
@@ -167,8 +102,8 @@ impl YdotoolClient {
     }
 
     /// Press (1) or release (0) a button.
-    pub fn button(&mut self, btn: u16, press: bool) -> Result<()> {
-        self.emit(EV_KEY, btn, i32::from(press))?;
+    pub fn button(&mut self, btn: KeyCode, press: bool) -> Result<()> {
+        self.emit(EV_KEY, btn.code(), i32::from(press))?;
         self.syn()
     }
 
@@ -179,56 +114,64 @@ impl YdotoolClient {
     }
 
     /// Press (1) or release (0) a key.
-    pub fn key(&mut self, code: u16, press: bool) -> Result<()> {
-        self.emit(EV_KEY, code, i32::from(press))?;
+    pub fn key(&mut self, code: KeyCode, press: bool) -> Result<()> {
+        self.emit(EV_KEY, code.code(), i32::from(press))?;
         self.syn()
     }
 }
 
-/// Map an ASCII character (unshifted, latin layout) to an evdev keycode.
-pub fn char_to_evdev_code(c: char) -> Option<u16> {
+/// US-QWERTY fallback for characters when no live keymap is available to ask
+/// (evdev keycodes are physical-key codes, so char→code is layout knowledge).
+pub fn qwerty_evdev_code(c: char) -> Option<KeyCode> {
     Some(match c.to_ascii_lowercase() {
-        '1' => KEY_1,
-        '2'..='9' => KEY_1 + (c as u16 - '2' as u16) + 1,
-        '0' => KEY_0,
-        '-' => KEY_MINUS,
-        '=' => KEY_EQUAL,
-        'q' => KEY_Q,
-        'w' => KEY_Q + 1,
-        'e' => KEY_E,
-        'r' => KEY_R,
-        't' => KEY_T,
-        'y' => KEY_Y,
-        'u' => KEY_U,
-        'i' => KEY_I,
-        'o' => KEY_O,
-        'p' => KEY_P,
-        '[' => KEY_LEFTBRACE,
-        ']' => KEY_RIGHTBRACE,
-        'a' => KEY_A,
-        's' => KEY_S,
-        'd' => KEY_D,
-        'f' => KEY_F,
-        'g' => KEY_G,
-        'h' => KEY_H,
-        'j' => KEY_J,
-        'k' => KEY_K,
-        'l' => KEY_L,
-        ';' => KEY_SEMICOLON,
-        '\'' => KEY_APOSTROPHE,
-        '`' => KEY_GRAVE,
-        '\\' => KEY_BACKSLASH,
-        'z' => KEY_Z,
-        'x' => KEY_X,
-        'c' => KEY_C,
-        'v' => KEY_V,
-        'b' => KEY_B,
-        'n' => KEY_N,
-        'm' => KEY_M,
-        ',' => KEY_COMMA,
-        '.' => KEY_DOT,
-        '/' => KEY_SLASH,
-        ' ' => KEY_SPACE,
+        '1' => KeyCode::KEY_1,
+        '2' => KeyCode::KEY_2,
+        '3' => KeyCode::KEY_3,
+        '4' => KeyCode::KEY_4,
+        '5' => KeyCode::KEY_5,
+        '6' => KeyCode::KEY_6,
+        '7' => KeyCode::KEY_7,
+        '8' => KeyCode::KEY_8,
+        '9' => KeyCode::KEY_9,
+        '0' => KeyCode::KEY_0,
+        '-' => KeyCode::KEY_MINUS,
+        '=' => KeyCode::KEY_EQUAL,
+        'q' => KeyCode::KEY_Q,
+        'w' => KeyCode::KEY_W,
+        'e' => KeyCode::KEY_E,
+        'r' => KeyCode::KEY_R,
+        't' => KeyCode::KEY_T,
+        'y' => KeyCode::KEY_Y,
+        'u' => KeyCode::KEY_U,
+        'i' => KeyCode::KEY_I,
+        'o' => KeyCode::KEY_O,
+        'p' => KeyCode::KEY_P,
+        '[' => KeyCode::KEY_LEFTBRACE,
+        ']' => KeyCode::KEY_RIGHTBRACE,
+        'a' => KeyCode::KEY_A,
+        's' => KeyCode::KEY_S,
+        'd' => KeyCode::KEY_D,
+        'f' => KeyCode::KEY_F,
+        'g' => KeyCode::KEY_G,
+        'h' => KeyCode::KEY_H,
+        'j' => KeyCode::KEY_J,
+        'k' => KeyCode::KEY_K,
+        'l' => KeyCode::KEY_L,
+        ';' => KeyCode::KEY_SEMICOLON,
+        '\'' => KeyCode::KEY_APOSTROPHE,
+        '`' => KeyCode::KEY_GRAVE,
+        '\\' => KeyCode::KEY_BACKSLASH,
+        'z' => KeyCode::KEY_Z,
+        'x' => KeyCode::KEY_X,
+        'c' => KeyCode::KEY_C,
+        'v' => KeyCode::KEY_V,
+        'b' => KeyCode::KEY_B,
+        'n' => KeyCode::KEY_N,
+        'm' => KeyCode::KEY_M,
+        ',' => KeyCode::KEY_COMMA,
+        '.' => KeyCode::KEY_DOT,
+        '/' => KeyCode::KEY_SLASH,
+        ' ' => KeyCode::KEY_SPACE,
         _ => return None,
     })
 }

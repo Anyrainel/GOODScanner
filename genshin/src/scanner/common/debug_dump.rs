@@ -29,33 +29,13 @@ pub fn next_filter_dump_index() -> usize {
 fn get_system_font() -> Option<&'static FontVec> {
     SYSTEM_FONT
         .get_or_init(|| {
-            // Windows: fonts present on all Windows 7+; Linux: common distro
-            // CJK fonts (Noto CJK / WenQuanYi / Droid Sans Fallback).
-            #[cfg(target_os = "windows")]
-            let paths = [
-                "C:/Windows/Fonts/msyh.ttc",   // Microsoft YaHei (微软雅黑)
-                "C:/Windows/Fonts/msyhbd.ttc", // Microsoft YaHei Bold
-                "C:/Windows/Fonts/simsun.ttc", // SimSun (宋体)
-                "C:/Windows/Fonts/simhei.ttf", // SimHei (黑体)
-            ];
-            #[cfg(not(target_os = "windows"))]
-            let paths = [
-                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
-                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                "/usr/share/fonts/gsfonts/DroidSansFallback.ttf",
-            ];
-            for path in &paths {
-                if let Ok(data) = std::fs::read(path) {
-                    // .ttc files: use index 0 (regular weight)
-                    if let Ok(font) = FontVec::try_from_vec_and_index(data, 0) {
-                        return Some(font);
-                    }
-                }
+            // Shared fontdb-based discovery (correct .ttc face index); falls
+            // back to legacy hardcoded paths inside the same helper.
+            let font = yas::utils::find_cjk_font()?;
+            match std::fs::read(&font.path) {
+                Ok(data) => FontVec::try_from_vec_and_index(data, font.index).ok(),
+                Err(_) => None,
             }
-            None
         })
         .as_ref()
 }

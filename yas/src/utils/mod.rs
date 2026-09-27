@@ -43,6 +43,9 @@ pub fn available_memory_bytes() -> Option<u64> {
 
 mod misc;
 
+mod fonts;
+pub use fonts::{find_cjk_font, SystemFont};
+
 pub fn sleep(ms: u32) {
     thread::sleep(Duration::from_millis(ms as u64));
 }

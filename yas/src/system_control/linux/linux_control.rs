@@ -10,18 +10,21 @@
 //! back to XTEST only if the compositor happens to honor it. The public
 //! method surface mirrors `WindowsSystemControl`; `enigo::Key` stays the key
 //! type so callers remain platform-independent.
+//!
+//! Key resolution: the XTEST path always asks the X server's own keymap
+//! (`keysym_to_keycode`), so it follows the session layout. The ydotool path
+//! prefers the same keymap via XWayland (X keycodes are evdev keycodes + 8)
+//! and falls back to a US-QWERTY table when X is unreachable.
 
 use enigo::Key;
+use evdev::KeyCode;
 use x11rb::protocol::xproto::{
     BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
     MOTION_NOTIFY_EVENT,
 };
+use xkeysym::{key as xk, Keysym};
 
-use crate::system_control::linux::ydotool::{
-    char_to_evdev_code, YdotoolClient, BTN_LEFT, KEY_BACKSPACE, KEY_CAPSLOCK, KEY_DELETE,
-    KEY_DOWN, KEY_END, KEY_ENTER, KEY_ESC, KEY_F1, KEY_HOME, KEY_LEFT, KEY_LEFTALT, KEY_LEFTCTRL,
-    KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_PAGEDOWN, KEY_PAGEUP, KEY_RIGHT, KEY_SPACE, KEY_TAB, KEY_UP,
-};
+use crate::system_control::linux::ydotool::{qwerty_evdev_code, YdotoolClient};
 use crate::utils;
 
 // X buttons: 1=left, 3=right; wheel is 4 (up) / 5 (down).
@@ -95,77 +98,53 @@ impl InputBackend {
     }
 }
 
-// X keysyms (see X11/keysymdef.h).
-const XK_BACKSPACE: u32 = 0xff08;
-const XK_TAB: u32 = 0xff09;
-const XK_RETURN: u32 = 0xff0d;
-const XK_ESCAPE: u32 = 0xff1b;
-const XK_HOME: u32 = 0xff50;
-const XK_LEFT: u32 = 0xff51;
-const XK_UP: u32 = 0xff52;
-const XK_RIGHT: u32 = 0xff53;
-const XK_DOWN: u32 = 0xff54;
-const XK_PAGE_UP: u32 = 0xff55;
-const XK_PAGE_DOWN: u32 = 0xff56;
-const XK_END: u32 = 0xff57;
-const XK_DELETE: u32 = 0xffff;
-const XK_SHIFT_L: u32 = 0xffe1;
-const XK_CONTROL_L: u32 = 0xffe3;
-const XK_ALT_L: u32 = 0xffe9;
-const XK_SUPER_L: u32 = 0xffeb;
-const XK_CAPS_LOCK: u32 = 0xffe5;
-const XK_F1: u32 = 0xffbe;
-
-/// Resolve a key to (X keysym, evdev code) — both backends are served from
-/// one table.
-fn key_to_codes(key: &Key) -> Result<Option<(u32, u16)>, String> {
-    let codes = match key {
+/// Resolve a key to `(keysym, evdev code)`; `ch` carries the Layout character
+/// for layout-aware resolution. Named keys map to fixed evdev codes.
+fn key_to_codes(key: &Key) -> Result<Option<(Keysym, Option<KeyCode>, Option<char>)>, String> {
+    // (keysym, fixed evdev code for named keys, layout char)
+    Ok(Some(match key {
         Key::Layout(c) => {
-            // Latin-1 keysyms map 1:1; CJK etc. would need an IME.
-            let code = *c as u32;
-            if (0x20..=0xff).contains(&code) {
-                let evdev = char_to_evdev_code(*c)
-                    .ok_or_else(|| format!("cannot type character {c:?} (no evdev keycode)"))?;
-                Some((code, evdev))
-            } else {
-                return Err(format!("cannot type character {c:?} (non-latin1 keysym)"));
+            // xkb-compatible keysym derivation; chars without a keysym
+            // (and no IME) cannot be typed.
+            match Keysym::from_char(*c) {
+                keysym if keysym.raw() != xk::VoidSymbol => (keysym, None, Some(*c)),
+                _ => return Err(format!("cannot type character {c:?} (no keysym)")),
             }
         },
-        Key::Return => Some((XK_RETURN, KEY_ENTER)),
-        Key::Escape => Some((XK_ESCAPE, KEY_ESC)),
-        Key::Tab => Some((XK_TAB, KEY_TAB)),
-        Key::Space => Some((0x20, KEY_SPACE)),
-        Key::Backspace => Some((XK_BACKSPACE, KEY_BACKSPACE)),
-        Key::Delete => Some((XK_DELETE, KEY_DELETE)),
-        Key::Home => Some((XK_HOME, KEY_HOME)),
-        Key::End => Some((XK_END, KEY_END)),
-        Key::PageUp => Some((XK_PAGE_UP, KEY_PAGEUP)),
-        Key::PageDown => Some((XK_PAGE_DOWN, KEY_PAGEDOWN)),
-        Key::LeftArrow => Some((XK_LEFT, KEY_LEFT)),
-        Key::UpArrow => Some((XK_UP, KEY_UP)),
-        Key::RightArrow => Some((XK_RIGHT, KEY_RIGHT)),
-        Key::DownArrow => Some((XK_DOWN, KEY_DOWN)),
-        Key::Shift => Some((XK_SHIFT_L, KEY_LEFTSHIFT)),
-        Key::Control => Some((XK_CONTROL_L, KEY_LEFTCTRL)),
-        Key::Alt => Some((XK_ALT_L, KEY_LEFTALT)),
-        Key::Option => Some((XK_ALT_L, KEY_LEFTALT)),
-        Key::Meta => Some((XK_SUPER_L, KEY_LEFTMETA)),
-        Key::CapsLock => Some((XK_CAPS_LOCK, KEY_CAPSLOCK)),
-        Key::F1 => Some((XK_F1, KEY_F1)),
-        Key::F2 => Some((XK_F1 + 1, KEY_F1 + 1)),
-        Key::F3 => Some((XK_F1 + 2, KEY_F1 + 2)),
-        Key::F4 => Some((XK_F1 + 3, KEY_F1 + 3)),
-        Key::F5 => Some((XK_F1 + 4, KEY_F1 + 4)),
-        Key::F6 => Some((XK_F1 + 5, KEY_F1 + 5)),
-        Key::F7 => Some((XK_F1 + 6, KEY_F1 + 6)),
-        Key::F8 => Some((XK_F1 + 7, KEY_F1 + 7)),
-        Key::F9 => Some((XK_F1 + 8, KEY_F1 + 8)),
-        Key::F10 => Some((XK_F1 + 9, KEY_F1 + 9)),
-        Key::F11 => Some((XK_F1 + 10, KEY_F1 + 10)),
-        Key::F12 => Some((XK_F1 + 11, KEY_F1 + 11)),
+        Key::Return => (Keysym::Return, Some(KeyCode::KEY_ENTER), None),
+        Key::Escape => (Keysym::Escape, Some(KeyCode::KEY_ESC), None),
+        Key::Tab => (Keysym::Tab, Some(KeyCode::KEY_TAB), None),
+        Key::Space => (Keysym::space, Some(KeyCode::KEY_SPACE), None),
+        Key::Backspace => (Keysym::BackSpace, Some(KeyCode::KEY_BACKSPACE), None),
+        Key::Delete => (Keysym::Delete, Some(KeyCode::KEY_DELETE), None),
+        Key::Home => (Keysym::Home, Some(KeyCode::KEY_HOME), None),
+        Key::End => (Keysym::End, Some(KeyCode::KEY_END), None),
+        Key::PageUp => (Keysym::Page_Up, Some(KeyCode::KEY_PAGEUP), None),
+        Key::PageDown => (Keysym::Page_Down, Some(KeyCode::KEY_PAGEDOWN), None),
+        Key::LeftArrow => (Keysym::Left, Some(KeyCode::KEY_LEFT), None),
+        Key::UpArrow => (Keysym::Up, Some(KeyCode::KEY_UP), None),
+        Key::RightArrow => (Keysym::Right, Some(KeyCode::KEY_RIGHT), None),
+        Key::DownArrow => (Keysym::Down, Some(KeyCode::KEY_DOWN), None),
+        Key::Shift => (Keysym::Shift_L, Some(KeyCode::KEY_LEFTSHIFT), None),
+        Key::Control => (Keysym::Control_L, Some(KeyCode::KEY_LEFTCTRL), None),
+        Key::Alt => (Keysym::Alt_L, Some(KeyCode::KEY_LEFTALT), None),
+        Key::Option => (Keysym::Alt_L, Some(KeyCode::KEY_LEFTALT), None),
+        Key::Meta => (Keysym::Meta_L, Some(KeyCode::KEY_LEFTMETA), None),
+        Key::CapsLock => (Keysym::Caps_Lock, Some(KeyCode::KEY_CAPSLOCK), None),
+        Key::F1 => (Keysym::F1, Some(KeyCode::KEY_F1), None),
+        Key::F2 => (Keysym::F2, Some(KeyCode::KEY_F2), None),
+        Key::F3 => (Keysym::F3, Some(KeyCode::KEY_F3), None),
+        Key::F4 => (Keysym::F4, Some(KeyCode::KEY_F4), None),
+        Key::F5 => (Keysym::F5, Some(KeyCode::KEY_F5), None),
+        Key::F6 => (Keysym::F6, Some(KeyCode::KEY_F6), None),
+        Key::F7 => (Keysym::F7, Some(KeyCode::KEY_F7), None),
+        Key::F8 => (Keysym::F8, Some(KeyCode::KEY_F8), None),
+        Key::F9 => (Keysym::F9, Some(KeyCode::KEY_F9), None),
+        Key::F10 => (Keysym::F10, Some(KeyCode::KEY_F10), None),
+        Key::F11 => (Keysym::F11, Some(KeyCode::KEY_F11), None),
+        Key::F12 => (Keysym::F12, Some(KeyCode::KEY_F12), None),
         _ => return Err(format!("unsupported key {key:?} on Linux")),
-    };
-    Ok(codes)
+    }))
 }
 
 pub struct LinuxControl {
@@ -220,9 +199,9 @@ impl LinuxControl {
                 utils::fake_input(BUTTON_RELEASE_EVENT, BUTTON_LEFT, 0, 0)
             },
             InputBackend::Ydotool(client) => {
-                client.button(BTN_LEFT, true)?;
+                client.button(KeyCode::BTN_LEFT, true)?;
                 utils::sleep(20);
-                client.button(BTN_LEFT, false)
+                client.button(KeyCode::BTN_LEFT, false)
             },
         })
     }
@@ -256,16 +235,17 @@ impl LinuxControl {
     }
 
     pub fn key_press(&mut self, key: Key) -> anyhow::Result<()> {
-        let codes = key_to_codes(&key).map_err(anyhow::Error::msg)?;
-        let Some((keysym, evdev)) = codes else {
+        let Some((keysym, named_evdev, layout_char)) =
+            key_to_codes(&key).map_err(anyhow::Error::msg)?
+        else {
             return anyhow::Ok(());
         };
 
         self.with_backend(|backend| match backend {
             InputBackend::XTest => {
-                let (keycode, needs_shift) = utils::keysym_to_keycode(keysym)?;
+                let (keycode, needs_shift) = utils::keysym_to_keycode(keysym.raw())?;
                 let shift = if needs_shift {
-                    utils::keysym_to_keycode(XK_SHIFT_L).ok().map(|(code, _)| code)
+                    utils::keysym_to_keycode(xk::Shift_L).ok().map(|(code, _)| code)
                 } else {
                     None
                 };
@@ -282,9 +262,35 @@ impl LinuxControl {
                 anyhow::Ok(())
             },
             InputBackend::Ydotool(client) => {
-                client.key(evdev, true)?;
+                let resolved = match named_evdev {
+                    Some(code) => Some((code, false)),
+                    // Layout-aware resolution: the X/Wayland-session keymap
+                    // knows where the keysym lives (X keycode = evdev + 8).
+                    None => utils::keysym_to_keycode(keysym.raw())
+                        .ok()
+                        .filter(|(k, _)| *k >= 8)
+                        .map(|(k, s)| (KeyCode::new(u16::from(k) - 8), s))
+                        .or_else(|| {
+                            layout_char
+                                .and_then(qwerty_evdev_code)
+                                .map(|code| (code, false))
+                        }),
+                };
+                let Some((code, shift)) = resolved else {
+                    return Err(anyhow::anyhow!(
+                        "keysym {keysym:?} has no evdev keycode"
+                    ));
+                };
+                if shift {
+                    client.key(KeyCode::KEY_LEFTSHIFT, true)?;
+                }
+                client.key(code, true)?;
                 utils::sleep(10);
-                client.key(evdev, false)
+                client.key(code, false)?;
+                if shift {
+                    client.key(KeyCode::KEY_LEFTSHIFT, false)?;
+                }
+                anyhow::Ok(())
             },
         })
     }
