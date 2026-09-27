@@ -50,6 +50,14 @@ base64 = { version = "0.22", optional = true }
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"], optional = true }
 tokio-util = { version = "0.7", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# ONNX Runtime .tgz extraction for the Linux auto-download flow.
+flate2 = "1.0"
+tar = "0.4"
+# System-libonnxruntime.so presence probe via the dynamic loader (already a
+# transitive dependency through ort's load-dynamic feature).
+libloading = "0.8"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
 pktmon = { version = "0.6", features = ["tokio"], optional = true }

@@ -113,11 +113,9 @@ pub struct CaptureMonitor {
 
 impl CaptureMonitor {
     /// Initialize the monitor: load data cache, set up sniffer.
+    #[cfg(target_os = "windows")]
     pub fn new(state: Arc<Mutex<CaptureState>>, dump_packets: bool) -> Result<Self> {
-        #[cfg(target_os = "windows")]
-        {
-            yas::utils::ensure_admin()?;
-        }
+        yas::utils::ensure_admin()?;
 
         let data_cache = load_data_cache()?;
         let player_data = PlayerData::new(data_cache);
@@ -153,6 +151,20 @@ impl CaptureMonitor {
             dump_counter: 0,
             require_achievements: false,
         })
+    }
+
+    /// Non-Windows stub: the packet source (pktmon) is Windows-only, so
+    /// capture fails fast with a clear message instead of downloading the
+    /// data cache first.
+    #[cfg(not(target_os = "windows"))]
+    pub fn new(state: Arc<Mutex<CaptureState>>, dump_packets: bool) -> Result<Self> {
+        let _ = (&state, dump_packets);
+        anyhow::bail!(
+            "抓包功能目前仅支持 Windows（pktmon），Linux 抓包后端尚未实现。\
+             请使用 OCR 扫描，或在 Windows 上运行抓包。\n\
+             / Packet capture is currently Windows-only (pktmon); a Linux backend is not \
+             implemented yet. Use OCR scanning, or run capture on Windows."
+        );
     }
 
     /// Main event loop. Processes packets and UI commands.

@@ -20,6 +20,8 @@ log = "0.4"
 lazy_static = "1.4"
 anyhow = "1.0"
 paste = "1.0"
+# System font discovery (family queries across platforms) for CJK text.
+fontdb = "0.24"
 ort = { version = "2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
 ndarray = { version = "0.16", optional = true }
 tract-onnx = { version = "0.21.5", optional = true }
@@ -27,6 +29,14 @@ tract-onnx = { version = "0.21.5", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 libwayshot = { version = "0.3.0", optional = true }
 screenshots = { version = "0.8", optional = true }
+# X11/XWayland backend: window discovery, EWMH activation, GetImage capture,
+# XTest input injection. Covers both X11 sessions and Wayland sessions where
+# the game runs as an XWayland window.
+x11rb = { version = "0.13", features = ["xtest"] }
+# Canonical keysym constants + Unicode↔keysym (winit/alacritty ecosystem).
+xkeysym = "0.2"
+# Canonical evdev KEY_/BTN_ constants for the uinput/ydotool path.
+evdev = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 screenshots = { version = "0.8" }

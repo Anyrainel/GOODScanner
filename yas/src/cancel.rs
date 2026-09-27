@@ -108,7 +108,16 @@ fn raw_rmb_pressed() -> bool {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn raw_rmb_pressed() -> bool {
+    // Query the root-window pointer mask; bit 10 is Button3 (right button).
+    match crate::utils::query_pointer() {
+        Ok(pointer) => (pointer.mask & crate::utils::BUTTON3_MASK) != 0,
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn raw_rmb_pressed() -> bool {
     false
 }

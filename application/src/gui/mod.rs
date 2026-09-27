@@ -16,6 +16,7 @@ pub mod star_rail_scanner_tab;
 pub mod star_rail_state;
 pub mod star_rail_worker;
 pub mod state;
+mod theme;
 pub mod update_banner;
 pub mod widgets;
 pub mod worker;
@@ -113,12 +114,17 @@ pub fn run_gui() {
         ..Default::default()
     };
 
+    // Linux: winit cannot detect the desktop theme, so a watcher thread feeds
+    // it to egui (initial value + live switches). On other platforms winit
+    // follows the system theme natively and this returns None.
+    let theme_rx = theme::spawn_theme_watcher();
+
     if let Err(error) = eframe::run_native(
         PRODUCT_NAME,
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
-            Ok(Box::new(GuiApp::new(state, app_config)))
+            Ok(Box::new(GuiApp::new(state, app_config, theme_rx)))
         }),
     ) {
         let lang = if yas::lang::is_en() {
@@ -195,12 +201,18 @@ struct GuiApp {
     star_rail: star_rail_state::StarRailState,
     scan_handle: Option<TaskHandle>,
     server_handle: Option<TaskHandle>,
+    /// Desktop theme updates (Linux: winit cannot follow the system theme).
+    theme_rx: Option<std::sync::mpsc::Receiver<egui::Theme>>,
     #[cfg(feature = "capture")]
     capture_tab: capture_tab::CaptureTabState,
 }
 
 impl GuiApp {
-    fn new(state: AppState, app_config: ApplicationConfigStore) -> Self {
+    fn new(
+        state: AppState,
+        app_config: ApplicationConfigStore,
+        theme_rx: Option<std::sync::mpsc::Receiver<egui::Theme>>,
+    ) -> Self {
         #[cfg(feature = "capture")]
         let capture_tab_state =
             capture_tab::CaptureTabState::from_config(state.output_dir.clone(), &state.user_config);
@@ -212,6 +224,7 @@ impl GuiApp {
             star_rail,
             scan_handle: None,
             server_handle: None,
+            theme_rx,
             #[cfg(feature = "capture")]
             capture_tab: capture_tab_state,
         }
@@ -220,6 +233,13 @@ impl GuiApp {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Desktop theme changes (Linux watcher thread).
+        if let Some(rx) = &self.theme_rx {
+            while let Ok(theme) = rx.try_recv() {
+                ctx.set_theme(theme);
+            }
+        }
+
         // Debounced auto-save: check if config changed and save after 300ms
         #[cfg(feature = "capture")]
         self.capture_tab.sync_to_config(&mut self.state.user_config);
@@ -481,18 +501,14 @@ impl eframe::App for GuiApp {
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    // Try to load Microsoft YaHei from Windows system fonts
-    let cjk_font_paths = [
-        "C:\\Windows\\Fonts\\msyh.ttc",
-        "C:\\Windows\\Fonts\\msyh.ttf",
-        "C:\\Windows\\Fonts\\simsun.ttc",
-    ];
-
-    for path in &cjk_font_paths {
-        if let Ok(font_data) = std::fs::read(path) {
+    if let Some(font) = yas::utils::find_cjk_font() {
+        if let Ok(font_data) = std::fs::read(&font.path) {
+            let mut data = egui::FontData::from_owned(font_data);
+            // .ttc collections: use the exact face fontdb resolved.
+            data.index = font.index;
             fonts.font_data.insert(
                 "system_cjk".to_owned(),
-                std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+                std::sync::Arc::new(data),
             );
             fonts
                 .families
@@ -504,7 +520,6 @@ fn setup_fonts(ctx: &egui::Context) {
                 .get_mut(&egui::FontFamily::Monospace)
                 .unwrap()
                 .push("system_cjk".to_owned());
-            break;
         }
     }
 

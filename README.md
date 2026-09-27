@@ -69,9 +69,36 @@ GOODScanner.exe --artifacts        # 仅扫描圣遗物
 GOODScanner.exe --characters --weapons  # 组合扫描
 ```
 
+## Linux 支持（实验性）
+
+GOODScanner 可在 Linux 上原生运行 **OCR 扫描与管理器**；抓包（GOODCapture / pktmon）仍仅限 Windows。游戏需通过 **Wine / Proton** 运行。
+
+### 环境要求
+
+- **游戏窗口必须是 X11/XWayland 窗口**（Wine 默认的 winex11 驱动即是）。请勿启用 `PROTON_ENABLE_WAYLAND=1` 或注册表 `Graphics=wayland`——wine-wayland（纯 Wayland）窗口对 X11 不可见，程序会明确提示
+- **X11 会话**：开箱即用（XTEST 注入，无额外依赖）
+- **Wayland 会话（KDE / GNOME 等）**：合成器忽略 XTEST，需要 [ydotool](https://github.com/ReimuNotMoe/ydotool) 注入输入，并把指针加速设为"平坦/无"以保证绝对定位精确：
+  ```shell
+  sudo pacman -S ydotool              # Arch 系；其他发行版用对应包管理器
+  systemctl --user enable --now ydotool
+  ```
+- **OCR 运行时 `libonnxruntime.so`** 按以下顺序查找：`ORT_DYLIB_PATH` 环境变量 → 程序目录 → 系统安装（需 1.22）；都没有时提示自动下载（带镜像加速）
+- 无需 root；libxcb 等系统库主流发行版自带；中文界面使用系统 Noto CJK / 文泉驿字体
+- 自动更新暂不支持 Linux（更新检查会静默跳过）
+
+### 构建与运行
+
+```shell
+cargo build --release --bin GOODScanner
+./target/release/GOODScanner          # 图形界面
+./target/release/GOODScanner --all    # 命令行扫描
+```
+
+环境诊断：`cargo run -p yas_core --example x11_probe` 列出所有 X11/XWayland 窗口、几何与 XTEST 可用性。
+
 ## 注意事项
 
-- 需要**管理员权限**（用于模拟键鼠输入）
+- Windows 需要**管理员权限**（用于模拟键鼠输入）；Linux 无需
 - 《原神》扫描仅支持**简体中文**客户端；《星穹铁道》识别中英文界面文字
 - 推荐 **16:9** 分辨率（1920×1080、2560×1440 等）
 - 扫描过程中请勿操作鼠标

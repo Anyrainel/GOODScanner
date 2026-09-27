@@ -10,6 +10,38 @@ permissions:
   contents: write
 
 jobs:
+  # Linux GOODScanner (OCR scan + manager; packet capture stays Windows-only).
+  # Uploaded as a build artifact only — release assets remain the Windows exes.
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Cache Cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: Linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            Linux-cargo-
+
+      - name: Setup Toolchain
+        run: rustup default stable
+
+      - name: Build GOODScanner (Release)
+        run: cargo build --release --bin GOODScanner
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: GOODScanner_linux_x64
+          path: target/release/GOODScanner
+
   build:
     runs-on: windows-latest
     steps:

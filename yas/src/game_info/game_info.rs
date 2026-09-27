@@ -11,4 +11,8 @@ pub struct GameInfo {
     /// Native window handle (HWND on Windows). Used by WGC capturer.
     #[cfg(target_os = "windows")]
     pub hwnd: isize,
+    /// X11 window id. Used by the X11 capturer, focus control and liveness
+    /// checks (the counterpart of `hwnd` above).
+    #[cfg(target_os = "linux")]
+    pub window_id: u32,
 }

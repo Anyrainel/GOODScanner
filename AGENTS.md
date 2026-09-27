@@ -196,7 +196,21 @@ All help text is bilingual (Chinese + English). Flags are grouped into four sect
 - **Screen capture**: `screenshots` crate (with Win32 BitBlt primary path on Windows)
 - **Input simulation**: `enigo` crate
 - **Remote mappings**: `reqwest` (blocking HTTP to ggartifact.com)
-- **Windows only**: Requires admin, uses Win32 APIs for window detection
+- **Windows only**: Requires admin, uses Win32 APIs for window detection; packet capture (`capture` feature) is Windows-only (pktmon)
+- **Linux** (experimental): native build supports OCR scanning + manager. See "Linux Platform Layer" below.
+
+## Linux Platform Layer
+
+The game runs on Linux only via Wine/Proton and is therefore always an **X11/XWayland window** — one X11 code path covers both X11 sessions and Wayland sessions. Do NOT run the game with the wine-wayland driver (`PROTON_ENABLE_WAYLAND=1` / `Graphics=wayland`): its windows are invisible to X11 and window detection reports this.
+
+- **`yas/src/utils/linux_x11.rs`** — the counterpart of `utils/windows.rs`: x11rb with a thread-local connection; window discovery by title (`_NET_CLIENT_LIST` first, tree-walk fallback), absolute client geometry (`get_client_rect` ≡ GetClientRect+ClientToScreen), EWMH activation, pointer query (RMB cancel), GetImage ZPixmap capture (out-of-window regions padded black, like a clipped BitBlt), XTEST injection + effectiveness self-check
+- **Capture**: `X11Capturer` captures the game window's own pixmap (monitor-layout independent); it is the Linux `GenericCapturer`. `capturer_screenshots` / `capturer_libwayshot` features remain as explicit alternatives
+- **Input** (`system_control/linux/`): dual backend chosen on first event — X11 session → XTEST; Wayland session → **ydotool socket** (`ydotool.rs` implements the v1.0.x protocol: raw 24-byte `input_event` writes, no handshake; absolute positioning = corner-slam + delta, needs pointer acceleration flat/disabled). KWin/Mutter advertise XTEST but ignore fake input — never assume XTEST works on Wayland; use `xtest_effective()` to check
+- **`GameInfo.window_id`** (u32, `#[cfg(target_os = "linux")]`) is the X11 window — the counterpart of `hwnd`, used by focus/geometry-refresh/alive checks
+- **ORT runtime** detection order (both platforms): `ORT_DYLIB_PATH` env → exe-dir copy → system install (Linux only) → prompt + auto-download (Windows zip / Linux tgz, gh-proxy mirrors first)
+- **Windows-only by design**: self-update (PE assets), packet capture, HSR live capture — each returns a clear bilingual error on Linux instead of compiling out
+- **CJK fonts**: Linux candidates under `/usr/share/fonts` (Noto CJK / WenQuanYi / Droid) for GUI and dump annotations
+- **Diagnostics**: `cargo run -p yas_core --example x11_probe` lists windows/geometry/XTEST status; `capture <id> <out.png>` grabs a test capture
 
 ## Conventions
 

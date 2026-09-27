@@ -128,7 +128,16 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
 
 /// Spawn a background update check.  Returns immediately.
 pub fn spawn_check(asset_name: &'static str, update_state: &Arc<Mutex<UpdateState>>) {
-    let state = update_state.clone();
+    // Self-update is Windows-only (release assets are .exe); skip silently
+    // instead of nagging with a failure banner.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (asset_name, update_state);
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let state = update_state.clone();
     let spawn_failure_state = state.clone();
     let spawn_result = std::thread::Builder::new()
         .name("update-check".to_owned())
@@ -184,6 +193,7 @@ pub fn spawn_check(asset_name: &'static str, update_state: &Arc<Mutex<UpdateStat
             error,
         ));
     }
+    } // cfg(windows)
 }
 
 /// Show a native OS dialog asking the user to restart now or later.

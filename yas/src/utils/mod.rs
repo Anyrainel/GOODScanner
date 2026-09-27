@@ -18,12 +18,33 @@ mod windows;
 #[cfg(windows)]
 pub use windows::*;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux_x11;
+#[cfg(target_os = "linux")]
+pub use linux_x11::*;
+
+#[cfg(target_os = "linux")]
+pub fn available_memory_bytes() -> Option<u64> {
+    // /proc/meminfo MemAvailable (kB).
+    let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.trim().trim_end_matches("kB").trim().parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn available_memory_bytes() -> Option<u64> {
     None
 }
 
 mod misc;
+
+mod fonts;
+pub use fonts::{find_cjk_font, SystemFont};
 
 pub fn sleep(ms: u32) {
     thread::sleep(Duration::from_millis(ms as u64));

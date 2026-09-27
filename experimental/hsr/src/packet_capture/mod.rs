@@ -27,8 +27,10 @@ use crate::{
     reference::ReferenceCache,
 };
 use base64::prelude::*;
+#[cfg(target_os = "windows")]
 use futures::{stream::FusedStream, StreamExt};
 use inventory::InventoryDecoder;
+#[cfg(target_os = "windows")]
 use pktmon::{
     filter::{PktMonFilter, TransportProtocol},
     Capture, Packet,
@@ -64,6 +66,10 @@ const KEYS_HINT: LocalizedText = LocalizedText::new(
 const WORKER_HINT: LocalizedText = LocalizedText::new(
     "HSR 抓包任务意外停止。请重新抓包；若问题再次出现，请复制完整错误。",
     "The HSR capture task stopped unexpectedly. Capture again; if it recurs, copy the full error.",
+);
+const PLATFORM_HINT: LocalizedText = LocalizedText::new(
+    "抓包功能目前仅支持 Windows（pktmon）。Linux 后端尚未实现。",
+    "Packet capture is currently Windows-only (pktmon). A Linux backend is not implemented yet.",
 );
 
 /// A successfully recognized complete achievement response.
@@ -607,8 +613,20 @@ async fn capture_task(
     cancel_token: CancellationToken,
     packet_tx: mpsc::UnboundedSender<Vec<u8>>,
 ) -> HsrResult<()> {
-    let mut source = NativePacketSource::new()?;
-    pump_packets(&mut source, &cancel_token, &packet_tx).await
+    #[cfg(target_os = "windows")]
+    {
+        let mut source = NativePacketSource::new()?;
+        pump_packets(&mut source, &cancel_token, &packet_tx).await
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (cancel_token, packet_tx);
+        Err(HsrError::new(
+            "HSR-CAPTURE-PLATFORM",
+            PLATFORM_HINT,
+            "pktmon capture is Windows-only; native capture task cannot start on this platform",
+        ))
+    }
 }
 
 trait PacketSource: Send {
@@ -633,10 +651,12 @@ async fn pump_packets<S: PacketSource>(
     }
 }
 
+#[cfg(target_os = "windows")]
 struct NativePacketSource {
     stream: Box<dyn FusedStream<Item = Packet> + Unpin + Send>,
 }
 
+#[cfg(target_os = "windows")]
 impl NativePacketSource {
     fn new() -> HsrResult<Self> {
         #[cfg(target_os = "windows")]
@@ -685,6 +705,7 @@ impl NativePacketSource {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl PacketSource for NativePacketSource {
     fn next_packet(&mut self) -> Pin<Box<dyn Future<Output = HsrResult<Vec<u8>>> + Send + '_>> {
         Box::pin(async move {

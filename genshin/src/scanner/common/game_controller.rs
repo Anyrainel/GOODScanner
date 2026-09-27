@@ -147,10 +147,16 @@ impl GenshinGameController {
                 },
             };
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            let _ = method;
+            Ok(Rc::new(yas::capture::X11Capturer::new(game_info.window_id)?))
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
             let _ = (game_info, method);
-            Ok(Rc::new(GenericCapturer::new()?))
+            Err(anyhow!("此平台不支持截图 / capture is not supported on this platform"))
         }
     }
 }
@@ -180,9 +186,10 @@ impl GenshinGameController {
 
 // Focus methods.
 impl GenshinGameController {
-    #[cfg(target_os = "windows")]
-    fn refresh_window_geometry(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) {
-        match utils::get_client_rect(hwnd) {
+    /// Apply a freshly queried client rect to the controller state (shared by
+    /// the per-platform refresh helpers).
+    fn apply_window_rect(&mut self, result: anyhow::Result<yas::positioning::Rect<i32>>) {
+        match result {
             Ok(rect) if rect.width > 0 && rect.height > 0 => {
                 if rect != self.game_info.window {
                     log_debug!(
@@ -213,6 +220,16 @@ impl GenshinGameController {
     }
 
     #[cfg(target_os = "windows")]
+    fn refresh_window_geometry(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) {
+        self.apply_window_rect(utils::get_client_rect(hwnd));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn refresh_window_geometry(&mut self, window_id: u32) {
+        self.apply_window_rect(utils::get_client_rect(window_id));
+    }
+
+    #[cfg(target_os = "windows")]
     fn focus_hwnd(
         &mut self,
         hwnd: windows_sys::Win32::Foundation::HWND,
@@ -237,6 +254,33 @@ impl GenshinGameController {
                     "Game window was restored but did not become foreground; click the game window and retry"
                 );
                 false
+            },
+            Err(e) => {
+                log_warn!(
+                    "[controller] 切换游戏窗口焦点失败: {}",
+                    "[controller] failed to focus game window: {}",
+                    e
+                );
+                false
+            },
+        }
+    }
+
+    /// Linux counterpart of `focus_hwnd`: EWMH activation is best-effort —
+    /// under XWayland the compositor decides whether the window is raised.
+    #[cfg(target_os = "linux")]
+    fn focus_window_id(&mut self, window_id: u32, settle_ms: u32) -> bool {
+        if !utils::is_window_handle_valid(window_id) {
+            return false;
+        }
+
+        match utils::activate_window(window_id) {
+            Ok(()) => {
+                self.refresh_window_geometry(window_id);
+                if settle_ms > 0 {
+                    utils::sleep(settle_ms);
+                }
+                true
             },
             Err(e) => {
                 log_warn!(
@@ -297,16 +341,38 @@ impl GenshinGameController {
             );
             return;
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            let selected = self.game_info.window_id;
+            if self.focus_window_id(selected, settle_ms) {
+                return;
+            }
+
+            // The stored window id may be stale (game restarted) — re-find by
+            // title and update the handle, mirroring the Windows flow.
+            let window_names = ["\u{539F}\u{795E}", "Genshin Impact"]; // 原神
+            if let Ok(windows) = utils::enumerate_windows() {
+                for w in &windows {
+                    if w.window == selected {
+                        continue;
+                    }
+                    if window_names.iter().any(|n| w.title == *n) {
+                        if self.focus_window_id(w.window, settle_ms) {
+                            self.game_info.window_id = w.window;
+                            return;
+                        }
+                    }
+                }
+            }
+            yas::log_error!(
+                "游戏窗口未找到，无法切换焦点；将跳过本次聚焦（点击可能落在错误窗口上）",
+                "Game window not found; skipping focus (further clicks may hit the wrong window)"
+            );
+            return;
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
             let _ = settle_ms;
-            // Non-Windows: no focus API available. Move mouse into the game
-            // area as a best-effort hint (on Linux/macOS this tends to work
-            // for focus-follows-mouse setups).
-            let center_x = self.game_info.window.left + self.game_info.window.width / 2;
-            let center_y = self.game_info.window.top + self.game_info.window.height / 2;
-            let _ = self.system_control.mouse_move_to(center_x, center_y);
-            utils::sleep(300);
         }
     }
 }
