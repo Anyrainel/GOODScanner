@@ -3,7 +3,9 @@
 //! On Wayland sessions the compositor ignores XTEST fake input, so injection
 //! must go through uinput. ydotoold holds the privileged /dev/uinput device
 //! and forwards raw `struct input_event`s received on its socket — there is
-//! no handshake in the 1.0 protocol, clients just `write()` events.
+//! no handshake in the 1.0 protocol, clients just `send()` events. The
+//! socket is a **unix datagram** socket on both sides (v1.0.4 uses
+//! `socket(AF_UNIX, SOCK_DGRAM, 0)`), one 24-byte event per datagram.
 //!
 //! Layout of `struct input_event` on 64-bit Linux (what ydotoold's
 //! `recv(fd, &uev, sizeof(uev))` expects): 8B sec + 8B usec + u16 type +
@@ -14,8 +16,7 @@
 //! then apply +x/+y deltas. This requires pointer acceleration to be
 //! disabled/flat (ydotoold itself tries `xinput` to arrange this on X11).
 
-use std::io::Write;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
@@ -32,7 +33,10 @@ pub const REL_WHEEL: u16 = 0x08;
 
 const INT32_MIN: i32 = i32::MIN;
 
-/// Candidate socket paths, in ydotool's own resolution order.
+/// Candidate socket paths: explicit override first, then the ydotoold v1.0.x
+/// defaults (`$XDG_RUNTIME_DIR/.ydotool_socket`, else `/tmp/.ydotool_socket`
+/// — see Daemon/ydotoold.c), then paths used by some distro units and older
+/// versions.
 fn socket_candidates() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(p) = std::env::var("YDOTOOL_SOCKET") {
@@ -40,12 +44,17 @@ fn socket_candidates() -> Vec<PathBuf> {
             paths.push(PathBuf::from(p));
         }
     }
-    // Arch/systemd user service ships YDOTOOL_SOCKET=$XDG_RUNTIME_DIR/ydotool.socket
     if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
         if !dir.is_empty() {
+            // Upstream default (Daemon/ydotoold.c: "%s/.ydotool_socket").
+            paths.push(PathBuf::from(dir.clone()).join(".ydotool_socket"));
+            // Used by some distro systemd units.
             paths.push(PathBuf::from(dir).join("ydotool.socket"));
         }
     }
+    // Upstream fallback when XDG_RUNTIME_DIR is unset.
+    paths.push(PathBuf::from("/tmp/.ydotool_socket"));
+    // Root-daemon / legacy locations.
     paths.push(PathBuf::from("/run/ydotoold.socket"));
     if let Ok(home) = std::env::var("HOME") {
         paths.push(PathBuf::from(home).join(".ydotool.socket"));
@@ -54,15 +63,22 @@ fn socket_candidates() -> Vec<PathBuf> {
 }
 
 pub struct YdotoolClient {
-    stream: UnixStream,
+    sock: UnixDatagram,
 }
 
 impl YdotoolClient {
     pub fn connect() -> Result<Self> {
         let mut last_err = String::from("no candidate socket exists");
         for path in socket_candidates() {
-            match UnixStream::connect(&path) {
-                Ok(stream) => return Ok(Self { stream }),
+            let sock = match UnixDatagram::unbound() {
+                Ok(sock) => sock,
+                Err(e) => {
+                    last_err = format!("socket(): {e}");
+                    continue;
+                },
+            };
+            match sock.connect(&path) {
+                Ok(()) => return Ok(Self { sock }),
                 Err(e) => last_err = format!("{}: {}", path.display(), e),
             }
         }
@@ -83,7 +99,7 @@ impl YdotoolClient {
         buf[16..18].copy_from_slice(&type_.to_ne_bytes());
         buf[18..20].copy_from_slice(&code.to_ne_bytes());
         buf[20..24].copy_from_slice(&value.to_ne_bytes());
-        self.stream.write_all(&buf)?;
+        self.sock.send(&buf)?;
         Ok(())
     }
 
@@ -174,4 +190,26 @@ pub fn qwerty_evdev_code(c: char) -> Option<KeyCode> {
         ' ' => KeyCode::KEY_SPACE,
         _ => return None,
     })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// Resolution sanity without connecting (ydotoold serves one client at a
+    /// time; a connect-then-close probe could spin its recv loop). Asserts a
+    /// concrete path only when a socket actually exists on this machine.
+    #[test]
+    fn socket_candidates_cover_running_daemon() {
+        let candidates = socket_candidates();
+        if let Some(existing) = candidates.iter().find(|p| p.exists()) {
+            // The upstream default must be in the list ahead of legacy paths.
+            assert!(
+                candidates.iter().position(|p| p == existing)
+                    < Some(candidates.len().saturating_sub(2)),
+                "unexpected first match: {}",
+                existing.display()
+            );
+        }
+    }
 }
