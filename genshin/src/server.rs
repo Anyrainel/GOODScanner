@@ -489,12 +489,13 @@ fn get_origin(request: &tiny_http::Request) -> Option<String> {
     None
 }
 
-/// Check if the game window is currently alive (Windows only).
+/// Check if the game window is currently alive.
 ///
 /// Called from the HTTP thread — does not need the game controller.
-/// Uses Win32 EnumWindows to search for the game window by title.
+/// On Windows uses Win32 EnumWindows; on Linux enumerates X11 windows
+/// (works for X11 sessions and XWayland games alike).
 ///
-/// 检查游戏窗口是否存在（仅 Windows）。从 HTTP 线程调用。
+/// 检查游戏窗口是否存在。从 HTTP 线程调用。
 #[cfg(target_os = "windows")]
 fn is_game_window_alive() -> bool {
     let window_names = ["\u{539F}\u{795E}", "Genshin Impact"]; // 原神
@@ -510,7 +511,18 @@ fn is_game_window_alive() -> bool {
     false
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn is_game_window_alive() -> bool {
+    let window_names = ["\u{539F}\u{795E}", "Genshin Impact"]; // 原神
+    match yas::utils::enumerate_windows() {
+        Ok(windows) => windows
+            .iter()
+            .any(|w| window_names.iter().any(|n| w.title == *n)),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn is_game_window_alive() -> bool {
     true
 }

@@ -137,6 +137,22 @@ pub fn check_vcpp_runtime() -> Result<()> {
 /// Also detects corrupted/truncated files by checking the DLL size.
 #[cfg(target_os = "windows")]
 pub fn check_onnxruntime() -> bool {
+    // Explicit override wins (parity with the Linux flow).
+    if let Some(path) = std::env::var_os("ORT_DYLIB_PATH") {
+        if std::path::Path::new(&path).is_file() {
+            log_info!(
+                "使用 ORT_DYLIB_PATH 指定的 ONNX Runtime: {}",
+                "Using ONNX Runtime from ORT_DYLIB_PATH: {}",
+                std::path::Path::new(&path).display()
+            );
+            return true;
+        }
+        log_warn!(
+            "ORT_DYLIB_PATH 已设置但文件不存在，将尝试其他位置",
+            "ORT_DYLIB_PATH is set but the file does not exist; trying other locations"
+        );
+    }
+
     let dll_path = exe_dir().join(ORT_DLL_NAME);
     match std::fs::metadata(&dll_path) {
         Ok(meta) if meta.len() >= ORT_DLL_MIN_SIZE => {
@@ -355,9 +371,279 @@ fn extract_onnxruntime_dll(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(
 }
 
 // ================================================================
-// Rayon thread pool with larger stack
+// ONNX Runtime bootstrap (Linux) — detection order:
+//   1. ORT_DYLIB_PATH env var (explicit user override)
+//   2. libonnxruntime.so next to the exe (app-managed copy)
+//   3. system-wide install (package manager)
+//   4. prompt + auto-download from GitHub (with mirrors)
 // ================================================================
 
+#[cfg(target_os = "linux")]
+const ORT_SO_NAME: &str = "libonnxruntime.so";
+
+#[cfg(target_os = "linux")]
+const ORT_SO_MIN_SIZE: u64 = 5 * 1024 * 1024;
+
+/// Mirror URLs to try in order (same policy as the Windows flow).
+#[cfg(target_os = "linux")]
+const ORT_LINUX_DOWNLOAD_URLS: &[&str] = &[
+    "https://gh-proxy.com/https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+    "https://ghfast.top/https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+];
+
+/// Standard system library directories probed for a package-manager install.
+#[cfg(target_os = "linux")]
+const ORT_SYSTEM_DIRS: &[&str] = &[
+    "/usr/local/lib",
+    "/usr/lib",
+    "/usr/lib64",
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu",
+];
+
+#[cfg(target_os = "linux")]
+pub fn check_onnxruntime() -> bool {
+    // 1. Explicit override wins.
+    if let Some(path) = std::env::var_os("ORT_DYLIB_PATH") {
+        let path = std::path::PathBuf::from(&path);
+        if path.is_file() {
+            log_info!(
+                "使用 ORT_DYLIB_PATH 指定的 ONNX Runtime: {}",
+                "Using ONNX Runtime from ORT_DYLIB_PATH: {}",
+                path.display()
+            );
+            return true;
+        }
+        log_warn!(
+            "ORT_DYLIB_PATH 已设置但文件不存在（{}），将尝试其他位置",
+            "ORT_DYLIB_PATH is set but the file does not exist ({}); trying other locations",
+            path.display()
+        );
+    }
+
+    // 2. App-managed copy next to the exe.
+    let so_path = exe_dir().join(ORT_SO_NAME);
+    match std::fs::metadata(&so_path) {
+        Ok(meta) if meta.len() >= ORT_SO_MIN_SIZE => {
+            std::env::set_var("ORT_DYLIB_PATH", &so_path);
+            return true;
+        },
+        Ok(meta) => {
+            log_warn!(
+                "{} 文件异常（{} 字节），将重新下载",
+                "{} looks corrupted ({} bytes), will re-download",
+                ORT_SO_NAME,
+                meta.len()
+            );
+            if let Err(error) = std::fs::remove_file(&so_path) {
+                log_warn!(
+                    "无法删除损坏的 OCR 运行库文件；重新下载可能失败。完整错误详情: {:#}",
+                    "The damaged OCR runtime file could not be removed; the replacement download may fail. Full error details: {:#}",
+                    error,
+                );
+            }
+        },
+        Err(_) => {},
+    }
+
+    // 3. System-wide install (e.g. distro package). Note: ort needs the
+    //    matching API version; an incompatible system copy fails at OCR init
+    //    with a clear ort version error, after which the user can re-run and
+    //    let this tool download its own copy.
+    for dir in ORT_SYSTEM_DIRS {
+        for name in [ORT_SO_NAME, "libonnxruntime.so.1"] {
+            let candidate = std::path::Path::new(dir).join(name);
+            if candidate.is_file() {
+                log_info!(
+                    "使用系统安装的 ONNX Runtime: {}",
+                    "Using system-installed ONNX Runtime: {}",
+                    candidate.display()
+                );
+                std::env::set_var("ORT_DYLIB_PATH", &candidate);
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Download ONNX Runtime without interactive prompts (for GUI mode).
+#[cfg(target_os = "linux")]
+pub fn download_onnxruntime() -> Result<()> {
+    let so_path = exe_dir().join(ORT_SO_NAME);
+    log_info!("正在下载 ONNX Runtime...", "Downloading ONNX Runtime...");
+    download_onnxruntime_inner(&so_path)
+}
+
+#[cfg(target_os = "linux")]
+fn download_onnxruntime_inner(so_path: &std::path::Path) -> Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(15))
+        .build()?;
+
+    let mut last_error: Option<anyhow::Error> = None;
+    for (i, url) in ORT_LINUX_DOWNLOAD_URLS.iter().enumerate() {
+        log_info!("尝试源 {}: {}", "Trying source {}:  {}", i + 1, url);
+
+        let response = match client.get(*url).send() {
+            Ok(response) => response,
+            Err(error) => {
+                let error = anyhow::Error::from(error)
+                    .context(format!("could not connect to OCR runtime source {}", i + 1));
+                log_warn!(
+                    "无法连接 OCR 运行库下载源。完整错误详情: {:#}",
+                    "The OCR runtime download source could not be reached. Full error details: {:#}",
+                    error,
+                );
+                last_error = Some(error);
+                continue;
+            },
+        };
+        if !response.status().is_success() {
+            let error = anyhow!("download source {} returned HTTP {}", url, response.status());
+            log_warn!(
+                "下载源 {} 无法提供 OCR 运行库。完整错误详情: {:#}",
+                "Download source {} could not provide the OCR runtime. Full error details: {:#}",
+                i + 1,
+                error,
+            );
+            last_error = Some(error);
+            continue;
+        }
+        let bytes = match response.bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let error = anyhow::Error::from(error).context(format!(
+                    "response body from OCR runtime source {} could not be read",
+                    i + 1
+                ));
+                log_warn!(
+                    "OCR 运行库下载内容无法读取。完整错误详情: {:#}",
+                    "The OCR runtime download could not be read. Full error details: {:#}",
+                    error,
+                );
+                last_error = Some(error);
+                continue;
+            },
+        };
+
+        log_info!(
+            "下载完成（{}字节），正在解压...",
+            "Downloaded ({} bytes), extracting...",
+            bytes.len()
+        );
+        match extract_onnxruntime_so(&bytes, so_path) {
+            Ok(()) => {
+                log_info!(
+                    "ONNX Runtime 已安装到: {}",
+                    "installed to: {}",
+                    so_path.display()
+                );
+                std::env::set_var("ORT_DYLIB_PATH", so_path);
+                return Ok(());
+            },
+            Err(error) => {
+                let error = error.context(format!(
+                    "OCR runtime downloaded from source {} could not be extracted",
+                    i + 1
+                ));
+                log_warn!(
+                    "下载的 OCR 运行库无法解压。完整错误详情: {:#}",
+                    "The downloaded OCR runtime could not be extracted. Full error details: {:#}",
+                    error,
+                );
+                last_error = Some(error);
+                if let Err(error) = std::fs::remove_file(so_path) {
+                    log_warn!(
+                        "无法清理未完成的 OCR 运行库文件。完整错误详情: {:#}",
+                        "The incomplete OCR runtime file could not be removed. Full error details: {:#}",
+                        error,
+                    );
+                }
+            },
+        }
+    }
+
+    let summary = format!(
+        "all OCR runtime download sources failed; manual download: {}",
+        ORT_LINUX_DOWNLOAD_URLS.last().unwrap()
+    );
+    match last_error {
+        Some(error) => Err(error).context(summary),
+        None => Err(anyhow!(summary)),
+    }
+}
+
+/// Ensure libonnxruntime.so is available; if not, offer to download it.
+#[cfg(target_os = "linux")]
+fn ensure_onnxruntime() -> Result<()> {
+    if check_onnxruntime() {
+        return Ok(());
+    }
+
+    println!();
+    println!("=======================================================");
+    println!(
+        "  {} {}",
+        yas::lang::localize("未找到 / Not found:"),
+        ORT_SO_NAME
+    );
+    println!("=======================================================");
+    println!();
+    println!(
+        "{}",
+        yas::lang::localize(
+            "OCR引擎需要ONNX Runtime运行库。 / The OCR engine requires the ONNX Runtime library."
+        )
+    );
+    println!();
+    println!(
+        "{}",
+        yas::lang::localize(
+            "按回车自动下载（约25MB），或自行安装后重试，或按 Ctrl+C 退出。 / Press Enter to download automatically (~25MB), install it yourself and retry, or press Ctrl+C to exit."
+        )
+    );
+    let _ = std::io::stdin().read_line(&mut String::new());
+
+    download_onnxruntime()
+}
+
+/// Extract lib/libonnxruntime.so from the downloaded .tgz archive.
+#[cfg(target_os = "linux")]
+fn extract_onnxruntime_so(tgz_bytes: &[u8], dest: &std::path::Path) -> Result<()> {
+    let reader = std::io::Cursor::new(tgz_bytes);
+    let gz = flate2::read::GzDecoder::new(reader);
+    let mut archive = tar::Archive::new(gz);
+
+    for entry in archive
+        .entries()
+        .map_err(|e| anyhow!("无法读取压缩包 / Cannot read tar archive: {}", e))?
+    {
+        let mut entry =
+            entry.map_err(|e| anyhow!("无法读取压缩包条目 / Cannot read tar entry: {}", e))?;
+        let path = entry
+            .path()
+            .map_err(|e| anyhow!("无法读取条目路径 / Cannot read entry path: {}", e))?
+            .to_path_buf();
+        if path.ends_with("lib/libonnxruntime.so") {
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut buf)?;
+            std::fs::write(dest, &buf)?;
+            return Ok(());
+        }
+    }
+
+    Err(anyhow!(
+        "压缩包中未找到 libonnxruntime.so / libonnxruntime.so not found in tar archive"
+    ))
+}
+
+// ================================================================
+// Rayon thread pool with larger stack
+// ================================================================
 /// Initialize the global rayon thread pool with an 8 MB per-thread stack.
 ///
 /// ONNX Runtime's C++ inference code uses deep call stacks that can overflow
@@ -1356,7 +1642,7 @@ impl GoodScannerApplication {
         init_rayon_pool();
 
         // Check for ONNX Runtime before doing anything else
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         ensure_onnxruntime()?;
 
         let arg_matches = &self.arg_matches;

@@ -232,6 +232,17 @@ fn extract_tag_from_url(url: &str) -> Option<&str> {
 /// `asset_name` selects which binary to check for (e.g. [`ASSET_SCANNER`] or
 /// [`ASSET_CAPTURE`]).  The download URL in [`UpdateStatus::UpdateAvailable`]
 /// points to that specific asset.
+#[cfg(not(target_os = "windows"))]
+pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
+    // Release assets are Windows executables; there is nothing to
+    // self-update from on other platforms yet.
+    let _ = asset_name;
+    Err(anyhow!(
+        "自动更新目前仅支持 Windows / Self-update is currently Windows-only"
+    ))
+}
+
+#[cfg(target_os = "windows")]
 pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
     let current_int = match current_version_int() {
         Some(v) => v,

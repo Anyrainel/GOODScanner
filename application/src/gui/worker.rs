@@ -787,7 +787,7 @@ pub fn spawn_scan(state: &AppState) -> TaskHandle {
     *status.lock().unwrap() = TaskStatus::Running(UiText::new("正在初始化...", "Initializing..."));
 
     // Check ONNX runtime before spawning
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         if !genshin_scanner::cli::check_onnxruntime() {
             *status.lock().unwrap() = TaskStatus::Running(UiText::new(
@@ -825,7 +825,7 @@ pub fn spawn_scan(state: &AppState) -> TaskHandle {
             }
 
             // Ensure ONNX runtime on the worker thread
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             {
                 if !genshin_scanner::cli::check_onnxruntime() {
                     if let Err(e) = genshin_scanner::cli::download_onnxruntime() {
@@ -973,7 +973,7 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
             }
 
             // Ensure ONNX runtime
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             {
                 if !genshin_scanner::cli::check_onnxruntime() {
                     if let Err(e) = genshin_scanner::cli::download_onnxruntime() {

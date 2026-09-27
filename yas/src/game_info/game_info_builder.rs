@@ -25,7 +25,7 @@ impl GameInfoBuilder {
     }
 
     pub fn build(&self) -> Result<GameInfo> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             let mut window_names = Vec::new();
             for name in self.local_window_names.iter() {
@@ -38,7 +38,7 @@ impl GameInfoBuilder {
             // crate::game_info::os::get_game_info(&["原神", "Genshin Impact", "云·原神"])
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(not(any(windows, target_os = "linux")))]
         crate::game_info::os::get_game_info()
     }
 }

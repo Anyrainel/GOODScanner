@@ -1,11 +1,16 @@
 pub use capture_method::CaptureMethod;
 pub use capturer::Capturer;
 pub use generic_capturer::GenericCapturer;
+
+// StreamingCapturer's default constructor builds a Windows capturer; the type
+// is currently unused elsewhere, so it stays Windows-only.
+#[cfg(target_os = "windows")]
 pub use stream_capturer::StreamingCapturer;
 
 mod capture_method;
 mod capturer;
 mod generic_capturer;
+#[cfg(target_os = "windows")]
 mod stream_capturer;
 
 // windows
@@ -33,6 +38,12 @@ pub use winapi_capturer::WinapiCapturer;
 pub use windows_capturer::WindowsCapturer;
 
 // linux
+#[cfg(target_os = "linux")]
+mod x11_capturer;
+
+#[cfg(target_os = "linux")]
+pub use x11_capturer::X11Capturer;
+
 #[cfg(all(target_os = "linux", feature = "capturer_libwayshot"))]
 mod libwayshot_capturer;
 

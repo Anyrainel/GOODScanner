@@ -34,7 +34,9 @@ regex = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-yas = { path = "../../yas", package = "yas_core", features = ["ort", "capturer_wgc"] }
+# capturer_screenshots keeps GenericCapturer defined on Linux (capturer_wgc
+# alone has no Linux backend); on Windows screenshots is already unconditional.
+yas = { path = "../../yas", package = "yas_core", features = ["ort", "capturer_wgc", "capturer_screenshots"] }
 
 # Packet capture is compiled only into GOODCapture.
 etherparse = { version = "0.17", optional = true }

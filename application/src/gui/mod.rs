@@ -481,11 +481,23 @@ impl eframe::App for GuiApp {
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    // Try to load Microsoft YaHei from Windows system fonts
+    // Windows: Microsoft YaHei / SimSun; Linux: common distro CJK fonts.
+    #[cfg(target_os = "windows")]
     let cjk_font_paths = [
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\msyh.ttf",
         "C:\\Windows\\Fonts\\simsun.ttc",
+    ];
+    #[cfg(not(target_os = "windows"))]
+    let cjk_font_paths = [
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSerifCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+        "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+        "/usr/share/fonts/gsfonts/DroidSansFallback.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
     ];
 
     for path in &cjk_font_paths {
