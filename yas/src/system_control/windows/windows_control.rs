@@ -29,6 +29,22 @@ impl WindowsSystemControl {
         anyhow::Ok(())
     }
 
+    pub fn mouse_drag(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) -> anyhow::Result<()> {
+        self.enigo.mouse_move_to(x0, y0);
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        self.enigo.mouse_down(MouseButton::Left);
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let steps = 16;
+        for step in 1..=steps {
+            let x = x0 + (x1 - x0) * step / steps;
+            let y = y0 + (y1 - y0) * step / steps;
+            self.enigo.mouse_move_to(x, y);
+            std::thread::sleep(std::time::Duration::from_millis(12));
+        }
+        self.enigo.mouse_up(MouseButton::Left);
+        anyhow::Ok(())
+    }
+
     pub fn mouse_scroll(&mut self, amount: i32, _try_find: bool) -> anyhow::Result<()> {
         self.enigo.mouse_scroll_y(amount);
 

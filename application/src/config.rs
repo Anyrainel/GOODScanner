@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use hsr_scanner::{TrailblazerGender, TrailblazerIdentity};
 use serde::{Deserialize, Serialize};
 
 pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 2;
@@ -172,6 +173,11 @@ pub struct StarRailSettings {
     pub panel_timeout_ms: u64,
     #[serde(default = "default_next_character_key")]
     pub next_character_key: String,
+    /// The Trailblazer's in-game nickname. Required for Character scans.
+    #[serde(default)]
+    pub trailblazer_name: String,
+    #[serde(default)]
+    pub trailblazer_gender: Option<TrailblazerGender>,
     #[serde(default)]
     pub dump_images: bool,
     #[serde(default)]
@@ -208,6 +214,8 @@ impl Default for StarRailSettings {
             navigation_delay_ms: default_navigation_delay_ms(),
             panel_timeout_ms: default_panel_timeout_ms(),
             next_character_key: default_next_character_key(),
+            trailblazer_name: String::new(),
+            trailblazer_gender: None,
             dump_images: false,
             offline_import_path: String::new(),
             manager_instructions_path: String::new(),
@@ -223,6 +231,22 @@ impl Default for StarRailSettings {
 }
 
 impl StarRailSettings {
+    /// `None` until both the nickname and the gender are filled in.
+    pub fn trailblazer(&self) -> Option<TrailblazerIdentity> {
+        let nickname = self.trailblazer_name.trim();
+        if nickname.is_empty() {
+            return None;
+        }
+        Some(TrailblazerIdentity {
+            nickname: nickname.to_owned(),
+            gender: self.trailblazer_gender?,
+        })
+    }
+
+    pub fn missing_trailblazer(&self) -> bool {
+        self.scan_characters && self.trailblazer().is_none()
+    }
+
     fn populate_default_paths(&mut self, executable_dir: &Path) {
         if self.output_dir.trim().is_empty() {
             self.output_dir = executable_dir.display().to_string();

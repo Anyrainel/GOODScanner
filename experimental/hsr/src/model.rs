@@ -44,6 +44,39 @@ pub struct CharacterReference {
     pub path: String,
 }
 
+/// Trailblazer templates 8001..9000 alternate Caelus (odd) and Stelle (even)
+/// per Path. The character screen shows neither, so the user supplies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrailblazerGender {
+    Caelus,
+    Stelle,
+}
+
+impl TrailblazerGender {
+    pub fn of(avatar_id: u32) -> Option<Self> {
+        (8001..9000).contains(&avatar_id).then_some(if avatar_id % 2 == 0 {
+            Self::Stelle
+        } else {
+            Self::Caelus
+        })
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Caelus => "Caelus",
+            Self::Stelle => "Stelle",
+        }
+    }
+}
+
+/// The renameable Trailblazer as it appears on this account. The reference
+/// data names every Trailblazer template `{NICKNAME}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailblazerIdentity {
+    pub nickname: String,
+    pub gender: TrailblazerGender,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LightConeReference {

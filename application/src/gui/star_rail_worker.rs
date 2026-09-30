@@ -117,6 +117,17 @@ fn scanner_config(
         ));
     }
 
+    let trailblazer = settings.trailblazer();
+    if targets.characters && trailblazer.is_none() {
+        return Err(UiError::from_message(
+            UiText::new(
+                "扫描角色前，请填写开拓者的游戏内昵称并选择性别。",
+                "Before scanning Characters, enter the Trailblazer's in-game nickname and choose a gender.",
+            ),
+            "starRail.trailblazerName or starRail.trailblazerGender is empty",
+        ));
+    }
+
     Ok(ScanConfig {
         targets,
         capture_method: settings.capture_method.to_yas(),
@@ -127,6 +138,7 @@ fn scanner_config(
         expected_characters: (settings.expected_characters > 0)
             .then_some(settings.expected_characters),
         next_character_key,
+        trailblazer,
         dump_images: settings.dump_images,
         ..ScanConfig::default()
     })

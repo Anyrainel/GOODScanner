@@ -284,6 +284,8 @@ In `OCR_CONFUSIONS` array. Rules:
 
 Level uses dual-engine (tries both, takes max valid). Substats use only the general engine. Results are collected as `OcrCandidate` lists per line, then validated by the roll solver.
 
+Second-engine reads (level cross-read, equip retry, substat same-rect retry, character name cross-check, weapon equip fallback) are skipped when both engines run the same model (`ocr_factory::same_model`, via `ImageToText::model_id`) — re-running identical weights on an identical crop cannot change the result. Retries on a different crop (shifted/narrowed substat rects, icon-masked, grayscale set name, other Y probes) always run.
+
 ### Roll Solver (`roll_solver.rs`)
 
 Validates substat combinations against game mechanics:

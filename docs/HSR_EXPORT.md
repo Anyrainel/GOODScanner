@@ -14,6 +14,7 @@ string; `generator` records the actual producer.
 `star_rail_scan_`），避免互相覆盖。GOODScanner 的 `source` 固定为 `HSR-Scanner`，
 真正的生成器写在 `generator` 里。截图扫描会读取画面上能看到的技能/行迹文字；
 无法从画面读出的字段（成就数据包、`ability_version` 等）省略，不另起一套 schema。
+截图扫描把左下角水印里的 UID 写入 `metadata.uid`（整数；需两个画面读数一致才采用，否则为 `null`）；抓包导出始终为 `null`。
 
 ## Required v4 fields / 必填 v4 字段
 
@@ -22,7 +23,7 @@ string; `generator` records the actual producer.
 | `source` | `"HSR-Scanner"` (format discriminator, not the binary name) |
 | `build` | `"v1.2.0"` (Fribbels compatibility identifier) |
 | `version` | `4` |
-| `metadata.uid` | always `null` (account IDs are not exported) |
+| `metadata.uid` | Screenshot scans: the account UID (integer) read from the bottom-left on-screen watermark, accepted once two panels read the same value, else `null`. Packet capture: always `null`. Importers discard this field; it is never read back. |
 | `metadata.trailblazer` | `"Stelle"` or `"Caelus"`, else `null` |
 | `characters[]` | `id` (string), `name`, `path`, `level`, `ascension`, `eidolon`. Packet captures also include `ability_version`. Screenshot OCR fills `skills`, `traces`, and optional `memosprite` from the traces screen when readable; `ability_version` is omitted because it is not on-screen text. |
 | `light_cones[]` | `id` (string), `name`, `level`, `ascension`, `superimposition`, `location`, `lock`, `_uid` |

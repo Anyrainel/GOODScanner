@@ -23,13 +23,32 @@ pub struct WindowIdentity {
     hwnd: isize,
 }
 
+/// Xbox buttons the character roster actually moves on. Keyboard portrait
+/// clicks do not scroll that list; the client does it after a controller
+/// shoulder press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GamepadButton {
+    /// Nudge the right stick so the client switches into controller UI.
+    Enter,
+    RightShoulder,
+    LeftShoulder,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputCommand {
     Click(Point),
+    /// Move the pointer without clicking. A hovered backpack card keeps a
+    /// selection-like border that the keyboard walk must not mistake for the
+    /// selected card.
+    Hover(Point),
     Key(char),
     /// One or more vertical mouse-wheel detents. Positive values scroll the
     /// inventory down, matching the existing YAS Windows controller contract.
     Scroll(i32),
+    /// Press, move, and release. The character header scrolls when dragged
+    /// along the portrait row; the wheel does not move it.
+    Drag { from: Point, to: Point },
+    Gamepad(GamepadButton),
     Escape,
 }
 
@@ -52,6 +71,8 @@ pub struct WindowsHsrDevice {
     capturer: Rc<dyn Capturer<RgbImage>>,
     control: SystemControl,
     cancel: CancelToken,
+    #[cfg(target_os = "windows")]
+    gamepad: Option<vigem_client::Xbox360Wired<vigem_client::Client>>,
 }
 
 impl WindowsHsrDevice {
@@ -96,6 +117,7 @@ impl WindowsHsrDevice {
                 capturer,
                 control: SystemControl::new(),
                 cancel,
+                gamepad: None,
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -159,6 +181,115 @@ impl WindowsHsrDevice {
         }
         Ok(())
     }
+
+    fn move_pointer(&mut self, point: Point) -> HsrResult<()> {
+        if !(0.0..=1.0).contains(&point.x) || !(0.0..=1.0).contains(&point.y) {
+            return Err(HsrError::new(
+                "HSR-DEVICE-INPUT",
+                hints::SCREEN_INVALID,
+                format!(
+                    "normalized pointer target outside client: ({:.4},{:.4})",
+                    point.x, point.y
+                ),
+            ));
+        }
+        // Bind the normalized point to the exact client rectangle that
+        // produced the last verified frame (or the focused baseline before
+        // the first frame). A moved/resized window invalidates the input
+        // instead of silently reusing stale coordinates.
+        let rect = self.revalidate_rect()?;
+        let x = rect.left + (point.x * rect.width.saturating_sub(1) as f64).round() as i32;
+        let y = rect.top + (point.y * rect.height.saturating_sub(1) as f64).round() as i32;
+        self.control.mouse_move_to(x, y).map_err(device_error)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn gamepad_error(error: vigem_client::Error) -> HsrError {
+    HsrError::new(
+        "HSR-DEVICE-GAMEPAD",
+        hints::DEVICE_UNAVAILABLE,
+        format!("virtual Xbox controller failed: {error}"),
+    )
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsHsrDevice {
+    fn ensure_gamepad(&mut self) -> HsrResult<()> {
+        if self.gamepad.is_some() {
+            return Ok(());
+        }
+        let client = vigem_client::Client::connect().map_err(gamepad_error)?;
+        let mut target =
+            vigem_client::Xbox360Wired::new(client, vigem_client::TargetId::XBOX360_WIRED);
+        target.plugin().map_err(gamepad_error)?;
+        let mut ready = false;
+        for _ in 0..30 {
+            if target.wait_ready().is_ok() {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !ready {
+            return Err(HsrError::new(
+                "HSR-DEVICE-GAMEPAD",
+                hints::DEVICE_UNAVAILABLE,
+                "virtual Xbox controller did not become ready",
+            ));
+        }
+        self.gamepad = Some(target);
+        Ok(())
+    }
+
+    fn pulse_gamepad(&mut self, button: GamepadButton) -> HsrResult<()> {
+        self.ensure_gamepad()?;
+        let Some(target) = self.gamepad.as_mut() else {
+            return Err(HsrError::new(
+                "HSR-DEVICE-GAMEPAD",
+                hints::DEVICE_UNAVAILABLE,
+                "virtual Xbox controller was not connected",
+            ));
+        };
+        let (report, hold) = match button {
+            GamepadButton::Enter => (
+                vigem_client::XGamepad {
+                    thumb_rx: 28_000,
+                    ..Default::default()
+                },
+                Duration::from_millis(400),
+            ),
+            GamepadButton::RightShoulder => (
+                vigem_client::XGamepad {
+                    buttons: vigem_client::XButtons!(RB),
+                    ..Default::default()
+                },
+                Duration::from_millis(140),
+            ),
+            GamepadButton::LeftShoulder => (
+                vigem_client::XGamepad {
+                    buttons: vigem_client::XButtons!(LB),
+                    ..Default::default()
+                },
+                Duration::from_millis(140),
+            ),
+        };
+        target.update(&report).or_else(|error| {
+            // The first report after the virtual pad is plugged in often
+            // returns 259 until the Xbox device has finished starting.
+            if !matches!(error, vigem_client::Error::WinError(259)) {
+                return Err(error);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            target.update(&report)
+        }).map_err(gamepad_error)?;
+        std::thread::sleep(hold);
+        target
+            .update(&vigem_client::XGamepad::default())
+            .map_err(gamepad_error)?;
+        std::thread::sleep(Duration::from_millis(30));
+        Ok(())
+    }
 }
 
 impl HsrDevice for WindowsHsrDevice {
@@ -168,10 +299,35 @@ impl HsrDevice for WindowsHsrDevice {
 
     fn capture_client(&mut self) -> HsrResult<RgbImage> {
         let rect = self.revalidate_rect()?;
-        let image = self
-            .capturer
-            .capture_rect(self.client_rect)
-            .map_err(device_error)?;
+        let mut captured = None;
+        let mut last_error = None;
+        for attempt in 0..4 {
+            match self.capturer.capture_rect(self.client_rect) {
+                Ok(image) => {
+                    captured = Some(image);
+                    break;
+                },
+                Err(error) => {
+                    let wrapped = device_error(error);
+                    let transient = wrapped.code() == "HSR-DEVICE-IO"
+                        && wrapped.to_string().contains("no frame");
+                    if !transient || attempt == 3 {
+                        return Err(wrapped);
+                    }
+                    last_error = Some(wrapped);
+                    std::thread::sleep(Duration::from_millis(80));
+                },
+            }
+        }
+        let image = captured.ok_or_else(|| {
+            last_error.unwrap_or_else(|| {
+                HsrError::new(
+                    "HSR-DEVICE-IO",
+                    hints::DEVICE_UNAVAILABLE,
+                    "capture produced no frame",
+                )
+            })
+        })?;
         let expected = (rect.width as u32, rect.height as u32);
         if image.dimensions() != expected {
             return Err(HsrError::new(
@@ -197,8 +353,19 @@ impl HsrDevice for WindowsHsrDevice {
                     "the selected HSR window handle is no longer valid",
                 ));
             }
-            let focused = yas::utils::show_window_and_set_foreground(self.identity.hwnd as _)
-                .map_err(device_error)?;
+            let focused = {
+                // A brief Alt press lets this process call SetForegroundWindow
+                // while another app, such as the editor, is in front.
+                unsafe {
+                    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                        keybd_event, KEYEVENTF_KEYUP, VK_MENU,
+                    };
+                    keybd_event(VK_MENU as u8, 0, 0, 0);
+                    keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+                }
+                yas::utils::show_window_and_set_foreground(self.identity.hwnd as _)
+                    .map_err(device_error)?
+            };
             if !focused || !self.is_foreground() {
                 return Err(HsrError::new(
                     "HSR-DEVICE-FOCUS",
@@ -224,25 +391,9 @@ impl HsrDevice for WindowsHsrDevice {
     fn input(&mut self, command: InputCommand) -> HsrResult<()> {
         self.ensure_input_attended()?;
         match command {
+            InputCommand::Hover(point) => self.move_pointer(point)?,
             InputCommand::Click(point) => {
-                if !(0.0..=1.0).contains(&point.x) || !(0.0..=1.0).contains(&point.y) {
-                    return Err(HsrError::new(
-                        "HSR-DEVICE-INPUT",
-                        hints::SCREEN_INVALID,
-                        format!(
-                            "normalized click outside client: ({:.4},{:.4})",
-                            point.x, point.y
-                        ),
-                    ));
-                }
-                // Bind the normalized point to the exact client rectangle that
-                // produced the last verified frame (or the focused baseline
-                // before the first frame). A moved/resized window invalidates
-                // the click instead of silently reusing stale coordinates.
-                let rect = self.revalidate_rect()?;
-                let x = rect.left + (point.x * rect.width.saturating_sub(1) as f64).round() as i32;
-                let y = rect.top + (point.y * rect.height.saturating_sub(1) as f64).round() as i32;
-                self.control.mouse_move_to(x, y).map_err(device_error)?;
+                self.move_pointer(point)?;
                 std::thread::sleep(Duration::from_millis(12));
 
                 // Close the cursor-move/click TOCTOU window: a focus loss,
@@ -271,7 +422,48 @@ impl HsrDevice for WindowsHsrDevice {
                 #[cfg(target_os = "macos")]
                 self.control.mouse_scroll(amount).map_err(device_error)?;
             },
+            InputCommand::Drag { from, to } => {
+                #[cfg(target_os = "windows")]
+                {
+                    let rect = self.revalidate_rect()?;
+                    let pixel = |point: Point| {
+                        let x = rect.left
+                            + (point.x * rect.width.saturating_sub(1) as f64).round() as i32;
+                        let y = rect.top
+                            + (point.y * rect.height.saturating_sub(1) as f64).round() as i32;
+                        (x, y)
+                    };
+                    let (x0, y0) = pixel(from);
+                    let (x1, y1) = pixel(to);
+                    self.ensure_input_attended()?;
+                    self.control
+                        .mouse_drag(x0, y0, x1, y1)
+                        .map_err(device_error)?;
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = (from, to);
+                    return Err(HsrError::new(
+                        "HSR-DEVICE-INPUT",
+                        hints::DEVICE_UNAVAILABLE,
+                        "portrait-bar dragging is implemented for the Windows client only",
+                    ));
+                }
+            },
             InputCommand::Escape => self.control.key_press(Key::Escape).map_err(device_error)?,
+            InputCommand::Gamepad(button) => {
+                #[cfg(target_os = "windows")]
+                self.pulse_gamepad(button)?;
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = button;
+                    return Err(HsrError::new(
+                        "HSR-DEVICE-GAMEPAD",
+                        hints::DEVICE_UNAVAILABLE,
+                        "virtual Xbox input is implemented for the Windows client only",
+                    ));
+                }
+            },
         }
         Ok(())
     }

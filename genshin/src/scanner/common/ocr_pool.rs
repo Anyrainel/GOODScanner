@@ -72,6 +72,10 @@ impl ImageToText<RgbImage> for OcrGuard {
             .as_ref()
             .and_then(|m| m.get_average_inference_time())
     }
+
+    fn model_id(&self) -> Option<&str> {
+        self.model.as_ref().and_then(|m| m.model_id())
+    }
 }
 
 // Safety: OcrGuard holds a Box<dyn ImageToText<RgbImage> + Send> which is Send.
