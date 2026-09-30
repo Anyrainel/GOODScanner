@@ -89,8 +89,15 @@ pub struct PathTraces {
     pub unlocks: &'static [(&'static str, f64, f64)],
 }
 
-pub fn skill_level_rect(x: f64, y: f64) -> NormRect {
-    NormRect::new(x, y, TRACE_LEVEL_SIZE.0, TRACE_LEVEL_SIZE.1)
+pub fn skill_level_rect(key: &str, x: f64, y: f64) -> NormRect {
+    // basic and the two memosprite badges have a gap on the right. Eight
+    // pixels drops that gap, including a bright corner of the node chrome.
+    let width = if matches!(key, "basic" | "memosprite_skill" | "memosprite_talent") {
+        TRACE_LEVEL_SIZE.0 - 8.0 / 1920.0
+    } else {
+        TRACE_LEVEL_SIZE.0
+    };
+    NormRect::new(x, y, width, TRACE_LEVEL_SIZE.1)
 }
 
 /// Accepts GIlore path keys (`Warrior`) and Fribbels names (`Destruction`).
@@ -344,7 +351,9 @@ const ELATION_TRACES: PathTraces = PathTraces {
 /// hint (x ≈ 0.222 at its leftmost scroll), which OCR otherwise reads as a
 /// trailing `回` that breaks fuzzy name matching.
 pub const CHARACTER_NAME: NormRect = NormRect::new(0.0656, 0.0565, 0.148, 0.034);
-pub const CHARACTER_LEVEL: NormRect = NormRect::new(0.772, 0.218, 0.085, 0.040);
+/// 「等级 80/80」. The bottom stops six pixels above the old edge so the blue
+/// progress bar under the glyphs stays out of the crop.
+pub const CHARACTER_LEVEL: NormRect = NormRect::new(0.772, 0.218, 0.085, 0.040 - 6.0 / 1080.0);
 
 /// Small gold menu title above the tab name (`背包` in the inventory). The
 /// grid detector alone also fires on repeated overworld geometry (stairs).
@@ -366,7 +375,9 @@ pub const RELIC_NAME: NormRect = xyxy(0.0, 0.0342, 0.82, 0.0781);
 /// 「+15」 below the slot label; the top stays clear of the label's glyphs.
 pub const RELIC_LEVEL: NormRect = xyxy(0.05, 0.2503, 0.28, 0.2966);
 pub const RELIC_RARITY: NormRect = xyxy(0.07, 0.15, 0.2, 0.22);
-pub const RELIC_MAIN_NAME: NormRect = xyxy(0.11, 0.3535, 0.7, 0.3974);
+/// Main-stat name. The right edge is 32px inside the previous crop; the
+/// longest names in the live dump still keep about 30px of room.
+pub const RELIC_MAIN_NAME: NormRect = xyxy(0.11, 0.3535, 0.7 - 32.0 / (0.25 * 1920.0), 0.3974);
 pub const RELIC_MAIN_VALUE: NormRect = xyxy(0.775, 0.3535, 0.975, 0.3974);
 /// Wider than kel-z's text-only equipped strip so Chinese 「装备中」 plus the
 /// portrait stay in one dump crop. OCR still keys off the label, not the face.
@@ -384,7 +395,9 @@ pub const RELIC_DISCARD: NormRect = xyxy(0.865, 0.253, 0.935, 0.293);
 pub const LIGHT_CONE_NAME: NormRect = xyxy(0.0, 0.033, 0.62, 0.0755);
 /// 「等级 80/80」 including the label, as for characters. Starting at the
 /// digits left no margin before the first glyph.
-pub const LIGHT_CONE_LEVEL: NormRect = xyxy(0.02, 0.32, 0.35, 0.37);
+/// 「等级 80/80」 including the label. The bottom is six pixels above the
+/// progress bar.
+pub const LIGHT_CONE_LEVEL: NormRect = xyxy(0.02, 0.32, 0.35, 0.37 - 6.0 / (0.78 * 1080.0));
 /// kel-z's tiny box sits on skill percent text in the Chinese panel. This
 /// strip is the 「叠影N阶」 row confirmed from live dumps; its top stays below
 /// the Path-restriction line so no clipped glyphs enter the crop.
@@ -443,6 +456,13 @@ mod tests {
         assert_eq!(hunt.skills.len(), 4);
         assert_eq!(hunt.unlocks.len(), 13);
         assert!(traces_for_path("Memory").is_some());
-        assert!(skill_level_rect(0.5, 0.5).width > 0.0);
+        assert!((skill_level_rect("skill", 0.5, 0.5).width - TRACE_LEVEL_SIZE.0).abs() < 1e-9);
+        assert!(skill_level_rect("basic", 0.5, 0.5).width < TRACE_LEVEL_SIZE.0);
+        assert!(
+            (skill_level_rect("memosprite_skill", 0.5, 0.5).width
+                - skill_level_rect("basic", 0.5, 0.5).width)
+                .abs()
+                < 1e-9
+        );
     }
 }

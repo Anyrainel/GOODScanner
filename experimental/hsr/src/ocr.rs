@@ -286,12 +286,8 @@ pub struct ParsedGearPanel {
 }
 
 /// Minimum joint lock/discard icon confidence that the live manager may treat
-/// as actionable. The icon classifier reports `0.0..=1.0`; `0.60` requires a
-/// dominant-minus-competing classified-pixel margin of at least five percent.
-/// Competing gold/neutral evidence at or above thirty percent of the dominant
-/// signal is unknown regardless of its raw pixel count. This maintained
-/// conservative boundary is still subject to the explicitly documented
-/// real-client calibration pass.
+/// as actionable. A crop that matches a live icon cluster reports `1.0`.
+/// A crop that matches none reports `0.0`.
 pub const MANAGED_ICON_CONFIDENCE_THRESHOLD: f64 = 0.60;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -699,7 +695,7 @@ impl<R: OcrReader> PanelParser<R> {
         let mut skills = BTreeMap::new();
         let mut memosprite = BTreeMap::new();
         for &(key, x, y) in layout.skills {
-            let rect = layout::skill_level_rect(x, y);
+            let rect = layout::skill_level_rect(key, x, y);
             let crop = rect.crop(frame)?;
             let field = OcrField::CharacterSkill(key);
             let text = self.reader.read(field, &crop)?;
@@ -1124,60 +1120,56 @@ fn parse_equipped(
     }
 }
 
-/// Tri-state icon classifier. Gold pixels identify an active lock/mark; a
-/// clear neutral-white glyph identifies the inactive state. Low-contrast or
-/// mixed evidence remains unknown and is never coerced to false.
+/// Closed versus open padlock.
+///
+/// On relics the closed lock is a white keycap with a black body, and the
+/// open lock is a thin light stroke on the gold card (or a dim tan outline
+/// once the relic is marked for discard). On light cones both states are a
+/// white glyph on a black disk; the closed body fills about three times as
+/// many pixels as the open outline. Gold from the relic card is not a lock.
 pub fn detect_icon_state(image: &RgbImage) -> (Option<bool>, f64) {
     if image.as_raw().is_empty() {
         return (None, 0.0);
     }
-    let mut gold = 0_usize;
-    let mut neutral = 0_usize;
+    let mut white = 0_usize;
     let mut dark = 0_usize;
+    let mut gold = 0_usize;
     for pixel in image.pixels() {
         let [r, g, b] = pixel.0;
-        if r > 155 && g > 105 && r > b.saturating_add(35) && g > b.saturating_add(15) {
-            gold += 1;
-        }
-        if r > 165 && g > 165 && b > 165 && r.abs_diff(g) < 28 && g.abs_diff(b) < 28 {
-            neutral += 1;
+        if r > 200 && g > 200 && b > 200 {
+            white += 1;
         }
         if r < 48 && g < 48 && b < 48 {
             dark += 1;
         }
+        if r > 155 && g > 105 && r > b.saturating_add(35) && g > b.saturating_add(15) {
+            gold += 1;
+        }
     }
-    let total = image.width() as usize * image.height() as usize;
-    let gold_ratio = gold as f64 / total.max(1) as f64;
-    let neutral_ratio = neutral as f64 / total.max(1) as f64;
-    let dark_ratio = dark as f64 / total.max(1) as f64;
-    // The live lock control is a white keycap with a black padlock. Gold from
-    // the 5-star card behind that button is not a second lock signal, and the
-    // white disk itself means locked rather than the inactive outline.
-    if neutral_ratio >= 0.12 && dark_ratio >= 0.05 {
-        return (Some(true), (neutral_ratio * 4.0).min(1.0));
+    let total = (image.width() as usize * image.height() as usize).max(1) as f64;
+    let white_ratio = white as f64 / total;
+    let dark_ratio = dark as f64 / total;
+    let gold_ratio = gold as f64 / total;
+    if white_ratio >= 0.22 && dark_ratio >= 0.04 {
+        return (Some(true), 1.0);
     }
-    let (state, dominant, competing, recognition_floor) = if gold_ratio > neutral_ratio {
-        (true, gold_ratio, neutral_ratio, 0.018)
-    } else {
-        (false, neutral_ratio, gold_ratio, 0.022)
-    };
-
-    // A strong total count is not useful when the two mutually-exclusive UI
-    // states both have substantial support. Unknown gets zero confidence so a
-    // mixed lock crop also makes the joint lock/discard manager evidence
-    // non-actionable rather than allowing the other icon through by itself.
-    if dominant <= recognition_floor || competing >= dominant * 0.30 {
-        return (None, 0.0);
+    if (0.08..0.22).contains(&white_ratio) {
+        return (Some(false), 1.0);
     }
-
-    let confidence = ((dominant - competing) * 12.0).min(1.0);
-    (Some(state), confidence)
+    // Discarded relics draw the open padlock in the card's own tan, with no
+    // white keycap. A flat gold or flat white crop has no outline.
+    if white_ratio < 0.08 && gold_ratio >= 0.45 && edge_density(image) >= 0.05 {
+        return (Some(false), 1.0);
+    }
+    (None, 0.0)
 }
 
-/// Discard sits on the 5-star gold card. Card chrome is not a discard mark.
-/// kel-z template-matches the lit trash icon; we keep that idea fail-closed:
-/// red/orange fill is discarded, a gray/white glyph without that fill is not,
-/// and gold-only chrome stays unknown.
+/// Trash-can mark.
+///
+/// Gray is the muted can on a locked relic: discard stays off until the relic
+/// is unlocked. White is the same can on an unlocked relic that is not marked;
+/// the button is available. A red can on a white disk is the marked state.
+/// The gold card around the can is not a mark.
 pub fn detect_discard_state(image: &RgbImage) -> (Option<bool>, f64) {
     if image.as_raw().is_empty() {
         return (None, 0.0);
@@ -1185,40 +1177,29 @@ pub fn detect_discard_state(image: &RgbImage) -> (Option<bool>, f64) {
     let mut red = 0_usize;
     let mut gray = 0_usize;
     let mut white = 0_usize;
-    let mut card_gold = 0_usize;
     for pixel in image.pixels() {
         let [r, g, b] = pixel.0;
-        let is_red = r > 170 && r > g.saturating_add(50) && g < 140 && b < 120;
-        if is_red {
+        if r > 150 && g < 110 && b < 110 && r > g.saturating_add(40) {
             red += 1;
             continue;
         }
-        if r > 165 && g > 165 && b > 165 && r.abs_diff(g) < 28 && g.abs_diff(b) < 28 {
+        if r > 185 && g > 185 && b > 185 {
             white += 1;
             continue;
         }
-        if r.abs_diff(g) < 25 && g.abs_diff(b) < 25 && (60..160).contains(&r) {
+        if r.abs_diff(g) < 18 && g.abs_diff(b) < 18 && (70..180).contains(&r) {
             gray += 1;
-            continue;
-        }
-        if r > 155 && g > 105 && r > b.saturating_add(35) && g > b.saturating_add(15) {
-            card_gold += 1;
         }
     }
     let total = (image.width() as usize * image.height() as usize).max(1) as f64;
     let red_ratio = red as f64 / total;
     let gray_ratio = gray as f64 / total;
     let white_ratio = white as f64 / total;
-    let gold_ratio = card_gold as f64 / total;
-
-    if red_ratio >= 0.08 && red_ratio >= gray_ratio && red_ratio >= white_ratio {
-        return (Some(true), (red_ratio * 8.0).min(1.0));
+    if red_ratio >= 0.06 {
+        return (Some(true), 1.0);
     }
-    if white_ratio >= 0.022 && white_ratio > gold_ratio && white_ratio >= red_ratio * 3.0 {
-        return (Some(false), ((white_ratio - red_ratio) * 12.0).min(1.0));
-    }
-    if gray_ratio >= 0.08 && red_ratio < 0.03 && gray_ratio >= gold_ratio * 0.30 {
-        return (Some(false), (gray_ratio * 6.0).min(1.0));
+    if gray_ratio >= 0.10 || white_ratio >= 0.08 {
+        return (Some(false), 1.0);
     }
     (None, 0.0)
 }
@@ -1471,6 +1452,50 @@ mod tests {
         }
     }
 
+    fn rect_bounds(image: &RgbImage, rect: NormRect) -> (u32, u32, u32, u32) {
+        let x0 = (rect.x * image.width() as f64).floor() as u32;
+        let y0 = (rect.y * image.height() as f64).floor() as u32;
+        let x1 = ((rect.x + rect.width) * image.width() as f64)
+            .ceil()
+            .min(image.width() as f64) as u32;
+        let y1 = ((rect.y + rect.height) * image.height() as f64)
+            .ceil()
+            .min(image.height() as f64) as u32;
+        (x0, y0, x1, y1)
+    }
+
+    fn paint_closed_padlock(image: &mut RgbImage, rect: NormRect) {
+        paint_rect(image, rect, Rgb([210, 168, 90]));
+        let (x0, y0, x1, y1) = rect_bounds(image, rect);
+        let width = x1.saturating_sub(x0);
+        let height = y1.saturating_sub(y0);
+        let inset_x = width / 5;
+        let inset_y = height / 5;
+        for y in y0 + inset_y..y1.saturating_sub(inset_y) {
+            for x in x0 + inset_x..x1.saturating_sub(inset_x) {
+                image.put_pixel(x, y, Rgb([236, 236, 236]));
+            }
+        }
+        let body_x = width / 3;
+        let body_y = height / 3;
+        for y in y0 + body_y..y1.saturating_sub(body_y) {
+            for x in x0 + body_x..x1.saturating_sub(body_x) {
+                image.put_pixel(x, y, Rgb([18, 18, 18]));
+            }
+        }
+    }
+
+    fn paint_open_padlock(image: &mut RgbImage, rect: NormRect) {
+        paint_rect(image, rect, Rgb([12, 12, 16]));
+        let (x0, y0, x1, y1) = rect_bounds(image, rect);
+        let band = ((y1 - y0) / 8).max(1);
+        for y in y0..y0 + band {
+            for x in x0..x1 {
+                image.put_pixel(x, y, Rgb([230, 230, 230]));
+            }
+        }
+    }
+
     fn generated_panel_frame(lock: Rgb<u8>, discard: Rgb<u8>) -> RgbImage {
         generated_panel_frame_with_rarity(lock, discard, 5)
     }
@@ -1525,19 +1550,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    fn icon_image_with_counts(gold: usize, neutral: usize) -> RgbImage {
-        let mut image = RgbImage::from_pixel(100, 100, Rgb([24, 28, 35]));
-        assert!(gold + neutral <= image.pixels().count());
-        for (index, pixel) in image.pixels_mut().enumerate() {
-            if index < gold {
-                *pixel = Rgb([220, 170, 70]);
-            } else if index < gold + neutral {
-                *pixel = Rgb([220, 220, 220]);
-            }
-        }
-        image
     }
 
     fn paint_icon_ratios(
@@ -1677,42 +1689,40 @@ mod tests {
         let blank = RgbImage::from_pixel(40, 40, Rgb([30, 30, 30]));
         assert_eq!(detect_icon_state(&blank).0, None);
         let gold = RgbImage::from_pixel(40, 40, Rgb([220, 170, 70]));
-        assert_eq!(detect_icon_state(&gold).0, Some(true));
+        assert_eq!(detect_icon_state(&gold).0, None);
         let white = RgbImage::from_pixel(40, 40, Rgb([220, 220, 220]));
-        assert_eq!(detect_icon_state(&white).0, Some(false));
+        assert_eq!(detect_icon_state(&white).0, None);
     }
 
     #[test]
-    fn icon_confidence_boundary_uses_the_dominant_minus_competing_margin() {
-        for (gold, neutral, expected) in [
-            (599, 100, Some(true)),
-            (600, 100, Some(true)),
-            (100, 599, Some(false)),
-            (100, 600, Some(false)),
-        ] {
-            let (state, confidence) = detect_icon_state(&icon_image_with_counts(gold, neutral));
-            assert_eq!(state, expected);
-            if gold.max(neutral) - gold.min(neutral) == 500 {
-                assert!(
-                    confidence >= MANAGED_ICON_CONFIDENCE_THRESHOLD,
-                    "exact five-percent net margin must meet the documented boundary: {confidence}"
-                );
-            } else {
-                assert!(
-                    confidence < MANAGED_ICON_CONFIDENCE_THRESHOLD,
-                    "a net margin below five percent must not be actionable: {confidence}"
-                );
+    fn open_padlock_is_unlocked_on_relics_and_light_cones() {
+        let mut relic = RgbImage::from_pixel(40, 40, Rgb([210, 168, 90]));
+        for y in 0..5 {
+            for x in 0..40 {
+                relic.put_pixel(x, y, Rgb([230, 230, 230]));
             }
         }
-    }
+        let (state, confidence) = detect_icon_state(&relic);
+        assert_eq!(state, Some(false));
+        assert!(confidence >= MANAGED_ICON_CONFIDENCE_THRESHOLD);
 
-    #[test]
-    fn competing_gold_and_neutral_evidence_is_unknown_in_both_directions() {
-        for (gold, neutral) in [(400, 600), (600, 400), (150, 500), (500, 150)] {
-            let (state, confidence) = detect_icon_state(&icon_image_with_counts(gold, neutral));
-            assert_eq!(state, None, "gold={gold}, neutral={neutral}");
-            assert_eq!(confidence, 0.0, "gold={gold}, neutral={neutral}");
+        let mut cone = RgbImage::from_pixel(40, 40, Rgb([12, 12, 16]));
+        for y in 0..5 {
+            for x in 0..40 {
+                cone.put_pixel(x, y, Rgb([230, 230, 230]));
+            }
         }
+        assert_eq!(detect_icon_state(&cone).0, Some(false));
+
+        let mut dim = RgbImage::from_pixel(40, 40, Rgb([210, 168, 90]));
+        for y in 8..32 {
+            for x in 8..32 {
+                if x < 12 || x >= 28 || y < 12 || y >= 28 {
+                    dim.put_pixel(x, y, Rgb([120, 90, 40]));
+                }
+            }
+        }
+        assert_eq!(detect_icon_state(&dim).0, Some(false));
     }
 
     #[test]
@@ -1723,11 +1733,28 @@ mod tests {
                 image.put_pixel(x, y, Rgb([90, 90, 90]));
             }
         }
-        assert_eq!(detect_icon_state(&image).0, Some(true));
         assert_eq!(detect_discard_state(&image).0, Some(false));
 
         let gold_only = RgbImage::from_pixel(40, 40, Rgb([220, 170, 70]));
         assert_eq!(detect_discard_state(&gold_only).0, None);
+
+        let mut white_can = RgbImage::from_pixel(40, 40, Rgb([210, 168, 90]));
+        for y in 10..30 {
+            for x in 16..24 {
+                white_can.put_pixel(x, y, Rgb([230, 230, 230]));
+            }
+        }
+        assert_eq!(detect_discard_state(&white_can).0, Some(false));
+
+        let mut marked = RgbImage::from_pixel(40, 40, Rgb([236, 236, 236]));
+        for y in 12..28 {
+            for x in 14..26 {
+                marked.put_pixel(x, y, Rgb([210, 40, 40]));
+            }
+        }
+        let (state, confidence) = detect_discard_state(&marked);
+        assert_eq!(state, Some(true));
+        assert!(confidence >= MANAGED_ICON_CONFIDENCE_THRESHOLD);
     }
 
     #[test]
@@ -1774,10 +1801,9 @@ mod tests {
     fn generated_light_cone_screenshot_parses_fields_without_full_frame_ocr() {
         let layout = StatsPanelLayout::MAINTAINED_SEED;
         let mut frame = RgbImage::from_pixel(1920, 1080, Rgb([24, 28, 35]));
-        paint_rect(
+        paint_open_padlock(
             &mut frame,
             layout.lock_button(InventoryKind::LightCone),
-            Rgb([220, 220, 220]),
         );
         paint_text_evidence(&mut frame, layout.panel.relative(layout::RELIC_EQUIPPED));
         let reader = ScriptedOcrReader::default()
@@ -1798,7 +1824,8 @@ mod tests {
     #[test]
     fn generated_gear_screens_cover_cavern_and_planar_reference_categories() {
         let layout = StatsPanelLayout::MAINTAINED_SEED;
-        let frame = generated_panel_frame(Rgb([230, 180, 65]), Rgb([220, 220, 220]));
+        let mut frame = generated_panel_frame(Rgb([230, 180, 65]), Rgb([220, 220, 220]));
+        paint_closed_padlock(&mut frame, layout.lock_button(InventoryKind::Gear));
         let mut cavern = PanelParser::new(gear_reader("过客的逢春木簪", "生命值", "705"));
         let cavern_result = cavern.parse_gear(&frame, layout, &references()).unwrap();
         assert_eq!(cavern_result.reference.category, GearCategory::Relic);
