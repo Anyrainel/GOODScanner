@@ -205,7 +205,9 @@ The game runs on Linux only via Wine/Proton and is therefore always an **X11/XWa
 
 - **`yas/src/utils/linux_x11.rs`** — the counterpart of `utils/windows.rs`: x11rb with a thread-local connection; window discovery by title (`_NET_CLIENT_LIST` first, tree-walk fallback), absolute client geometry (`get_client_rect` ≡ GetClientRect+ClientToScreen), EWMH activation, pointer query (RMB cancel), GetImage ZPixmap capture (out-of-window regions padded black, like a clipped BitBlt), XTEST injection + effectiveness self-check
 - **Capture**: `X11Capturer` captures the game window's own pixmap (monitor-layout independent); it is the Linux `GenericCapturer`. `capturer_screenshots` / `capturer_libwayshot` features remain as explicit alternatives
-- **Input** (`system_control/linux/`): dual backend chosen on first event — X11 session → XTEST; Wayland session → **ydotool socket** (`ydotool.rs` implements the v1.0.x protocol: raw 24-byte `input_event` writes, no handshake; absolute positioning = corner-slam + delta, needs pointer acceleration flat/disabled). KWin/Mutter advertise XTEST but ignore fake input — never assume XTEST works on Wayland; use `xtest_effective()` to check
+- **Input** (`system_control/linux/`): dual backend chosen on first event — X11 session → XTEST; Wayland session → **ydotool socket** (`ydotool.rs` implements the v1.0.x protocol: raw 24-byte `input_event` writes, no handshake). KWin/Mutter advertise XTEST but ignore fake input — never assume XTEST works on Wayland; use `xtest_effective()` to check
+- **ydotool absolute positioning** (`PointerState` in `linux_control.rs`): ydotoold injects only *relative* motion, so absolute positioning means slam the pointer into the top-left corner to establish an origin, then move by a relative delta. Three non-obvious requirements: (1) the slam and the delta must land in **separate compositor frames** — sent back-to-back they are coalesced, the delta is swallowed and the pointer stays in the corner, which is what made every click land in empty space; (2) relative motion is multiplied by the session's **pointer-speed factor** (2.5× on a default KDE setup), so deltas are divided by a factor learned from a live X11 pointer readback; (3) the slam is used **only to (re)establish the origin** — every later move is a small relative hop from the last verified position, verified each time. Slamming per move would be slow and would jerk the pointer to the corner in the middle of a scroll burst, where the game needs a stable hover over the grid. A readback that does not move for a non-trivial delta is stale (the game can hold the pointer): the origin is dropped so the next move re-slams, and it is reported once
+- **Wheel sign** (`SystemControl::mouse_scroll`): **positive = scroll down** (towards the end of a list) on every platform. enigo's Windows `mouse_scroll_y` negates internally (`length * -120`, enigo 0.1.3) and `macos_control` negates explicitly, so the Linux backend must negate too (X11 button 4 is "up", `REL_WHEEL`'s native sign is "up"). Dropping that negation is silent: each page turn scrolls the inventory *up* instead of down, so a scan past the first page re-reads page 1 forever and reports duplicated artifacts. Measured on the reference KDE setup: one detent = 18 px, so the calibrated 49 ticks ≈ 5 rows.
 - **`GameInfo.window_id`** (u32, `#[cfg(target_os = "linux")]`) is the X11 window — the counterpart of `hwnd`, used by focus/geometry-refresh/alive checks
 - **ORT runtime** detection order (both platforms): `ORT_DYLIB_PATH` env → exe-dir copy → system install (Linux only) → prompt + auto-download (Windows zip / Linux tgz, gh-proxy mirrors first)
 - **Windows-only by design**: self-update (PE assets), packet capture, HSR live capture — each returns a clear bilingual error on Linux instead of compiling out
@@ -252,6 +254,8 @@ Returns `{"status":"ok","enabled":bool,"busy":bool,"gameAlive":bool}`.
 ### Data Caching
 
 Each data type (characters, weapons, artifacts) has an independent `ScanDataCache<T>` storing the latest `(jobId, data)` plus an `incomplete_job_id` slot. All-or-nothing: a scan category populates the cache only if it completes in full during that run; if it aborts/errors/is never reached, the jobId is recorded as incomplete and the cache isn't written — queries for that jobId return 503. Categories the client didn't request leave the cache untouched. Manage/equip jobs that modify in-game state invalidate the artifact cache before execution.
+
+`scan_worker` stops a scan after 10 consecutive item errors. That stop is a failure, not an early finish: the scanners report it via `WorkerHandle::join_with_status()` and `bail!`, so the phase is `Failed` and the (possibly empty) partial list never reaches the cache. Without this, a run where every click missed looked exactly like "this account owns no artifacts".
 
 ### Key config flow
 
@@ -335,6 +339,19 @@ Elixir artifacts display a purple banner ("祝圣之霜定义") that shifts all 
 - **Lock**: Pixel color at `ARTIFACT_LOCK_POS1` (1683, 428)
 - **Elixir**: Purple banner check at (1510–1530, 423)
 - **Astral mark**: Pixel at `ARTIFACT_ASTRAL_POS1`
+
+### Page Turns (vertical scrolling)
+
+The grid scrolls with `mouse_scroll(1)` ticks and `SCROLL_TICKS_PER_PAGE` is calibrated to 5 rows (one detent = 18 px on the reference setup, so 49 ticks ≈ 5 rows; the pacing is not critical, 20–150 ms spacing measures identically). Two traps here, both of which silently corrupt data rather than failing:
+
+- Getting the **wheel sign** backwards (see the platform notes above) scrolls *up*: at the top of the list that is a no-op, so the scan re-reads page 1 for the rest of the run and emits duplicated artifacts.
+- After a scroll the detail panel still shows the *previous* page's last item, and `scan_grid` used to `reset_panel_fingerprint()` — i.e. accept any content as the first item of the new page. A dropped first click therefore recorded that artifact twice and lost the real one. It now re-baselines the panel to the real post-scroll content (`ensure_panel_stable`) and, whenever a click leaves the panel unchanged, re-clicks the cell once (`PANEL_CLICK_ATTEMPTS`) before accepting the capture.
+
+Verify a change here with a multi-page scan (`--artifact-max-count 80`): every page-2 item must be one that was *not* on page 1, and the export must contain no duplicate fingerprints.
+
+### Backpack Tab Verification
+
+`backpack_scanner::select_tab_and_read_count()` OCRs the backpack header — the game draws `"<分类名> <current>/<capacity>"` (e.g. `武器208/2000`) — and requires it to name the requested category. A header naming a *different* known category means the tab click was swallowed (mouse injection broken, or the game window not raised): the click is retried up to 3 times and the scan then fails with a bilingual error instead of reading the wrong inventory. Garbled or unrecognised headers keep the previous lenient behaviour, so an OCR miss on the expected label can never fail an otherwise healthy scan. Only full tab labels are listed in `BACKPACK_TAB_LABELS` — the partial forms (道具/物品) are shared between tabs.
 
 ### Parallelization
 
