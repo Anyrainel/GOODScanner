@@ -107,13 +107,27 @@ impl YdotoolClient {
         self.emit(EV_SYN, SYN_REPORT, 0)
     }
 
-    /// Move the pointer to absolute screen coordinates (corner-slam + delta).
-    pub fn mouse_move_abs(&mut self, x: i32, y: i32) -> Result<()> {
+    /// Slam the pointer into the top-left corner with one `INT32_MIN` relative
+    /// delta per axis (libinput clamps it).
+    ///
+    /// This is the first half of absolute positioning: the target coordinate is
+    /// then applied as a *separate* relative delta. The two must not share a
+    /// frame — a compositor coalesces pending relative motion into one event, so
+    /// sending the delta right after the slam swallows it and leaves the pointer
+    /// sitting in the corner. Callers must pause between the two.
+    pub fn mouse_slam(&mut self) -> Result<()> {
         self.emit(EV_REL, REL_X, INT32_MIN)?;
         self.emit(EV_REL, REL_Y, INT32_MIN)?;
-        self.syn()?;
-        self.emit(EV_REL, REL_X, x)?;
-        self.emit(EV_REL, REL_Y, y)?;
+        self.syn()
+    }
+
+    /// Move the pointer by a relative delta.
+    ///
+    /// The compositor scales relative motion by the session's pointer-speed
+    /// multiplier, so callers compensate with the learned factor.
+    pub fn mouse_move_relative(&mut self, dx: i32, dy: i32) -> Result<()> {
+        self.emit(EV_REL, REL_X, dx)?;
+        self.emit(EV_REL, REL_Y, dy)?;
         self.syn()
     }
 
