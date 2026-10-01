@@ -31,9 +31,22 @@ impl<R> WorkerHandle<R> {
     /// work item index that produced `items[i]`. This allows correlating
     /// output positions with debug image folder names.
     pub fn join(self) -> (Vec<R>, Vec<usize>) {
-        self.handle
+        let (items, index_map, _stop_requested) = self.join_with_status();
+        (items, index_map)
+    }
+
+    /// Like [`Self::join`], but also reports whether the worker asked the scan
+    /// to stop (e.g. too many consecutive item errors).
+    ///
+    /// Callers use the flag to avoid publishing a partial result as a completed
+    /// scan: a run where every item failed must not be indistinguishable from
+    /// an empty inventory.
+    pub fn join_with_status(self) -> (Vec<R>, Vec<usize>, bool) {
+        let WorkerHandle { handle, should_stop } = self;
+        let (items, index_map) = handle
             .join()
-            .expect("工作线程崩溃 / Worker thread panicked")
+            .expect("工作线程崩溃 / Worker thread panicked");
+        (items, index_map, should_stop.load(Ordering::Relaxed))
     }
 
     /// Check if the worker has signaled that scanning should stop.

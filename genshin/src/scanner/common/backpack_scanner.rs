@@ -352,6 +352,73 @@ fn parse_item_count_text(text: &str) -> Result<(i32, i32)> {
     Ok((current, capacity))
 }
 
+/// Backpack categories the header can name, with the strings the Chinese client
+/// draws ("<分类名> <current>/<capacity>").
+///
+/// Only full labels are listed: the partial forms (道具/物品) are shared by
+/// several tabs and would collide.
+const BACKPACK_TAB_LABELS: &[(&str, &[&str])] = &[
+    ("weapon", &["武器"]),
+    ("artifact", &["圣遗物", "圣遗"]),
+    ("food", &["食物"]),
+    ("material", &["材料"]),
+    ("gadget", &["小道具"]),
+    ("quest", &["任务道具"]),
+    ("precious", &["贵重物品", "贵重"]),
+    ("furnishing", &["家具"]),
+    ("development", &["养成道具", "养成"]),
+];
+
+/// How many times a tab selection is retried when the header still names
+/// another category afterwards.
+const TAB_SELECT_ATTEMPTS: u32 = 3;
+
+/// Category label for a tab id used by [`BackpackScanner::select_tab`].
+fn backpack_tab_label(tab: &str) -> &str {
+    match tab {
+        "weapon" => "武器",
+        "artifact" => "圣遗物",
+        other => other,
+    }
+}
+
+/// Which backpack category a header reading names, when it names one we know.
+///
+/// Unknown or garbled text returns `None`: the check only ever rejects a header
+/// that *positively* names another category, so an OCR miss on the expected
+/// label cannot turn into a hard failure.
+fn backpack_header_category(text: &str) -> Option<&'static str> {
+    BACKPACK_TAB_LABELS
+        .iter()
+        .find(|(_, labels)| labels.iter().any(|label| text.contains(label)))
+        .map(|(tab, _)| *tab)
+}
+
+/// Reject a header that names a different category than the requested tab.
+///
+/// The header carries the selected category, so this is what catches a tab
+/// click that silently did nothing (mouse injection failed, or the game window
+/// was not raised): without it the scanner happily reads the wrong inventory
+/// and reports a "successful" scan of zero items.
+fn check_header_tab(expected: &str, text: &str) -> Result<()> {
+    match backpack_header_category(text) {
+        Some(actual) if actual == expected => Ok(()),
+        Some(actual) => Err(anyhow!(
+            "背包页签未切换：期望「{}」，表头显示「{}」（OCR 原文 '{}'）。\
+             这通常意味着鼠标点击没有生效。\n\
+             / Backpack tab did not switch: expected 「{}」, header shows 「{}」 (OCR text '{}'). \
+             This usually means the click never took effect.",
+            backpack_tab_label(expected),
+            backpack_tab_label(actual),
+            text.trim(),
+            backpack_tab_label(expected),
+            backpack_tab_label(actual),
+            text.trim()
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Sample every expected grid cell for the current page.
 fn sample_grid_cells(
     image: &RgbImage,
@@ -467,8 +534,9 @@ pub fn ensure_five_star_filter_active(
 /// 1. Focus game window
 /// 2. Return to main world (Escape × 8)
 /// 3. Press B to open backpack
-/// 4. Click the requested tab
-/// 5. Read item count; if 0, retry from step 2
+/// 4. Click the requested tab and verify the header names that category
+/// 5. Read item count; if 0 — or the tab click did not take effect — retry from
+///    step 2
 ///
 /// Returns `(current_count, max_capacity)` on success.
 ///
@@ -560,6 +628,12 @@ fn apply_artifact_star_filter(
 
 /// Select an inventory tab, apply the artifact 5-star filter if needed, then
 /// OCR the header count. Shared by the full open path and the skip-open path.
+///
+/// The header names the selected category, so each attempt verifies it before
+/// anything else happens. A click that silently does nothing (mouse injection
+/// broken, game window not raised) used to leave the scanner reading whichever
+/// tab happened to be open — every item then failed with an identical
+/// unrecognised-slot error while the job still reported success.
 pub fn select_tab_and_read_count(
     ctrl: &mut GenshinGameController,
     tab: &str,
@@ -568,16 +642,49 @@ pub fn select_tab_and_read_count(
     keep_five_star_filter: bool,
     dump_images: bool,
 ) -> Result<(i32, i32)> {
-    {
-        let mut bp = BackpackScanner::new(ctrl);
-        bp.select_tab(tab, tab_delay);
+    let mut last_wrong_tab: Option<anyhow::Error> = None;
+
+    for attempt in 1..=TAB_SELECT_ATTEMPTS {
+        {
+            let mut bp = BackpackScanner::new(ctrl);
+            bp.select_tab(tab, tab_delay);
+        }
+
+        // Verify the tab took effect before touching the filter UI: on the
+        // wrong tab those clicks land on unrelated widgets.
+        let header = {
+            let bp = BackpackScanner::new(ctrl);
+            bp.read_item_count_text(count_ocr)?
+        };
+        if let Err(error) = check_header_tab(tab, &header) {
+            log_warn!(
+                "[backpack] 页签校验失败（第{}/{}次尝试）: {}",
+                "[backpack] tab check failed (attempt {}/{}): {}",
+                attempt,
+                TAB_SELECT_ATTEMPTS,
+                error
+            );
+            last_wrong_tab = Some(error);
+            utils::sleep(tab_delay as u32);
+            continue;
+        }
+
+        apply_artifact_star_filter(ctrl, tab, tab_delay, keep_five_star_filter, dump_images);
+        if ctrl.check_rmb() {
+            anyhow::bail!("cancelled");
+        }
+        // The star filter changes the visible count, so read it afterwards.
+        let bp = BackpackScanner::new(ctrl);
+        return bp.read_item_count(count_ocr);
     }
-    apply_artifact_star_filter(ctrl, tab, tab_delay, keep_five_star_filter, dump_images);
-    if ctrl.check_rmb() {
-        anyhow::bail!("cancelled");
-    }
-    let bp = BackpackScanner::new(ctrl);
-    bp.read_item_count(count_ocr)
+
+    Err(last_wrong_tab.unwrap_or_else(|| {
+        anyhow!(
+            "无法选中背包页签「{}」 / Could not select the backpack tab 「{}」",
+            backpack_tab_label(tab),
+            backpack_tab_label(tab)
+        )
+    }))
 }
 
 /// What the scan callback should do after processing an event.
@@ -731,6 +838,10 @@ const OCCUPANCY_PANEL_RECT: (f64, f64, f64, f64) = (1310.0, 110.0, 480.0, 860.0)
 
 /// Fast timeout for duplicate items in Fingerprint mode (e.g., identical weapons).
 const PANEL_LOAD_FAST_TIMEOUT_MS: u64 = 100;
+/// Clicks allowed per grid cell before its panel is accepted as-is.
+const PANEL_CLICK_ATTEMPTS: u32 = 2;
+/// Time budget for re-baselining the detail panel right after a page turn.
+const PANEL_REBASELINE_MS: u64 = 150;
 
 fn capture_item_frame(
     ctrl: &GenshinGameController,
@@ -838,14 +949,21 @@ impl<'a> BackpackScanner<'a> {
         utils::sleep(delay as u32);
     }
 
-    /// Read the item count from the backpack header ("X/Y" format).
-    pub fn read_item_count(&self, ocr_model: &dyn ImageToText<RgbImage>) -> Result<(i32, i32)> {
+    /// OCR the backpack header, which the game draws as
+    /// `"<分类名> <current>/<capacity>"` (e.g. `武器208/2000`).
+    pub fn read_item_count_text(&self, ocr_model: &dyn ImageToText<RgbImage>) -> Result<String> {
         let text = self.ctrl.ocr_region(ocr_model, ITEM_COUNT_RECT)?;
         log_debug!(
             "[backpack] 物品数量OCR原文: '{}'",
             "[backpack] item count OCR raw text: '{}'",
             text.trim()
         );
+        Ok(text)
+    }
+
+    /// Read the item count from the backpack header ("X/Y" format).
+    pub fn read_item_count(&self, ocr_model: &dyn ImageToText<RgbImage>) -> Result<(i32, i32)> {
+        let text = self.read_item_count_text(ocr_model)?;
         let parsed = parse_item_count_text(&text);
         if annotator::is_enabled() {
             if let Ok(full) = self.ctrl.capture_game() {
@@ -1408,51 +1526,82 @@ impl<'a> BackpackScanner<'a> {
                                 &page_cell_samples[page_item_idx - 1],
                             );
                         let candidate_samples = page_cell_samples.get(page_item_idx);
+                        // The first cell of the very first page is already
+                        // selected when the backpack opens, so clicking it
+                        // cannot change the panel.
+                        let preselected_first_cell = seeded_first_cell_is_preselected(
+                            page_start_idx,
+                            page_item_idx,
+                            probe_changed_selection,
+                        );
 
-                        // Wait for panel to load based on configured mode
+                        // Wait for panel to load based on configured mode.
+                        //
+                        // A click the game drops (most often the first one after
+                        // a page turn) leaves the previous item's panel in place;
+                        // reading on from there records that artifact twice and
+                        // silently loses the real one. Re-click before accepting
+                        // the capture when the panel did not change.
                         let mut panel_loaded = true;
                         let mut panel_wait_failed = false;
-                        match &config.panel_wait {
-                            PanelWaitMode::FixedDelay { delay_ms } => {
-                                if !is_duplicate {
-                                    utils::sleep(*delay_ms as u32);
-                                    if let Err(e) =
-                                        self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100)
-                                    {
-                                        log_error!(
-                                            "[backpack] 面板稳定检查失败: {}",
-                                            "[backpack] panel stability check failed: {}",
-                                            e
-                                        );
-                                        panel_wait_failed = true;
+                        for attempt in 1..=PANEL_CLICK_ATTEMPTS {
+                            panel_loaded = true;
+                            panel_wait_failed = false;
+                            match &config.panel_wait {
+                                PanelWaitMode::FixedDelay { delay_ms } => {
+                                    if !is_duplicate {
+                                        utils::sleep(*delay_ms as u32);
+                                        if let Err(e) =
+                                            self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, 100)
+                                        {
+                                            log_error!(
+                                                "[backpack] 面板稳定检查失败: {}",
+                                                "[backpack] panel stability check failed: {}",
+                                                e
+                                            );
+                                            panel_wait_failed = true;
+                                        }
                                     }
-                                }
-                            },
-                            PanelWaitMode::Fingerprint {
-                                timeout_ms,
-                                initial_wait_ms,
-                            } => {
-                                let timeout = if is_duplicate && !config.detect_empty_cells {
-                                    PANEL_LOAD_FAST_TIMEOUT_MS
-                                } else {
-                                    *timeout_ms
-                                };
-                                match self.ctrl.wait_until_panel_loaded(
-                                    PANEL_POOL_RECT,
-                                    timeout,
-                                    *initial_wait_ms,
-                                ) {
-                                    Ok(loaded) => panel_loaded = loaded,
-                                    Err(e) => {
-                                        log_error!(
-                                            "[backpack] 面板加载检查失败: {}",
-                                            "[backpack] panel load check failed: {}",
-                                            e
-                                        );
-                                        panel_wait_failed = true;
-                                    },
-                                }
-                            },
+                                },
+                                PanelWaitMode::Fingerprint {
+                                    timeout_ms,
+                                    initial_wait_ms,
+                                } => {
+                                    let timeout = if is_duplicate && !config.detect_empty_cells {
+                                        PANEL_LOAD_FAST_TIMEOUT_MS
+                                    } else {
+                                        *timeout_ms
+                                    };
+                                    match self.ctrl.wait_until_panel_loaded(
+                                        PANEL_POOL_RECT,
+                                        timeout,
+                                        *initial_wait_ms,
+                                    ) {
+                                        Ok(loaded) => panel_loaded = loaded,
+                                        Err(e) => {
+                                            log_error!(
+                                                "[backpack] 面板加载检查失败: {}",
+                                                "[backpack] panel load check failed: {}",
+                                                e
+                                            );
+                                            panel_wait_failed = true;
+                                        },
+                                    }
+                                },
+                            }
+                            if panel_loaded
+                                || panel_wait_failed
+                                || attempt == PANEL_CLICK_ATTEMPTS
+                                || preselected_first_cell
+                            {
+                                break;
+                            }
+                            log_debug!(
+                                "[backpack] 面板未变化（idx={}），重新点击该格子",
+                                "[backpack] panel unchanged (idx={}); clicking the cell again",
+                                page_item_idx
+                            );
+                            self.ctrl.click_at(x, y);
                         }
 
                         if panel_wait_failed {
@@ -1472,16 +1621,6 @@ impl<'a> BackpackScanner<'a> {
                         // it against independently confirmed occupied cells and
                         // a much wider detail-panel region before concluding
                         // that the candidate is empty.
-                        //
-                        // Exception: the first cell was selected to seed the
-                        // initial panel baseline. Until a successful page probe
-                        // changes selection, re-clicking that cell cannot change
-                        // the panel and must not be mistaken for an empty slot.
-                        let preselected_first_cell = seeded_first_cell_is_preselected(
-                            page_start_idx,
-                            page_item_idx,
-                            probe_changed_selection,
-                        );
                         if config.detect_empty_cells
                             && !is_duplicate
                             && !panel_loaded
@@ -1719,11 +1858,21 @@ impl<'a> BackpackScanner<'a> {
                 break 'outer;
             }
 
-            // Reset fingerprint after scroll — new page means panel content changed.
-            // Skip reset when detecting empty cells: keeping the previous panel
-            // snapshot as baseline allows detecting empty cells on the new page.
+            // Re-baseline the panel after a scroll. Clearing it (the previous
+            // behaviour) accepts *any* content as the first item of the new
+            // page — including the still-selected last item of the old page when
+            // the first click is dropped. Refreshing it to the real post-scroll
+            // content keeps a dropped click detectable. Skip when detecting
+            // empty cells: the old page's baseline is what identifies them.
             if !config.detect_empty_cells {
-                self.ctrl.reset_panel_fingerprint();
+                if let Err(e) = self.ctrl.ensure_panel_stable(PANEL_POOL_RECT, PANEL_REBASELINE_MS)
+                {
+                    log_warn!(
+                        "[backpack] 翻页后面板基线刷新失败: {}",
+                        "[backpack] failed to re-baseline the panel after scrolling: {}",
+                        e
+                    );
+                }
             }
 
             let action = callback(&mut *self.ctrl, GridEvent::PageScrolled);
@@ -2070,6 +2219,36 @@ mod tests {
             (2720, 2700)
         );
         assert!(parse_item_count_text("not a count").is_err());
+    }
+
+    #[test]
+    fn header_category_identifies_the_open_tab() {
+        assert_eq!(backpack_header_category("武器208/2000"), Some("weapon"));
+        assert_eq!(backpack_header_category("圣遗物 2720/2700"), Some("artifact"));
+        assert_eq!(backpack_header_category("圣遗 42/2000"), Some("artifact"));
+        assert_eq!(backpack_header_category("养成道具 12/2000"), Some("development"));
+        assert_eq!(backpack_header_category("任务道具 1/2000"), Some("quest"));
+        assert_eq!(backpack_header_category("贵重物品 3/2000"), Some("precious"));
+    }
+
+    #[test]
+    fn header_category_ignores_unrecognised_text() {
+        // A missed label must not turn into a hard failure.
+        assert_eq!(backpack_header_category(""), None);
+        assert_eq!(backpack_header_category("208/2000"), None);
+        assert_eq!(backpack_header_category("引h208"), None);
+    }
+
+    #[test]
+    fn header_tab_check_rejects_a_tab_that_did_not_switch() {
+        assert!(check_header_tab("artifact", "圣遗物208/2000").is_ok());
+        // An unreadable header keeps the scan going (legacy behaviour) ...
+        assert!(check_header_tab("artifact", "208/2000").is_ok());
+        // ... but a header naming another category is a failed click.
+        let error = check_header_tab("artifact", "武器208/2000").unwrap_err();
+        assert!(error.to_string().contains("圣遗物"));
+        assert!(error.to_string().contains("武器"));
+        assert!(check_header_tab("weapon", "材料1024/2000").is_err());
     }
 
     #[test]

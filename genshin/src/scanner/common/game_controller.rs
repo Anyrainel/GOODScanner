@@ -56,6 +56,12 @@ const PANEL_FRAME_MAX_MEAN_EXCESS_DIFF: f64 = 0.20;
 const PANEL_FRAME_MAX_CHANGED_BYTE_RATIO: f64 = 0.01;
 /// Byte deltas above this are counted by the ratio guard.
 const PANEL_FRAME_CHANGED_BYTE_DIFF: u8 = 16;
+/// Idle pause between captures while the panel still shows the old item.
+///
+/// The wait loop is time-bounded, so this only caps how many captures it can
+/// issue per timeout window; without it an unchanged panel produced hundreds of
+/// back-to-back GetImage calls.
+const PANEL_WAIT_IDLE_MS: u32 = 5;
 
 pub(crate) fn panel_frames_similar(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -785,8 +791,13 @@ impl GenshinGameController {
                 if cap_ms < 18 {
                     utils::sleep(18 - cap_ms);
                 }
+            } else {
+                // Still showing the previous item's content. Yield briefly
+                // instead of spinning: this branch used to issue back-to-back
+                // captures (hundreds within the timeout window), burning CPU
+                // and flooding the log while the panel never changed.
+                utils::sleep(PANEL_WAIT_IDLE_MS);
             }
-            // else: still showing the previous item's content, keep waiting
         }
 
         // Timeout — store whatever we have and proceed
