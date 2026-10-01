@@ -276,6 +276,12 @@ fn format_timestamp() -> String {
 
 #[cfg(not(windows))]
 fn format_timestamp() -> String {
+    // Local wall-clock time, matching the Windows `GetLocalTime` path. The
+    // previous `epoch % 86400` arithmetic printed UTC on Linux, so every line
+    // of a run log was offset from the file's own modification time.
+    if let Some(local) = yas::utils::local_time_hms() {
+        return local;
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

@@ -41,6 +41,33 @@ pub fn available_memory_bytes() -> Option<u64> {
     None
 }
 
+/// Local wall-clock time formatted as `HH:MM:SS`.
+///
+/// Goes through `localtime_r` so the result honours the session timezone. The
+/// previous Linux implementation formatted `epoch % 86400` — that is UTC, which
+/// made every log line disagree with the log file's own modification time.
+#[cfg(target_os = "linux")]
+pub fn local_time_hms() -> Option<String> {
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        if libc::localtime_r(&now, tm.as_mut_ptr()).is_null() {
+            return None;
+        }
+        let tm = tm.assume_init();
+        Some(format!(
+            "{:02}:{:02}:{:02}",
+            tm.tm_hour, tm.tm_min, tm.tm_sec
+        ))
+    }
+}
+
+/// No local-time implementation on this platform; callers fall back to UTC.
+#[cfg(not(target_os = "linux"))]
+pub fn local_time_hms() -> Option<String> {
+    None
+}
+
 mod misc;
 
 mod fonts;

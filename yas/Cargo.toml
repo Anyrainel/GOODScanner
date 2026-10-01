@@ -37,6 +37,8 @@ x11rb = { version = "0.13", features = ["xtest"] }
 xkeysym = "0.2"
 # Canonical evdev KEY_/BTN_ constants for the uinput/ydotool path.
 evdev = "0.13"
+# `localtime_r` for local (timezone-aware) log timestamps.
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 screenshots = { version = "0.8" }

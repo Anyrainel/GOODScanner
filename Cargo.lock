@@ -6858,6 +6858,7 @@ dependencies = [
  "fontdb",
  "image 0.24.9",
  "lazy_static",
+ "libc",
  "libwayshot 0.3.0",
  "log",
  "ndarray",
