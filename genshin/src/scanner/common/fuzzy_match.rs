@@ -34,6 +34,18 @@ const OCR_CONFUSIONS: &[(&str, &str)] = &[
     ("\u{7984}", "\u{6E0C}"), // 禄 → 渌
 ];
 
+/// Multi-character OCR misreads: (wrong text, correct text).
+///
+/// `OCR_CONFUSIONS` above can only swap one character for one character, which is
+/// not enough when a rare glyph is read as *several* common characters.  A live
+/// example: 银釭 (SilverLight) is read as 「银金红」 — 釭 becomes 金 + 红.  This map
+/// is consulted after every existing tier, so an entry can never take precedence
+/// over a name that matched exactly or fuzzily.  Only add an entry when the wrong
+/// text does not appear in (nor is a substring of) any legitimate name.
+const OCR_PHRASE_CONFUSIONS: &[(&str, &str)] = &[
+    ("银金红", "银釭"), // 银金红 → 银釭 (SilverLight)
+];
+
 /// Fuzzy match OCR text against a name→key map.
 ///
 /// Matching strategy (in order):
@@ -45,6 +57,8 @@ const OCR_CONFUSIONS: &[(&str, &str)] = &[
 ///    uniquely long common substring (≥2 CJK chars) with exactly one candidate,
 ///    match it. Handles cases like "海染碟" → "海染砗磲" where OCR garbled the
 ///    tail but the shared prefix "海染" is unique across all candidates.
+/// 6. Multi-character OCR confusion (see `OCR_PHRASE_CONFUSIONS`) — last resort for
+///    rare glyphs read as several characters, e.g. "银金红" → "银釭".
 ///
 /// Port of `fuzzyMatchMap()` from GOODScanner/lib/constants.js
 /// Like `fuzzy_match_map` but also returns the matched entity name (map key).
@@ -288,6 +302,31 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
         return best_lcs_match;
     }
 
+    // Phrase-level OCR confusion: a rare glyph read as several common characters.
+    // Deliberately last — every tier above has already had its chance, so this can
+    // only rescue inputs that would otherwise be dropped entirely.
+    for &(from, to) in OCR_PHRASE_CONFUSIONS {
+        if let Some(start) = cleaned.find(from) {
+            // Plain slicing: the replacement may be shorter than the matched
+            // phrase (银金红 3 chars → 银釭 2 chars), and slicing sidesteps any
+            // question about `str::replace` pattern inference here.
+            let mut alt = String::with_capacity(cleaned.len());
+            alt.push_str(&cleaned[..start]);
+            alt.push_str(to);
+            alt.push_str(&cleaned[start + from.len()..]);
+            if let Some(val) = map.get(&alt) {
+                log_debug!(
+                    "[fuzzy] 多字OCR混淆匹配: cleaned={:?} → {} ({})",
+                    "[fuzzy] multi-char OCR confusion match: cleaned={:?} → {} ({})",
+                    cleaned,
+                    alt,
+                    val
+                );
+                return Some((alt, val.clone()));
+            }
+        }
+    }
+
     log_debug!(
         "[fuzzy] 无匹配: cleaned={:?} (chars={}, map_size={})",
         "[fuzzy] NO MATCH: cleaned={:?} (chars={}, map_size={})",
@@ -395,6 +434,19 @@ mod tests {
             fuzzy_match_map("神里绫华", &map),
             Some("KamisatoAyaka".to_string())
         );
+    }
+
+    #[test]
+    fn test_multi_char_ocr_confusion() {
+        let mut map = HashMap::new();
+        map.insert("银釭".to_string(), "SilverLight".to_string());
+        // 釭 is a rare glyph that OCR reads as two characters.
+        assert_eq!(
+            fuzzy_match_map("银金红", &map),
+            Some("SilverLight".to_string())
+        );
+        // The phrase tier is last: a clean name still matches exactly.
+        assert_eq!(fuzzy_match_map("银釭", &map), Some("SilverLight".to_string()));
     }
 
     #[test]
