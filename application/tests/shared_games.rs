@@ -394,6 +394,55 @@ fn stop_before_worker_start_never_opens_capture_boundary() {
 
 #[cfg(feature = "capture")]
 #[test]
+fn genshin_capture_completion_releases_native_boundary_without_recapture_or_rendering() {
+    use good_tools_app::gui::capture_tab::{native_boundary_available_for_test, CaptureTabState};
+
+    let root = temp_root("genshin-capture-handoff");
+    fs::create_dir_all(&root).unwrap();
+    let mut capture = CaptureTabState::new(root.display().to_string());
+    let mut export = genshin_scanner::scanner::common::models::GoodExport::new(
+        Some(vec![]),
+        Some(vec![]),
+        Some(vec![]),
+    );
+    export.achievements = Some(vec![80001]);
+    let release = capture.inject_export_for_test(export);
+
+    // A result alone is insufficient: the old task must release its native
+    // boundary before the scanner/manager can be enabled or Done is shown.
+    capture.tick();
+    assert!(capture.is_busy());
+    assert!(capture.completed_export_path_for_test().is_none());
+    assert!(!native_boundary_available_for_test());
+    release.send(()).unwrap();
+
+    // No Capture tab rendering or Recapture click throughout this handoff.
+    let path = (0..200)
+        .find_map(|_| {
+            capture.tick();
+            let path = capture.completed_export_path_for_test().map(PathBuf::from);
+            if path.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            path
+        })
+        .expect("capture must export and finish without a user action");
+    assert!(!capture.is_busy());
+    assert!(capture.handle.is_none());
+    assert!(
+        native_boundary_available_for_test(),
+        "next game task must acquire the boundary"
+    );
+    let saved: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(saved["format"], "GOOD");
+    assert_eq!(saved["version"], 3);
+    assert_eq!(saved["achievements"], serde_json::json!([80001]));
+    remove_test_tree(&root);
+}
+
+#[cfg(feature = "capture")]
+#[test]
 fn completed_capture_advances_and_exports_while_its_tab_is_inactive() {
     let root = temp_root("inactive-capture-completion");
     let output_dir = root.join("exports");

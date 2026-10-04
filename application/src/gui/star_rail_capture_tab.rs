@@ -462,13 +462,15 @@ fn action_bar(
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !cleanup_busy,
-                        egui::Button::new(lang.t("↻ 重新抓包", "↻ Capture Again")),
+                        !cleanup_busy
+                            && !game_busy
+                            && capture_targets(settings).any()
+                            && !settings.output_dir.trim().is_empty(),
+                        egui::Button::new(lang.t("▶ 开始抓包", "▶ Start Capture")),
                     )
                     .clicked()
                 {
-                    state.handle = None;
-                    state.phase = CapturePhase::Idle;
+                    start_capture(settings, state);
                 }
                 if cleanup_busy {
                     ui.spinner();

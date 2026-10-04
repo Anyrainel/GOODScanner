@@ -53,14 +53,7 @@ use crate::scanner::common::models::GoodExport;
 
 /// Commands the UI can send to the monitor.
 pub enum CaptureCommand {
-    StartCapture {
-        include_achievements: bool,
-    },
     StopCapture,
-    Export {
-        settings: CaptureExportSettings,
-        reply: tokio::sync::oneshot::Sender<Result<GoodExport>>,
-    },
 }
 
 /// State shared between the monitor and UI.
@@ -155,64 +148,77 @@ impl CaptureMonitor {
         })
     }
 
-    /// Main event loop. Processes packets and UI commands.
-    pub async fn run(mut self, mut cmd_rx: mpsc::UnboundedReceiver<CaptureCommand>) {
+    /// Run one capture, returning its export only after the packet task stops.
+    /// Completion must not depend on the UI requesting export or closing a sender.
+    pub async fn run(
+        mut self,
+        mut cmd_rx: mpsc::UnboundedReceiver<CaptureCommand>,
+        settings: CaptureExportSettings,
+    ) -> Result<Option<GoodExport>> {
+        // A Stop/close during initialization must not start packet capture later.
+        if cmd_rx.is_closed() || cmd_rx.try_recv().is_ok() {
+            return Ok(None);
+        }
+        self.start_capture(settings.include_achievements);
+        self.run_capture(cmd_rx, &settings).await
+    }
+
+    async fn run_capture(
+        mut self,
+        mut cmd_rx: mpsc::UnboundedReceiver<CaptureCommand>,
+        settings: &CaptureExportSettings,
+    ) -> Result<Option<GoodExport>> {
         loop {
+            if self
+                .state
+                .lock()
+                .is_ok_and(|s| s.complete || s.error.is_some())
+            {
+                break;
+            }
             tokio::select! {
                 Some(packet) = self.packet_rx.recv() => {
                     self.handle_packet(packet);
                 }
-                command = cmd_rx.recv() => {
-                    match command {
-                        Some(cmd) => {
-                            if self.handle_command(cmd) {
-                                break;
-                            }
-                        },
-                        None => break,
-                    }
-                }
+                _ = cmd_rx.recv() => break,
                 result = wait_for_capture_task(&mut self.capture_task) => {
                     self.handle_capture_task_result(result);
                 }
                 else => break,
             }
         }
+
+        // Keep native task ownership until pktmon's stream and worker have
+        // actually been dropped, on completion, cancellation, and failure.
+        self.stop_capture();
+        if let Some(task) = self.capture_task.take() {
+            self.handle_capture_task_result(task.await);
+        }
+        let state = self.state.lock().expect("capture state poisoned").clone();
+        if let Some(error) = state.error {
+            return Err(anyhow!(error));
+        }
+        if state.complete {
+            return self.player_data.export(settings).map(Some);
+        }
+        Ok(None)
     }
 
-    /// Returns true if the loop should exit.
-    fn handle_command(&mut self, cmd: CaptureCommand) -> bool {
-        match cmd {
-            CaptureCommand::StartCapture {
-                include_achievements,
-            } => {
-                if self.capture_task.is_some() {
-                    return false;
-                }
-                self.player_data.begin_capture();
-                self.require_achievements = include_achievements;
-                let cancel_token = CancellationToken::new();
-                if let Ok(mut state) = self.state.lock() {
-                    *state = CaptureState {
-                        capturing: true,
-                        ..CaptureState::default()
-                    };
-                }
-                self.capture_task = Some(tokio::spawn(capture_task(
-                    cancel_token.clone(),
-                    self.packet_tx.clone(),
-                )));
-                self.capture_cancel_token = Some(cancel_token);
-            },
-            CaptureCommand::StopCapture => {
-                self.stop_capture();
-            },
-            CaptureCommand::Export { settings, reply } => {
-                let result = self.player_data.export(&settings);
-                let _ = reply.send(result);
-            },
+    fn start_capture(&mut self, include_achievements: bool) {
+        self.player_data.begin_capture();
+        self.require_achievements = include_achievements;
+        let cancel_token = CancellationToken::new();
+        if let Ok(mut state) = self.state.lock() {
+            *state = CaptureState {
+                capturing: true,
+                ..CaptureState::default()
+            };
         }
-        false
+        self.capture_task = Some(tokio::spawn(capture_task(
+            cancel_token.clone(),
+            self.packet_tx.clone(),
+        )));
+        self.capture_cancel_token = Some(cancel_token);
     }
 
     fn stop_capture(&mut self) {
@@ -822,6 +828,142 @@ mod tests {
     const ITEMS_BIN: &[u8] = include_bytes!("testdata/items.bin");
     const AVATARS_BIN: &[u8] = include_bytes!("testdata/avatars.bin");
     const NOISE_BIN: &[u8] = include_bytes!("testdata/noise.bin");
+
+    fn test_monitor(state: CaptureState) -> CaptureMonitor {
+        let data_cache = serde_json::from_str(r#"{"version":1,"git_hash":"test"}"#).unwrap();
+        let (packet_tx, packet_rx) = mpsc::unbounded_channel();
+        CaptureMonitor {
+            player_data: PlayerData::new(data_cache),
+            sniffer: GameSniffer::new(),
+            state: Arc::new(Mutex::new(state)),
+            capture_cancel_token: None,
+            capture_task: None,
+            packet_tx,
+            packet_rx,
+            dump_packets: false,
+            dump_dir: std::path::PathBuf::new(),
+            dump_counter: 0,
+            require_achievements: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_capture_exports_and_exits_with_command_sender_still_open() {
+        let mut monitor = test_monitor(CaptureState {
+            capturing: true,
+            complete: true,
+            has_characters: true,
+            has_items: true,
+            has_achievements: true,
+            ..CaptureState::default()
+        });
+        monitor.player_data.process_achievements(&[80001]);
+        let cancel = CancellationToken::new();
+        let worker_cancel = cancel.clone();
+        let cleanup_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cleanup_done = cleanup_done.clone();
+        monitor.capture_cancel_token = Some(cancel);
+        monitor.capture_task = Some(tokio::spawn(async move {
+            worker_cancel.cancelled().await;
+            tokio::task::yield_now().await;
+            worker_cleanup_done.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        }));
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let export = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            monitor.run_capture(receiver, &CaptureExportSettings::default()),
+        )
+        .await
+        .expect("completion must not wait for UI commands")
+        .unwrap()
+        .expect("completed capture must return its export");
+        assert_eq!(export.achievements, Some(vec![80001]));
+        assert!(cleanup_done.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            sender.is_closed(),
+            "monitor must release the command receiver"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_and_channel_close_join_the_packet_worker_without_exporting() {
+        for stop_command in [true, false] {
+            let mut monitor = test_monitor(CaptureState {
+                capturing: true,
+                ..CaptureState::default()
+            });
+            let shared = monitor.state.clone();
+            let cancel = CancellationToken::new();
+            let worker_cancel = cancel.clone();
+            let (cleanup_tx, cleanup_rx) = tokio::sync::oneshot::channel();
+            monitor.capture_cancel_token = Some(cancel);
+            monitor.capture_task = Some(tokio::spawn(async move {
+                worker_cancel.cancelled().await;
+                let _ = cleanup_tx.send(());
+                Ok(())
+            }));
+            let (sender, receiver) = mpsc::unbounded_channel();
+            if stop_command {
+                sender.send(CaptureCommand::StopCapture).unwrap();
+            } else {
+                drop(sender);
+            }
+            let export = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                monitor.run_capture(receiver, &CaptureExportSettings::default()),
+            )
+            .await
+            .expect("stop must finish without another UI action")
+            .unwrap();
+            assert!(export.is_none());
+            cleanup_rx.await.expect("packet worker must finish cleanup");
+            let state = shared.lock().unwrap();
+            assert!(!state.capturing);
+            assert!(state.error.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_during_initialization_does_not_start_packet_capture() {
+        for stop_command in [true, false] {
+            let monitor = test_monitor(CaptureState::default());
+            let shared = monitor.state.clone();
+            let (sender, receiver) = mpsc::unbounded_channel();
+            if stop_command {
+                sender.send(CaptureCommand::StopCapture).unwrap();
+            } else {
+                drop(sender);
+            }
+            assert!(monitor
+                .run(receiver, CaptureExportSettings::default())
+                .await
+                .unwrap()
+                .is_none());
+            assert!(!shared.lock().unwrap().capturing);
+        }
+    }
+
+    #[tokio::test]
+    async fn packet_failure_exits_without_waiting_for_ui_and_preserves_details() {
+        let mut monitor = test_monitor(CaptureState {
+            capturing: true,
+            ..CaptureState::default()
+        });
+        monitor.capture_task = Some(tokio::spawn(async {
+            Err(anyhow!("pktmon diagnostic").context("capture failed"))
+        }));
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            monitor.run_capture(receiver, &CaptureExportSettings::default()),
+        )
+        .await
+        .expect("capture failure must terminate the monitor")
+        .unwrap_err();
+        assert_eq!(error.to_string(), "capture failed: pktmon diagnostic");
+        assert!(sender.is_closed());
+    }
 
     #[test]
     fn capture_creation_error_preserves_nested_source_chain() {

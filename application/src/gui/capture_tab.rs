@@ -199,6 +199,63 @@ impl CaptureTabState {
             .as_ref()
             .and_then(|handle| handle.native_failure(phase))
     }
+
+    #[cfg(feature = "test-as-invoker")]
+    #[doc(hidden)]
+    pub fn inject_export_for_test(&mut self, export: GoodExport) -> std::sync::mpsc::Sender<()> {
+        let native_crash = Arc::new(worker::NativeCrashState::new());
+        let thread_crash = native_crash.clone();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            assert!(worker::activate_native_crash(&thread_crash));
+            let context = yas::native_crash::inherit_current_task();
+            // Deliberately deliver data before cleanup to test the UI's exit gate.
+            let _ = result_tx.send(Ok(export));
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            drop(context);
+            worker::deactivate_native_crash(&thread_crash);
+        });
+        ready_rx
+            .recv()
+            .expect("test capture worker must acquire its boundary");
+        self.handle = Some(CaptureHandle {
+            _thread: thread,
+            cmd_tx: Mutex::new(None),
+            native_crash,
+            native_failure: Mutex::new(None),
+        });
+        *self.capture_state.lock().unwrap() = CaptureState {
+            complete: true,
+            ..CaptureState::default()
+        };
+        self.pending_export = Some(PendingExport { rx: result_rx });
+        self.phase = Phase::Initializing;
+        release_tx
+    }
+
+    #[cfg(feature = "test-as-invoker")]
+    #[doc(hidden)]
+    pub fn completed_export_path_for_test(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Done { path, .. } => Some(path),
+            Phase::Failed(error) => panic!("capture export failed: {error:?}"),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "test-as-invoker")]
+#[doc(hidden)]
+pub fn native_boundary_available_for_test() -> bool {
+    let next_task = Arc::new(worker::NativeCrashState::new());
+    if !worker::activate_native_crash(&next_task) {
+        return false;
+    }
+    worker::deactivate_native_crash(&next_task);
+    true
 }
 
 /// Spawn the capture monitor on a background thread with a tokio runtime.
@@ -206,11 +263,11 @@ fn spawn_capture(
     capture_state: Arc<Mutex<CaptureState>>,
     cmd_tx_out: &mut Option<tokio::sync::mpsc::UnboundedSender<CaptureCommand>>,
     dump_packets: bool,
-    include_achievements: bool,
+    settings: CaptureExportSettings,
     native_crash: Arc<worker::NativeCrashState>,
-) -> Result<std::thread::JoinHandle<()>, UiError> {
+) -> Result<(std::thread::JoinHandle<()>, PendingExport), UiError> {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
-    let ui_cmd_tx = cmd_tx.clone();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
 
     let state = capture_state.clone();
 
@@ -249,7 +306,7 @@ fn spawn_capture(
                     if let Ok(mut s) = state.lock() {
                         s.error = Some(format!("{:#}", e));
                     }
-                    return;
+                    return Ok(None);
                 },
             };
 
@@ -268,24 +325,15 @@ fn spawn_capture(
                         if let Ok(mut s) = state.lock() {
                             s.error = Some(format!("{:#}", e));
                         }
-                        return;
+                        return Ok(None);
                     },
                 };
 
-                // Initialization succeeded — immediately start capture
-                let _ = cmd_tx.send(CaptureCommand::StartCapture {
-                    include_achievements,
-                });
-                // The UI's CaptureHandle owns the long-lived sender. Dropping
-                // this thread-local clone lets monitor.run observe channel
-                // closure when the UI stops, retries, or discards the task.
-                drop(cmd_tx);
-
-                monitor.run(cmd_rx).await;
-            });
+                monitor.run(cmd_rx, settings).await
+            })
         }));
 
-        if let Err(panic_info) = result {
+        if let Err(ref panic_info) = result {
             let failure = UiError::from_panic(
                 UiText::new(
                     "抓包任务因意外的内部错误而停止。",
@@ -308,6 +356,13 @@ fn spawn_capture(
         if native_guard_active {
             worker::deactivate_native_crash(&native_crash);
         }
+        // Publish data only after the runtime and its native boundary are gone.
+        // The completed result must never leave another task blocked on capture.
+        match result {
+            Ok(Ok(Some(export))) => { let _ = result_tx.send(Ok(export)); },
+            Ok(Err(error)) => { let _ = result_tx.send(Err(error)); },
+            Ok(Ok(None)) | Err(_) => {},
+        }
         })
         .map_err(|error| {
             UiError::from_error(
@@ -318,8 +373,8 @@ fn spawn_capture(
                 error,
             )
         })?;
-    *cmd_tx_out = Some(ui_cmd_tx);
-    Ok(thread)
+    *cmd_tx_out = Some(cmd_tx);
+    Ok((thread, PendingExport { rx: result_rx }))
 }
 
 pub fn show(
@@ -434,6 +489,65 @@ pub fn show(
         });
 }
 
+/// Start a fresh capture directly from either the initial or completed state.
+fn start_capture(tab: &mut CaptureTabState) {
+    if let Err(e) = super::privilege::ensure_admin_for_action() {
+        tab.phase = Phase::Failed(UiError::from_anyhow(
+            UiText::new(
+                "抓包器需要管理员权限才能读取游戏网络数据。请以管理员身份重新启动程序。",
+                "Capture needs administrator access to read game network data. Restart the application as administrator.",
+            ),
+            &e,
+        ));
+        return;
+    }
+    tab.capture_state = Arc::new(Mutex::new(CaptureState::default()));
+    let mut cmd_tx = None;
+    let native_crash = Arc::new(worker::NativeCrashState::new());
+    let settings = CaptureExportSettings {
+        include_characters: tab.include_characters,
+        include_weapons: tab.include_weapons,
+        include_artifacts: tab.include_artifacts,
+        include_achievements: tab.include_achievements,
+        ..Default::default()
+    };
+    match spawn_capture(
+        tab.capture_state.clone(),
+        &mut cmd_tx,
+        tab.dump_packets,
+        settings,
+        native_crash.clone(),
+    ) {
+        Ok((thread, pending_export)) => {
+            tab.handle = Some(CaptureHandle {
+                _thread: thread,
+                cmd_tx: Mutex::new(cmd_tx),
+                native_crash,
+                native_failure: Mutex::new(None),
+            });
+            tab.pending_export = Some(pending_export);
+            tab.phase = Phase::Initializing;
+        },
+        Err(error) => {
+            tab.handle = None;
+            tab.pending_export = None;
+            tab.phase = Phase::Failed(error);
+        },
+    }
+}
+
+fn start_button(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: bool) {
+    if ui
+        .add_enabled(
+            !game_busy && !tab.is_busy(),
+            egui::Button::new(l.t("▶ 开始抓包", "▶ Start Capture")),
+        )
+        .clicked()
+    {
+        start_capture(tab);
+    }
+}
+
 /// Top action bar: start/stop button + inline status.
 fn action_bar(
     ui: &mut egui::Ui,
@@ -474,48 +588,7 @@ fn action_bar(
             }
 
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        !game_busy,
-                        egui::Button::new(l.t("▶ 开始抓包", "▶ Start Capture")),
-                    )
-                    .clicked()
-                {
-                    if let Err(e) = super::privilege::ensure_admin_for_action() {
-                        tab.phase = Phase::Failed(UiError::from_anyhow(
-                            UiText::new(
-                                "抓包器需要管理员权限才能读取游戏网络数据。请以管理员身份重新启动程序。",
-                                "Capture needs administrator access to read game network data. Restart the application as administrator.",
-                            ),
-                            &e,
-                        ));
-                    } else {
-                        tab.capture_state = Arc::new(Mutex::new(CaptureState::default()));
-                        let mut cmd_tx = None;
-                        let native_crash = Arc::new(worker::NativeCrashState::new());
-                        match spawn_capture(
-                            tab.capture_state.clone(),
-                            &mut cmd_tx,
-                            tab.dump_packets,
-                            tab.include_achievements,
-                            native_crash.clone(),
-                        ) {
-                            Ok(thread) => {
-                                tab.handle = Some(CaptureHandle {
-                                    _thread: thread,
-                                    cmd_tx: Mutex::new(cmd_tx),
-                                    native_crash,
-                                    native_failure: Mutex::new(None),
-                                });
-                                tab.phase = Phase::Initializing;
-                            },
-                            Err(error) => {
-                                tab.handle = None;
-                                tab.phase = Phase::Failed(error);
-                            },
-                        }
-                    }
-                }
+                start_button(ui, l, tab, game_busy);
             });
         },
 
@@ -629,14 +702,7 @@ fn action_bar(
             let summary = summary.clone();
             let path = path.clone();
             ui.horizontal(|ui| {
-                if ui.button(l.t("↻ 重新抓包", "↻ Recapture")).clicked() {
-                    if let Some(ref mut handle) = tab.handle {
-                        handle.close();
-                        tab.phase = Phase::Stopping;
-                    } else {
-                        tab.phase = Phase::Idle;
-                    }
-                }
+                start_button(ui, l, tab, game_busy);
                 ui.colored_label(egui::Color32::from_rgb(100, 200, 100), summary.text(l));
             });
             ui.label(egui::RichText::new(format!("→ {}", path)).size(11.0).weak());
@@ -645,13 +711,10 @@ fn action_bar(
         Phase::Failed(error) => {
             let error = error.clone();
             ui.horizontal(|ui| {
-                if ui.button(l.t("↻ 重试", "↻ Retry")).clicked() {
-                    if let Some(ref mut handle) = tab.handle {
-                        handle.close();
-                        tab.phase = Phase::Stopping;
-                    } else {
-                        tab.phase = Phase::Idle;
-                    }
+                start_button(ui, l, tab, game_busy);
+                if tab.is_busy() {
+                    ui.spinner();
+                    ui.label(l.t("正在停止抓包...", "Stopping capture..."));
                 }
             });
             widgets::error_card(ui, l, &error);
@@ -669,23 +732,52 @@ fn update_phase(tab: &mut CaptureTabState) {
     if tab.phase == Phase::Stopping {
         if tab.handle.as_ref().is_none_or(CaptureHandle::is_finished) {
             tab.handle = None;
+            tab.pending_export = None;
             tab.phase = Phase::Idle;
         }
         return;
     }
 
-    // Poll pending export
-    if let Some(ref mut pending) = tab.pending_export {
+    let worker_finished = tab.handle.as_ref().is_none_or(CaptureHandle::is_finished);
+    if worker_finished && matches!(tab.phase, Phase::Done { .. } | Phase::Failed(_)) {
+        tab.handle = None;
+    }
+
+    // Initialization failures have no export result. Preserve their actual cause.
+    if matches!(
+        tab.phase,
+        Phase::Initializing | Phase::Waiting | Phase::Exporting
+    ) {
+        let error = tab
+            .capture_state
+            .try_lock()
+            .ok()
+            .and_then(|s| s.error.clone());
+        if let Some(error) = error {
+            if let Some(handle) = &tab.handle {
+                handle.close();
+            }
+            tab.pending_export = None;
+            tab.phase = Phase::Failed(UiError::from_message(
+                UiText::new(
+                    "抓包器在启动或读取游戏数据时停止。下方完整错误包含底层原因。",
+                    "Capture stopped while starting or reading game data. The full error below contains the underlying cause.",
+                ),
+                error,
+            ));
+            return;
+        }
+    }
+
+    // Do not expose completion or enable another game task until the capture
+    // thread has exited, including runtime cleanup and native boundary release.
+    if let Some(pending) = tab.pending_export.as_mut().filter(|_| worker_finished) {
         let export_result = pending.rx.try_recv();
         if !matches!(
             export_result,
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ) {
-            // The monitor stays in its command loop after replying. Closing
-            // the last sender lets it exit and release the native boundary.
-            if let Some(handle) = &tab.handle {
-                handle.close();
-            }
+            tab.handle = None;
         }
         match export_result {
             Ok(Ok(export)) => {
@@ -796,63 +888,15 @@ fn update_phase(tab: &mut CaptureTabState) {
         }
     }
 
-    // Check for errors from background thread
-    if matches!(tab.phase, Phase::Initializing | Phase::Waiting) {
-        if let Ok(cs) = tab.capture_state.try_lock() {
-            if let Some(ref err) = cs.error {
-                tab.phase = Phase::Failed(UiError::from_message(
-                    UiText::new(
-                        "抓包器在启动或读取游戏数据时停止。下方完整错误包含底层原因。",
-                        "Capture stopped while starting or reading game data. The full error below contains the underlying cause.",
-                    ),
-                    err.clone(),
-                ));
-                return;
-            }
-        }
-
-        // Check if monitor thread died unexpectedly
-        if tab.handle.as_ref().is_some_and(|h| h.is_finished()) {
-            let has_error = tab
-                .capture_state
-                .try_lock()
-                .is_ok_and(|s| s.error.is_some());
-            if !has_error {
-                tab.phase = Phase::Failed(UiError::from_message(
-                    UiText::new(
-                        "抓包任务意外停止，且没有返回结果。请重试；若再次发生，请复制完整错误并报告问题。",
-                        "The capture task stopped unexpectedly without returning a result. Retry; if it happens again, copy the full error and report the problem.",
-                    ),
-                    "capture worker thread exited without reporting an error",
-                ));
-            }
-            return;
-        }
-    }
-
     // Transition: Initializing → Waiting (when capture starts)
     if tab.phase == Phase::Initializing && tab.capture_state.try_lock().is_ok_and(|s| s.capturing) {
         tab.phase = Phase::Waiting;
     }
 
-    // Transition: Waiting → auto-export (when capture auto-stopped with complete data)
-    if tab.phase == Phase::Waiting && tab.capture_state.try_lock().is_ok_and(|s| s.complete) {
-        // Automatically trigger export
-        let settings = CaptureExportSettings {
-            include_characters: tab.include_characters,
-            include_weapons: tab.include_weapons,
-            include_artifacts: tab.include_artifacts,
-            include_achievements: tab.include_achievements,
-            ..Default::default()
-        };
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Some(ref h) = tab.handle {
-            h.send(CaptureCommand::Export {
-                settings,
-                reply: tx,
-            });
-            tab.pending_export = Some(PendingExport { rx });
-            tab.phase = Phase::Exporting;
-        }
+    // The worker exports and stops on its own, even when this tab is inactive.
+    if matches!(tab.phase, Phase::Initializing | Phase::Waiting)
+        && tab.capture_state.try_lock().is_ok_and(|s| s.complete)
+    {
+        tab.phase = Phase::Exporting;
     }
 }
