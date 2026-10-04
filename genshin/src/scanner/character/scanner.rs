@@ -21,7 +21,7 @@ use crate::scanner::common::fuzzy_match::fuzzy_match_map_pair;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodCharacter, GoodTalent};
-use crate::scanner::common::ocr_factory;
+use crate::scanner::common::ocr_factory::{self, same_model};
 use crate::scanner::common::ocr_pool::{OcrPool, SharedOcrPools};
 use crate::scanner::common::scan_worker;
 use crate::scanner::common::stat_parser::level_to_ascension;
@@ -39,6 +39,8 @@ struct ScanMeta {
     raw_burst: i32,
     /// True when the attributes panel produced no level text.
     level_ocr_failed: bool,
+    /// True when any talent overview OCR failed and its level defaulted to 1.
+    talent_overview_failed: bool,
     /// True when constellation pixel detection was non-monotonic.
     constellation_non_monotonic: bool,
 }
@@ -65,6 +67,9 @@ struct ScanCaptures {
 struct RescanCaptures {
     /// Index in the `characters` vec.
     char_index: usize,
+    /// Roster position of the phase-1 scan; differs from `char_index` once
+    /// any earlier character was skipped, and keys the dump folder.
+    viewed_index: usize,
     name: String,
     old: GoodCharacter,
     attrs_image: RgbImage,
@@ -124,6 +129,7 @@ impl GoodCharacterScanner {
 mod tests {
     use super::*;
     use crate::scanner::common::mappings::ConstBonus;
+    use crate::scanner::common::test_utils::{make_1080p_image, make_1080p_scaler, FakeOcr};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -148,6 +154,35 @@ mod tests {
                 artifact_set_max_rarity: HashMap::new(),
             }),
         }
+    }
+
+    #[test]
+    fn read_name_skips_second_read_when_both_engines_share_a_model() {
+        let scanner = scanner_with_names(&[("\u{7231}\u{8BFA}", "Aino", "hydro")]); // 爱诺
+        let v5 = FakeOcr::new(vec![]).with_model_id("ppocrv4");
+        let v4 = FakeOcr::new(vec!["乱码无法识别"]).with_model_id("ppocrv4");
+
+        let (key, _, raw) =
+            scanner.read_name_from_image(Some(&v5), &v4, &make_1080p_image(), &make_1080p_scaler());
+
+        assert_eq!(key, None);
+        assert_eq!(raw, "乱码无法识别");
+        assert_eq!(v5.call_count(), 0);
+        assert_eq!(v4.call_count(), 1);
+    }
+
+    #[test]
+    fn read_name_cross_checks_with_a_different_model() {
+        let scanner = scanner_with_names(&[("\u{7231}\u{8BFA}", "Aino", "hydro")]); // 爱诺
+        let v5 = FakeOcr::new(vec!["乱码无法识别"]).with_model_id("ppocrv5");
+        let v4 = FakeOcr::new(vec!["\u{6C34}/\u{7231}\u{8BFA}"]).with_model_id("ppocrv4");
+
+        let (key, _, _) =
+            scanner.read_name_from_image(Some(&v5), &v4, &make_1080p_image(), &make_1080p_scaler());
+
+        assert_eq!(key.as_deref(), Some("Aino"));
+        assert_eq!(v5.call_count(), 1);
+        assert_eq!(v4.call_count(), 1);
     }
 
     #[test]
@@ -682,7 +717,7 @@ impl GoodCharacterScanner {
             return true;
         }
         if let Some(m) = meta {
-            if m.level_ocr_failed || m.constellation_non_monotonic {
+            if m.level_ocr_failed || m.talent_overview_failed || m.constellation_non_monotonic {
                 return true;
             }
             if m.talent_suspicious {
@@ -705,7 +740,7 @@ impl GoodCharacterScanner {
         image: &RgbImage,
         scaler: &CoordScaler,
     ) -> (Option<String>, Option<String>, String) {
-        if let Some(v5) = v5_ocr {
+        if let Some(v5) = v5_ocr.filter(|v5| !same_model(*v5, v4_ocr)) {
             if let Ok(text) = Self::ocr_image_region(v5, image, CHAR_NAME_RECT, scaler) {
                 let (name, element, entity) = self.parse_name_and_element(&text);
                 if name.is_some() {
@@ -1132,7 +1167,8 @@ impl GoodCharacterScanner {
         let skill = if skill_lv > 0 { skill_lv } else { 1 };
         let burst = if burst_lv > 0 { burst_lv } else { 1 };
 
-        if auto_lv == 0 || skill_lv == 0 || burst_lv == 0 {
+        let talent_overview_failed = auto_lv == 0 || skill_lv == 0 || burst_lv == 0;
+        if talent_overview_failed {
             let mut missing = Vec::new();
             if auto_lv == 0 {
                 missing.push("auto");
@@ -1206,6 +1242,7 @@ impl GoodCharacterScanner {
             raw_skill: skill,
             raw_burst: burst,
             level_ocr_failed,
+            talent_overview_failed,
             constellation_non_monotonic,
         };
 
@@ -1229,6 +1266,7 @@ impl GoodCharacterScanner {
     ) -> CharacterResult {
         let RescanCaptures {
             char_index,
+            viewed_index,
             name,
             old,
             attrs_image,
@@ -1239,8 +1277,9 @@ impl GoodCharacterScanner {
             talent_detail_images,
         } = captures;
 
-        // Begin annotation frame for rescan (overwrites phase 1 dump for same character)
-        annotator::begin_item("characters", char_index, scaler);
+        // Separate folder: the rescan skips name/talent-overview OCR, so the
+        // phase 1 dump is the only record of those crops.
+        annotator::begin_item("characters_rescan", viewed_index, scaler);
         annotator::add_image("attributes", &attrs_image);
 
         let ocr = ocr_pool.get();
@@ -1471,8 +1510,8 @@ impl GoodCharacterScanner {
         log_debug!("[character] 开始扫描...", "[character] starting scan...");
         let now = SystemTime::now();
 
-        let ocr_pool = pools.v4().clone();
-        let v5_pool = pools.v5().clone();
+        let ocr_pool = pools.character().v4().clone();
+        let v5_pool = pools.character().v5().clone();
 
         // Return to main world and open character screen.
         ctrl.focus_game_window();
@@ -2264,6 +2303,7 @@ impl GoodCharacterScanner {
             // 7. Send to worker.
             let rescan = RescanCaptures {
                 char_index: char_idx,
+                viewed_index: viewed_idx,
                 name,
                 old,
                 attrs_image,

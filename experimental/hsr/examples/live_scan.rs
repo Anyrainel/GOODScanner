@@ -11,12 +11,14 @@
 //! - `HSR_SCAN_TARGETS` — comma list: `characters`, `light_cones`, `gear` (default all)
 //! - `HSR_SCAN_MAX_ITEMS` — how many inventory entries to sample (default 3)
 //! - `HSR_SCAN_MAX_CHARACTERS` — character sample cap (default 2)
+//! - `HSR_SCAN_TRAILBLAZER_NAME` / `HSR_SCAN_TRAILBLAZER_GENDER` (`Stelle` or `Caelus`)
 
 use std::time::Duration;
 
 use hsr_scanner::{
     data_cache::load_data_cache,
     scanner::{HsrScanner, ScanConfig, ScanTargets},
+    TrailblazerGender, TrailblazerIdentity,
 };
 use yas::capture::CaptureMethod;
 
@@ -31,6 +33,14 @@ fn main() {
     let targets = scan_targets();
     let scan_item_limit = env_usize("HSR_SCAN_MAX_ITEMS", 3);
     let max_characters = env_usize("HSR_SCAN_MAX_CHARACTERS", 2);
+    let expected_characters = std::env::var("HSR_SCAN_EXPECTED_CHARACTERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|count| *count > 0);
+    let dump_images = std::env::var("HSR_SCAN_DUMP")
+        .ok()
+        .map(|value| value != "0")
+        .unwrap_or(true);
     yas::log_info!(
         "实时扫描目标：角色={} 光锥={} 遗器={}；抽样物品={}；抽样角色={}；转储=debug_images/",
         "Live scan targets: characters={} light_cones={} gear={}; item sample={}; character sample={}; dumps=debug_images/",
@@ -55,13 +65,15 @@ fn main() {
         navigation_delay: Duration::from_millis(250),
         panel_timeout: Duration::from_millis(3_000),
         max_inventory_items: 4_000,
-        scan_item_limit: Some(scan_item_limit),
+        scan_item_limit: (scan_item_limit > 0).then_some(scan_item_limit),
         max_characters,
-        dump_images: true,
+        expected_characters,
+        trailblazer: trailblazer(),
+        dump_images,
         ..ScanConfig::default()
     };
 
-    match HsrScanner::live(references, config).and_then(HsrScanner::scan) {
+    match HsrScanner::live(references.clone(), config).and_then(HsrScanner::scan) {
         Ok(result) => {
             yas::log_info!(
                 "实时扫描结束：遗器 {} 件；覆盖率={:?}",
@@ -69,6 +81,40 @@ fn main() {
                 result.gear_items.len(),
                 result.coverage
             );
+            match hsr_scanner::export_observations(
+                &result.observations,
+                &references,
+                &result.export_details,
+                None,
+            ) {
+                Ok(export) => {
+                    let path = std::path::PathBuf::from(
+                        std::env::var("HSR_SCAN_OUTPUT").unwrap_or_else(|_| {
+                            format!(
+                                "debug_capture/star_rail_scan_{}.json",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|duration| duration.as_nanos())
+                                    .unwrap_or(0)
+                            )
+                        }),
+                    );
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match hsr_scanner::write_json_create_new(&path, &export) {
+                        Ok(()) => eprintln!("export={}", path.display()),
+                        Err(error) => {
+                            eprintln!("HSR-LIVE-SCAN-EXPORT {error}");
+                            std::process::exit(1);
+                        },
+                    }
+                },
+                Err(error) => {
+                    eprintln!("HSR-LIVE-SCAN-EXPORT {error}");
+                    std::process::exit(1);
+                },
+            }
         },
         Err(error) => {
             eprintln!("HSR-LIVE-SCAN {error}");
@@ -99,6 +145,19 @@ fn scan_targets() -> ScanTargets {
         }
     }
     targets
+}
+
+fn trailblazer() -> Option<TrailblazerIdentity> {
+    let nickname = std::env::var("HSR_SCAN_TRAILBLAZER_NAME").ok()?;
+    let gender = match std::env::var("HSR_SCAN_TRAILBLAZER_GENDER").as_deref() {
+        Ok("Stelle") => TrailblazerGender::Stelle,
+        Ok("Caelus") => TrailblazerGender::Caelus,
+        other => {
+            eprintln!("HSR_SCAN_TRAILBLAZER_GENDER must be Stelle or Caelus; got {other:?}");
+            std::process::exit(2);
+        },
+    };
+    Some(TrailblazerIdentity { nickname, gender })
 }
 
 fn ensure_ocr_runtime() -> Result<(), String> {

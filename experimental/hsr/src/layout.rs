@@ -5,7 +5,7 @@
 //! those to `(x, y, w, h)` once so scanner and OCR code never mix conventions.
 //! Window-level screenshot entries in kel-z are already `(x, y, w, h)`.
 
-use crate::vision::{NormRect, Point};
+use crate::vision::{GridGeometry, NormRect, Point};
 
 /// Convert kel-z panel crops stored as `(x0, y0, x1, y1)` into `(x, y, w, h)`.
 const fn xyxy(x0: f64, y0: f64, x1: f64, y1: f64) -> NormRect {
@@ -21,12 +21,64 @@ pub const QUANTITY: NormRect = NormRect::new(
 );
 
 pub const LIGHT_CONE_TAB: Point = Point::new(0.38, 0.06);
-pub const GEAR_TAB: Point = Point::new(0.43, 0.06);
+pub const GEAR_TAB: Point = Point::new(0.408, 0.06);
 pub const FIRST_ITEM: Point = Point::new(0.071, 0.26);
+/// Empty strip below the backpack grid, clear of the sort and bulk buttons.
+pub const INVENTORY_POINTER_REST: Point = Point::new(0.36, 0.955);
+
+/// Backpack card centers measured on live 1920x1080 frames from the white
+/// selection frame (137..140 / 270..272 px on the first column). The relic
+/// tab's sub-filter bar pushes its rows 72px lower than the light cone tab's.
+/// Only fully visible rows are listed: the fifth row is clipped by the list
+/// viewport on both tabs. The cell box is the selection frame itself, so
+/// `selected_cell`'s border ring lands on it.
+const BACKPACK_FIRST_X: f64 = 205.5 / 1920.0;
+const BACKPACK_STRIDE_X: f64 = 139.07 / 1920.0;
+const BACKPACK_STRIDE_Y: f64 = 173.2 / 1080.0;
+const BACKPACK_CELL_WIDTH: f64 = 134.0 / 1920.0;
+const BACKPACK_CELL_HEIGHT: f64 = 157.0 / 1080.0;
+const BACKPACK_COLUMNS: usize = 8;
+const BACKPACK_ROWS: usize = 4;
+pub const LIGHT_CONE_FIRST_ROW_Y: f64 = 216.5 / 1080.0;
+pub const GEAR_FIRST_ROW_Y: f64 = 288.5 / 1080.0;
+
+pub fn backpack_grid(first_row_y: f64) -> GridGeometry {
+    GridGeometry {
+        centers: (0..BACKPACK_ROWS)
+            .map(|row| {
+                (0..BACKPACK_COLUMNS)
+                    .map(|column| {
+                        Point::new(
+                            BACKPACK_FIRST_X + column as f64 * BACKPACK_STRIDE_X,
+                            first_row_y + row as f64 * BACKPACK_STRIDE_Y,
+                        )
+                    })
+                    .collect()
+            })
+            .collect(),
+        cell_width: BACKPACK_CELL_WIDTH,
+        cell_height: BACKPACK_CELL_HEIGHT,
+        confidence: 1.0,
+    }
+}
 
 pub const DETAILS_BUTTON: Point = Point::new(0.13, 0.143);
 pub const TRACES_BUTTON: Point = Point::new(0.13, 0.315);
 pub const EIDOLONS_BUTTON: Point = Point::new(0.13, 0.49);
+
+/// Eidolon node centers, E1 through E6. Every Character's constellation
+/// places the six badges at the same screen positions.
+pub const EIDOLON_NODES: [Point; 6] = [
+    Point::new(666.0 / 1920.0, 231.0 / 1080.0),
+    Point::new(1063.0 / 1920.0, 217.0 / 1080.0),
+    Point::new(1537.0 / 1920.0, 424.0 / 1080.0),
+    Point::new(1318.0 / 1920.0, 902.0 / 1080.0),
+    Point::new(838.0 / 1920.0, 868.0 / 1080.0),
+    Point::new(394.0 / 1920.0, 784.0 / 1080.0),
+];
+/// Badge ring radius and inner disk radius, as fractions of client height.
+pub const EIDOLON_RING_RADIUS: f64 = 39.0 / 1080.0;
+pub const EIDOLON_DISK_RADIUS: f64 = 30.0 / 1080.0;
 
 /// kel-z `_screenshot_traces` crop size for visible skill level text (`6/10`).
 pub const TRACE_LEVEL_SIZE: (f64, f64) = (0.04, 0.028);
@@ -37,8 +89,15 @@ pub struct PathTraces {
     pub unlocks: &'static [(&'static str, f64, f64)],
 }
 
-pub fn skill_level_rect(x: f64, y: f64) -> NormRect {
-    NormRect::new(x, y, TRACE_LEVEL_SIZE.0, TRACE_LEVEL_SIZE.1)
+pub fn skill_level_rect(key: &str, x: f64, y: f64) -> NormRect {
+    // basic and the two memosprite badges have a gap on the right. Eight
+    // pixels drops that gap, including a bright corner of the node chrome.
+    let width = if matches!(key, "basic" | "memosprite_skill" | "memosprite_talent") {
+        TRACE_LEVEL_SIZE.0 - 8.0 / 1920.0
+    } else {
+        TRACE_LEVEL_SIZE.0
+    };
+    NormRect::new(x, y, width, TRACE_LEVEL_SIZE.1)
 }
 
 /// Accepts GIlore path keys (`Warrior`) and Fribbels names (`Destruction`).
@@ -75,7 +134,7 @@ const HUNT_TRACES: PathTraces = PathTraces {
         ("stat_1", 0.589_58, 0.818_5),
         ("stat_2", 0.451, 0.599),
         ("stat_3", 0.396_3, 0.503_7),
-        ("stat_4", 0.725_5, 0.6),
+        ("stat_4", 0.462, 0.387),
         ("stat_5", 0.725_5, 0.596_29),
         ("stat_6", 0.780_7, 0.503_7),
         ("stat_7", 0.723_9, 0.380_5),
@@ -288,8 +347,21 @@ const ELATION_TRACES: PathTraces = PathTraces {
     ],
 };
 
-pub const CHARACTER_NAME: NormRect = NormRect::new(0.0656, 0.055, 0.185, 0.036);
-pub const CHARACTER_LEVEL: NormRect = NormRect::new(0.772, 0.218, 0.085, 0.040);
+/// `Path／Name` header. The right edge stops before the portrait bar's `LB`
+/// hint (x ≈ 0.222 at its leftmost scroll), which OCR otherwise reads as a
+/// trailing `回` that breaks fuzzy name matching.
+pub const CHARACTER_NAME: NormRect = NormRect::new(0.0656, 0.0565, 0.148, 0.034);
+/// 「等级 80/80」. The bottom stops six pixels above the old edge so the blue
+/// progress bar under the glyphs stays out of the crop.
+pub const CHARACTER_LEVEL: NormRect = NormRect::new(0.772, 0.218, 0.085, 0.040 - 6.0 / 1080.0);
+
+/// Small gold menu title above the tab name (`背包` in the inventory). The
+/// grid detector alone also fires on repeated overworld geometry (stairs).
+pub const MENU_TITLE: NormRect = NormRect::new(0.052, 0.035, 0.047, 0.021);
+
+/// Bottom-left `UID:600732506` watermark, drawn on every screen. Room on the
+/// right for ten-digit UIDs.
+pub const UID: NormRect = NormRect::new(0.012, 0.964, 0.088, 0.023);
 
 /// Static HUD strips used to decide that a menu has settled. HSR character and
 /// inventory screens animate a 3D model and starfield in the center, so
@@ -297,11 +369,16 @@ pub const CHARACTER_LEVEL: NormRect = NormRect::new(0.772, 0.218, 0.085, 0.040);
 pub const UI_CHROME_LEFT: NormRect = NormRect::new(0.0, 0.0, 0.20, 1.0);
 pub const UI_CHROME_RIGHT: NormRect = NormRect::new(0.74, 0.0, 0.26, 1.0);
 
-pub const RELIC_NAME: NormRect = xyxy(0.0, 0.02, 0.82, 0.10);
-pub const RELIC_LEVEL: NormRect = xyxy(0.03, 0.25, 0.28, 0.32);
+/// Name line only (glyphs at 1080p y=134..156): stops above the gold
+/// underline and ends well before the character-avatar button on the right.
+pub const RELIC_NAME: NormRect = xyxy(0.0, 0.0342, 0.82, 0.0781);
+/// 「+15」 below the slot label; the top stays clear of the label's glyphs.
+pub const RELIC_LEVEL: NormRect = xyxy(0.05, 0.2503, 0.28, 0.2966);
 pub const RELIC_RARITY: NormRect = xyxy(0.07, 0.15, 0.2, 0.22);
-pub const RELIC_MAIN_NAME: NormRect = xyxy(0.11, 0.358, 0.7, 0.4);
-pub const RELIC_MAIN_VALUE: NormRect = xyxy(0.775, 0.358, 0.975, 0.4);
+/// Main-stat name. The right edge is 32px inside the previous crop; the
+/// longest names in the live dump still keep about 30px of room.
+pub const RELIC_MAIN_NAME: NormRect = xyxy(0.11, 0.3535, 0.7 - 32.0 / (0.25 * 1920.0), 0.3974);
+pub const RELIC_MAIN_VALUE: NormRect = xyxy(0.775, 0.3535, 0.975, 0.3974);
 /// Wider than kel-z's text-only equipped strip so Chinese 「装备中」 plus the
 /// portrait stay in one dump crop. OCR still keys off the label, not the face.
 pub const RELIC_EQUIPPED: NormRect = xyxy(0.18, 0.905, 0.82, 0.975);
@@ -313,16 +390,25 @@ pub const RELIC_LOCK: NormRect = xyxy(
 );
 pub const RELIC_DISCARD: NormRect = xyxy(0.865, 0.253, 0.935, 0.293);
 
-pub const LIGHT_CONE_NAME: NormRect = xyxy(0.0, 0.0, 1.0, 0.09);
-pub const LIGHT_CONE_LEVEL: NormRect = xyxy(0.13, 0.32, 0.35, 0.37);
+/// Name line only: stops above the gold underline, and leaves about three
+/// glyphs of room after the longest nine-character name.
+pub const LIGHT_CONE_NAME: NormRect = xyxy(0.0, 0.033, 0.62, 0.0755);
+/// 「等级 80/80」 including the label, as for characters. Starting at the
+/// digits left no margin before the first glyph.
+/// 「等级 80/80」 including the label. The bottom is six pixels above the
+/// progress bar.
+pub const LIGHT_CONE_LEVEL: NormRect = xyxy(0.02, 0.32, 0.35, 0.37 - 6.0 / (0.78 * 1080.0));
 /// kel-z's tiny box sits on skill percent text in the Chinese panel. This
-/// strip is the 「叠影N阶」 row confirmed from live dumps.
-pub const LIGHT_CONE_SUPERIMPOSITION: NormRect = xyxy(0.02, 0.40, 0.50, 0.48);
+/// strip is the 「叠影N阶」 row confirmed from live dumps; its top stays below
+/// the Path-restriction line so no clipped glyphs enter the crop.
+pub const LIGHT_CONE_SUPERIMPOSITION: NormRect = xyxy(0.02, 0.428, 0.50, 0.472);
 pub const LIGHT_CONE_EQUIPPED: NormRect = RELIC_EQUIPPED;
 pub const LIGHT_CONE_LOCK: NormRect = xyxy(0.896, 0.321, 0.97, 0.365);
 
-const RELIC_SUB_NAMES: NormRect = xyxy(0.11, 0.4, 0.5, 0.58);
-const RELIC_SUB_VALUES: NormRect = xyxy(0.775, 0.4, 0.975, 0.58);
+/// Four 38.7px (1080p) lines centered on glyph rows 448..467, 486..507,
+/// 524..546 and 563..584, leaving about 9px above and below each line.
+const RELIC_SUB_NAMES: NormRect = xyxy(0.11, 0.4057, 0.5, 0.5894);
+const RELIC_SUB_VALUES: NormRect = xyxy(0.775, 0.4057, 0.975, 0.5894);
 const RELIC_SUB_LINES: f64 = 4.0;
 
 pub fn relic_sub_name(index: usize) -> NormRect {
@@ -350,9 +436,9 @@ mod tests {
     #[test]
     fn kelz_xyxy_panel_crops_convert_to_positive_boxes() {
         assert!(RELIC_LEVEL.width > 0.0 && RELIC_LEVEL.height > 0.0);
-        assert!((RELIC_LEVEL.width - 0.25).abs() < 1e-9);
-        assert!((RELIC_LEVEL.height - 0.07).abs() < 1e-9);
-        assert!((LIGHT_CONE_LEVEL.width - 0.22).abs() < 1e-9);
+        assert!((RELIC_LEVEL.width - 0.23).abs() < 1e-9);
+        assert!(RELIC_MAIN_NAME.y + RELIC_MAIN_NAME.height <= relic_sub_name(0).y);
+        assert!((LIGHT_CONE_LEVEL.width - 0.33).abs() < 1e-9);
         assert!(LIGHT_CONE_SUPERIMPOSITION.width > 0.2);
         assert!(LIGHT_CONE_SUPERIMPOSITION.height > 0.0);
         assert!((RELIC_LOCK.width - (0.937_5 - 0.858_333_333_333_333_3)).abs() < 1e-9);
@@ -370,6 +456,13 @@ mod tests {
         assert_eq!(hunt.skills.len(), 4);
         assert_eq!(hunt.unlocks.len(), 13);
         assert!(traces_for_path("Memory").is_some());
-        assert!(skill_level_rect(0.5, 0.5).width > 0.0);
+        assert!((skill_level_rect("skill", 0.5, 0.5).width - TRACE_LEVEL_SIZE.0).abs() < 1e-9);
+        assert!(skill_level_rect("basic", 0.5, 0.5).width < TRACE_LEVEL_SIZE.0);
+        assert!(
+            (skill_level_rect("memosprite_skill", 0.5, 0.5).width
+                - skill_level_rect("basic", 0.5, 0.5).width)
+                .abs()
+                < 1e-9
+        );
     }
 }

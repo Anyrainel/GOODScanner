@@ -87,7 +87,7 @@ GOODScanner.exe --characters --weapons  # 组合扫描
 | `--continue-on-failure` | 单项失败时继续扫描 |
 | `--log-progress` | 逐项显示扫描进度 |
 | `--output-dir <DIR>` | 输出目录（默认当前目录） |
-| `--ocr-backend <NAME>` | 覆盖 OCR 后端（ppocrv4 或 ppocrv5） |
+| `--ocr-backend <NAME>` | 覆盖所有类别的辅助 OCR 后端（角色名/等级校验、武器装备回退、圣遗物等级） |
 | `--dump-images` | 保存 OCR 区域截图到 `debug_images/` |
 
 ### 扫描器配置
@@ -101,7 +101,9 @@ GOODScanner.exe --characters --weapons  # 组合扫描
 | `--artifact-max-count <N>` | 最大圣遗物数（0 = 不限） |
 | `--weapon-skip-delay` | 跳过武器面板等待（更快但锁定检测可能不准） |
 | `--artifact-skip-delay` | 跳过圣遗物面板等待（更快但锁定/星标检测可能不准） |
-| `--artifact-substat-ocr <NAME>` | 副词条 OCR 后端（默认 ppocrv4） |
+| `--char-ocr <NAME>` | 角色 OCR 后端（默认 ppocrv4） |
+| `--weapon-ocr <NAME>` | 武器 OCR 后端（默认 ppocrv6tiny） |
+| `--artifact-substat-ocr <NAME>` | 圣遗物副词条/通用 OCR 后端（默认 ppocrv6tiny） |
 
 ### 配置文件
 

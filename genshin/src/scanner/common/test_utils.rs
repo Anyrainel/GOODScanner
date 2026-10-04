@@ -25,6 +25,7 @@ use super::mappings::MappingManager;
 pub struct FakeOcr {
     responses: Mutex<VecDeque<Result<String>>>,
     call_count: Mutex<usize>,
+    model_id: Option<&'static str>,
 }
 
 impl FakeOcr {
@@ -33,7 +34,14 @@ impl FakeOcr {
         Self {
             responses: Mutex::new(responses.into_iter().map(|s| Ok(s.to_string())).collect()),
             call_count: Mutex::new(0),
+            model_id: None,
         }
+    }
+
+    /// Report `id` as the model identity, as factory-created models do.
+    pub fn with_model_id(mut self, id: &'static str) -> Self {
+        self.model_id = Some(id);
+        self
     }
 
     /// How many times image_to_text has been called.
@@ -58,6 +66,10 @@ impl ImageToText<RgbImage> for FakeOcr {
 
     fn get_average_inference_time(&self) -> Option<std::time::Duration> {
         None
+    }
+
+    fn model_id(&self) -> Option<&str> {
+        self.model_id
     }
 }
 

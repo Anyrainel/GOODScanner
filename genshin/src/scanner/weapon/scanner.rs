@@ -30,6 +30,7 @@ use crate::scanner::common::annotator;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodWeapon};
+use crate::scanner::common::ocr_factory::same_model;
 use crate::scanner::common::ocr_pool::SharedOcrPools;
 use crate::scanner::common::pixel_utils;
 use crate::scanner::common::scan_worker::{self, WorkItem};
@@ -251,7 +252,7 @@ impl GoodWeaponScanner {
         let equip_text = Self::ocr_image_region(ocr, image, ocr_regions.equip, scaler)?;
         let mut location = Self::parse_equip_location(&equip_text, mappings);
         if location.is_empty() && equip_text.trim().len() >= 2 {
-            if let Some(fallback) = equip_fallback_ocr {
+            if let Some(fallback) = equip_fallback_ocr.filter(|f| !same_model(ocr, *f)) {
                 let equip_text_v5 =
                     Self::ocr_image_region(fallback, image, ocr_regions.equip, scaler)?;
                 location = Self::parse_equip_location(&equip_text_v5, mappings);
@@ -530,7 +531,7 @@ impl GoodWeaponScanner {
         }
 
         // Borrow a model from the v4 pool for reading item count
-        let count_ocr_guard = pools.v4().get();
+        let count_ocr_guard = pools.weapon().v4().get();
         let (current_count, _max_capacity) = bp.read_item_count(&count_ocr_guard)?;
 
         // If count is 0, try reopening backpack
@@ -584,8 +585,8 @@ impl GoodWeaponScanner {
         drop(count_ocr_guard);
 
         // Use shared OCR pools (v4 for primary, v5 for equip fallback).
-        let ocr_pool = pools.v4().clone();
-        let equip_fallback_pool = pools.v5().clone();
+        let ocr_pool = pools.weapon().v4().clone();
+        let equip_fallback_pool = pools.weapon().v5().clone();
 
         // Shared context for worker threads
         let worker_mappings = self.mappings.clone();
@@ -605,7 +606,7 @@ impl GoodWeaponScanner {
                     }
 
                     annotator::begin_item("weapons", work_item.index, &worker_scaler);
-                    annotator::add_image("panel", &work_item.frame.image);
+                    annotator::add_frame("panel", &work_item.frame);
                     if let Some(ref ann) = work_item.grid_annotation {
                         annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
                     }
@@ -998,8 +999,9 @@ mod tests {
         let mappings = make_test_mappings();
         let config = default_config();
 
-        let ocr = FakeOcr::new(vec!["风鹰剑", "80/90", "精炼3阶", "纳两妲已装备"]);
-        let fallback = FakeOcr::new(vec!["纳西妲已装备"]);
+        let ocr = FakeOcr::new(vec!["风鹰剑", "80/90", "精炼3阶", "口口口已装备"])
+            .with_model_id("ppocrv4");
+        let fallback = FakeOcr::new(vec!["纳西妲已装备"]).with_model_id("ppocrv5");
 
         let result = GoodWeaponScanner::scan_single_weapon(
             &ocr,
@@ -1023,6 +1025,40 @@ mod tests {
             },
             other => panic!("Expected Weapon, got {:?}", std::mem::discriminant(&other)),
         }
+        assert_eq!(fallback.call_count(), 1);
+    }
+
+    #[test]
+    fn test_weapon_equip_fallback_skipped_for_same_model() {
+        let image = make_weapon_image(5, false);
+        let scaler = make_1080p_scaler();
+        let regions = WeaponOcrRegions::new();
+        let mappings = make_test_mappings();
+        let config = default_config();
+
+        let ocr = FakeOcr::new(vec!["风鹰剑", "80/90", "精炼3阶", "口口口已装备"])
+            .with_model_id("ppocrv6tiny");
+        let fallback = FakeOcr::new(vec![]).with_model_id("ppocrv6tiny");
+
+        let result = GoodWeaponScanner::scan_single_weapon(
+            &ocr,
+            Some(&fallback),
+            &image,
+            &scaler,
+            &regions,
+            &mappings,
+            &config,
+            0,
+            None,
+        )
+        .unwrap();
+
+        match result {
+            WeaponScanResult::Weapon(w) => assert!(w.location.is_empty()),
+            other => panic!("Expected Weapon, got {:?}", std::mem::discriminant(&other)),
+        }
+        assert_eq!(ocr.call_count(), 4);
+        assert_eq!(fallback.call_count(), 0);
     }
 
     #[test]

@@ -11,6 +11,8 @@ dumps/
 *.pyc
 data/
 scan_output/
+scan_runs/
+training_data/
 debug_images/
 debug_capture/
 diff_report.md

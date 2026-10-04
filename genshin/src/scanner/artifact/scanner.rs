@@ -24,7 +24,7 @@ use crate::scanner::common::grid_icon_detector::{GridIconResult, GridMode};
 use crate::scanner::common::grid_voter::{GridVoteSchedule, PagedGridVoter, ReadyItem};
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{DebugOcrField, DebugScanResult, GoodArtifact, GoodSubStat};
-use crate::scanner::common::ocr_factory;
+use crate::scanner::common::ocr_factory::{self, same_model};
 use crate::scanner::common::ocr_pool::SharedOcrPools;
 use crate::scanner::common::pixel_utils;
 use crate::scanner::common::roll_solver::{self, OcrCandidate, SolverInput};
@@ -635,9 +635,12 @@ impl GoodArtifactScanner {
                 .unwrap_or_default();
         let lv1 = parse_level(&level_text1);
 
-        let level_text2 =
+        let level_text2 = if same_model(ocr, substat_ocr) {
+            level_text1.clone()
+        } else {
             Self::ocr_image_region_shifted(substat_ocr, image, ocr_regions.level, y_shift, scaler)
-                .unwrap_or_default();
+                .unwrap_or_default()
+        };
         let lv2 = parse_level(&level_text2);
 
         let level = if lv1 >= 0 && lv2 >= 0 {
@@ -737,6 +740,9 @@ impl GoodArtifactScanner {
         // Track which physical line index each solver_candidates entry came from,
         // so we can map solver outputs back to the correct OCR region for dump.
         let mut candidate_line_indices: Vec<usize> = Vec::new();
+        // Substat-engine text per physical line from phase 1, so later passes
+        // don't re-run the same model on the same crop.
+        let mut phase1_texts: [Option<String>; 4] = Default::default();
 
         // Phase 1: OCR at original width
         for i in 0..max_scan_lines {
@@ -749,6 +755,7 @@ impl GoodArtifactScanner {
                 y_shift,
                 scaler,
             );
+            phase1_texts[i] = Some(raw_texts[0].clone());
 
             // Record raw OCR text for this line immediately
             {
@@ -901,6 +908,7 @@ impl GoodArtifactScanner {
                 (0.0, -10.0),
             ];
 
+            let engines_share_model = same_model(ocr, substat_ocr);
             for i in 0..min_required {
                 if !solver_candidates[i].is_empty() {
                     continue; // Already have candidates for this line
@@ -913,10 +921,11 @@ impl GoodArtifactScanner {
 
                     // Step 0: v5 at original rect
                     // Other steps: v4 shifted first, then v5 shifted
-                    let engines: &[&dyn ImageToText<RgbImage>] = if step == 0 {
-                        &[ocr]
-                    } else {
-                        &[substat_ocr, ocr]
+                    let engines: &[&dyn ImageToText<RgbImage>] = match (step, engines_share_model) {
+                        (0, true) if phase1_texts[i].is_some() => &[],
+                        (0, _) => &[ocr],
+                        (_, true) => &[substat_ocr],
+                        (_, false) => &[substat_ocr, ocr],
                     };
 
                     for &engine in engines {
@@ -955,15 +964,18 @@ impl GoodArtifactScanner {
                 }
 
                 if !found {
-                    // Log what the fallback engines actually saw on this line
-                    let fallback_text = Self::ocr_image_region_shifted(
-                        substat_ocr,
-                        image,
-                        ocr_regions.substat_lines[i],
-                        y_shift,
-                        scaler,
-                    )
-                    .unwrap_or_default();
+                    // Log what the substat engine saw on this line
+                    let fallback_text = match &phase1_texts[i] {
+                        Some(text) => text.clone(),
+                        None => Self::ocr_image_region_shifted(
+                            substat_ocr,
+                            image,
+                            ocr_regions.substat_lines[i],
+                            y_shift,
+                            scaler,
+                        )
+                        .unwrap_or_default(),
+                    };
                     log_warn!("[artifact] idx={} sub[{}] 备选重试后仍为空（{}星 lv{}），OCR「{}」",
                         "[artifact] idx={} sub[{}] STILL EMPTY after fallback ({}* lv{}), OCR 「{}」",
                         item_index, i, rarity, level, fallback_text.trim());
@@ -1400,7 +1412,7 @@ impl GoodArtifactScanner {
         // Try v4 first, fall back to v5 if no match (v4 dict lacks some rare chars like 魈/Xiao)
         let equip_text = Self::ocr_image_region(substat_ocr, image, ocr_regions.equip, scaler)?;
         let mut location = Self::parse_equip_location(&equip_text, mappings);
-        if location.is_empty() && equip_text.trim().len() >= 2 {
+        if location.is_empty() && equip_text.trim().len() >= 2 && !same_model(ocr, substat_ocr) {
             let equip_text_v5 = Self::ocr_image_region(ocr, image, ocr_regions.equip, scaler)?;
             location = Self::parse_equip_location(&equip_text_v5, mappings);
             if !location.is_empty() {
@@ -1571,7 +1583,7 @@ impl GoodArtifactScanner {
         let worker_cancel = ctrl.cancel_token();
 
         // Borrow a model from the v5 pool for reading item count
-        let count_ocr_guard = pools.v5().get();
+        let count_ocr_guard = pools.artifact().v5().get();
 
         let total_count = if !skip_open_backpack {
             // Use shared opening sequence (focus → main UI → open → tab → count with retry)
@@ -1655,8 +1667,8 @@ impl GoodArtifactScanner {
         let scaler = bp.scaler().clone();
 
         // Use shared OCR pools (v5 for level, v4 for everything else).
-        let ocr_pool = pools.v5().clone();
-        let substat_ocr_pool = pools.v4().clone();
+        let ocr_pool = pools.artifact().v5().clone();
+        let substat_ocr_pool = pools.artifact().v4().clone();
         log_debug!(
             "[artifact] 使用共享OCR池: v5(等级)={}, v4(通用)={}",
             "[artifact] using shared OCR pools: v5(level)={}, v4(general)={}",
@@ -1692,7 +1704,7 @@ impl GoodArtifactScanner {
 
                     // Begin annotation for this item (no-op when disabled)
                     annotator::begin_item("artifacts", work_item.index, &worker_scaler);
-                    annotator::add_image("panel", &work_item.frame.image);
+                    annotator::add_frame("panel", &work_item.frame);
                     if let Some(ref ann) = work_item.grid_annotation {
                         annotator::record_grid_overlay(ann.0.clone(), ann.1.clone());
                     }
@@ -2472,5 +2484,97 @@ mod tests {
                 std::mem::discriminant(&other)
             ),
         }
+    }
+
+    /// Scan a 5-star flower whose 4th substat line only parses on a shifted crop.
+    fn scan_flower_with_shifted_substat(
+        level_ocr: &FakeOcr,
+        general_ocr: &FakeOcr,
+    ) -> GoodArtifact {
+        let mut image = make_1080p_image();
+        paint_rarity_stars(&mut image, 5);
+        paint_artifact_lock(&mut image, true, 0.0);
+        paint_artifact_astral(&mut image, false, 0.0);
+        paint_elixir_banner(&mut image, false);
+        let mut config = default_config();
+        config.continue_on_failure = true;
+
+        let result = GoodArtifactScanner::scan_single_artifact(
+            level_ocr,
+            general_ocr,
+            &CaptureFrame::full(image),
+            &make_1080p_scaler(),
+            &ArtifactOcrRegions::new(),
+            &make_test_mappings(),
+            &config,
+            0,
+            None,
+        )
+        .unwrap();
+        match result {
+            ArtifactScanResult::Artifact(a) => a,
+            other => panic!(
+                "Expected Artifact, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_artifact_same_model_skips_duplicate_crops_only() {
+        let level_ocr = FakeOcr::new(vec!["+20"]).with_model_id("ppocrv6tiny");
+        let general_ocr = FakeOcr::new(vec![
+            "生之花",
+            "生命值",
+            "暴击率+10.5%",
+            "暴击伤害+21.0%",
+            "攻击力+9.3%",
+            "乱码无法识别",      // sub3 direct
+            "乱码无法识别",      // sub3 icon-masked
+            "元素充能效率+6.5%", // sub3 shifted crop (dy=-2)
+            "角斗士的终幕礼",
+            "口口口已装备", // equip: unmatched, no same-model retry
+        ])
+        .with_model_id("ppocrv6tiny");
+
+        let a = scan_flower_with_shifted_substat(&level_ocr, &general_ocr);
+
+        assert_eq!(a.level, 20);
+        assert_eq!(a.substats.len(), 4);
+        assert!(a.location.is_empty());
+        assert_eq!(level_ocr.call_count(), 1);
+        assert_eq!(general_ocr.call_count(), 10);
+    }
+
+    #[test]
+    fn test_artifact_different_models_keep_second_engine_reads() {
+        let level_ocr = FakeOcr::new(vec![
+            "+20",
+            "",             // sub3 original rect retry
+            "纳西妲已装备", // equip retry
+        ])
+        .with_model_id("ppocrv5");
+        let general_ocr = FakeOcr::new(vec![
+            "生之花",
+            "生命值",
+            "+20", // level cross-read
+            "暴击率+10.5%",
+            "暴击伤害+21.0%",
+            "攻击力+9.3%",
+            "乱码无法识别",
+            "乱码无法识别",
+            "元素充能效率+6.5%",
+            "角斗士的终幕礼",
+            "口口口已装备",
+        ])
+        .with_model_id("ppocrv4");
+
+        let a = scan_flower_with_shifted_substat(&level_ocr, &general_ocr);
+
+        assert_eq!(a.level, 20);
+        assert_eq!(a.substats.len(), 4);
+        assert_eq!(a.location, "Nahida");
+        assert_eq!(level_ocr.call_count(), 3);
+        assert_eq!(general_ocr.call_count(), 11);
     }
 }

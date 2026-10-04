@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Context;
-use genshin_scanner::cli::{GoodUserConfig, ScanCoreConfig};
+use genshin_scanner::cli::{GoodUserConfig, OcrEngineArgs, ScanCoreConfig};
 
 thread_local! {
     /// Panic-hook details captured on the panicking thread. A surrounding
@@ -802,8 +802,7 @@ impl AppState {
             capture_method: genshin_scanner::cli::capture_method_for_hdr_mode(self.hdr_mode),
             save_on_cancel: self.save_on_cancel,
             output_dir: self.output_dir.clone(),
-            ocr_backend: None,
-            artifact_substat_ocr: "ppocrv4".to_string(),
+            ocr: OcrEngineArgs::default(),
             char_max_count: self.char_max_count,
             weapon_max_count: self.weapon_max_count,
             artifact_max_count: self.artifact_max_count,

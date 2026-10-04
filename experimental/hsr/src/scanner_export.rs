@@ -1,7 +1,8 @@
 //! HSR-Scanner v4 interchange, as consumed by Fribbels and Reliquary clients.
 //! `source` is the importer's required format discriminator; `generator` records
-//! the actual producer. Account and server-instance identifiers are not exported.
-//! See `docs/HSR_EXPORT.md`.
+//! the actual producer. The only account identifier exported is the UID the
+//! screenshot scanner reads from the on-screen watermark (`metadata.uid`, as
+//! HSR-Scanner does); server item ids are never exported. See `docs/HSR_EXPORT.md`.
 //!
 //! Screenshot OCR and packet capture both write this shape. OCR omits fields it
 //! cannot observe rather than emitting a second schema.
@@ -30,6 +31,8 @@ pub struct CaptureExportDetails {
     pub characters: BTreeMap<u32, CharacterDetails>,
     pub trailblazer: Option<String>,
     pub current_trailblazer_path: Option<String>,
+    /// Screenshot scans read the on-screen UID watermark; capture leaves it unset.
+    pub uid: Option<u64>,
 }
 
 pub fn build_scanner_export(
@@ -102,7 +105,7 @@ pub fn build_scanner_export(
             .find_map(|c| trailblazer_gender(c.character_id))
     });
     let mut metadata = Map::new();
-    metadata.insert("uid".into(), Value::Null);
+    metadata.insert("uid".into(), json!(details.uid));
     metadata.insert("trailblazer".into(), json!(trailblazer));
     if let Some(path) = &details.current_trailblazer_path {
         metadata.insert("current_trailblazer_path".into(), json!(path));
@@ -146,13 +149,7 @@ fn location(id: Option<u32>) -> String {
 }
 
 pub(crate) fn trailblazer_gender(avatar_id: u32) -> Option<&'static str> {
-    (8001..9000)
-        .contains(&avatar_id)
-        .then_some(if avatar_id % 2 == 0 {
-            "Stelle"
-        } else {
-            "Caelus"
-        })
+    TrailblazerGender::of(avatar_id).map(TrailblazerGender::name)
 }
 
 pub(crate) fn path_name(path: &str) -> HsrResult<&str> {

@@ -1,4 +1,5 @@
 use eframe::egui;
+use hsr_scanner::TrailblazerGender;
 
 use crate::config::{StarRailCaptureMethod, StarRailSettings};
 
@@ -63,7 +64,7 @@ pub fn show(
                 || settings.scan_relics_and_ornaments;
             if ui
                 .add_enabled(
-                    !game_busy && has_target,
+                    !game_busy && has_target && !settings.missing_trailblazer(),
                     egui::Button::new(lang.t("▶ 开始扫描", "▶ Start Scan")),
                 )
                 .clicked()
@@ -139,6 +140,9 @@ pub fn show(
                                 ),
                             );
                         });
+                        if settings.scan_characters {
+                            trailblazer_row(ui, lang, settings);
+                        }
                         ui.checkbox(
                             &mut settings.dump_images,
                             lang.t(
@@ -301,6 +305,53 @@ pub fn show(
                     });
                 });
         });
+}
+
+/// The Trailblazer can be renamed in-game, like Genshin's Traveler, and the
+/// character screen does not show which gender this account plays.
+fn trailblazer_row(ui: &mut egui::Ui, lang: Lang, settings: &mut StarRailSettings) {
+    let missing = settings.missing_trailblazer();
+    let label_color = if missing {
+        egui::Color32::from_rgb(255, 100, 100)
+    } else {
+        ui.visuals().text_color()
+    };
+    ui.horizontal(|ui| {
+        ui.colored_label(label_color, lang.t("开拓者昵称*", "Trailblazer nickname*"));
+        ui.add(egui::TextEdit::singleline(&mut settings.trailblazer_name).desired_width(160.0));
+        ui.add_space(12.0);
+        ui.colored_label(label_color, lang.t("性别*", "Gender*"));
+        egui::ComboBox::from_id_salt("star_rail_trailblazer_gender")
+            .selected_text(match settings.trailblazer_gender {
+                Some(gender) => trailblazer_gender_label(lang, gender),
+                None => lang.t("请选择", "Choose"),
+            })
+            .show_ui(ui, |ui| {
+                for gender in [TrailblazerGender::Stelle, TrailblazerGender::Caelus] {
+                    ui.selectable_value(
+                        &mut settings.trailblazer_gender,
+                        Some(gender),
+                        trailblazer_gender_label(lang, gender),
+                    );
+                }
+            });
+    });
+    if missing {
+        ui.colored_label(
+            egui::Color32::from_rgb(255, 200, 50),
+            lang.t(
+                "扫描角色需要开拓者的游戏内昵称和性别。",
+                "Scanning Characters needs the Trailblazer's in-game nickname and gender.",
+            ),
+        );
+    }
+}
+
+fn trailblazer_gender_label(lang: Lang, gender: TrailblazerGender) -> &'static str {
+    match gender {
+        TrailblazerGender::Stelle => lang.t("星（女）", "Stelle (female)"),
+        TrailblazerGender::Caelus => lang.t("穹（男）", "Caelus (male)"),
+    }
 }
 
 fn capture_method_label(lang: Lang, method: StarRailCaptureMethod) -> &'static str {

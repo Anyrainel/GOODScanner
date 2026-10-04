@@ -24,7 +24,7 @@ use genshin_scanner::manager::orchestrator::ArtifactManager;
 use genshin_scanner::manager::ui_actions::{self, ManagerDelays};
 use genshin_scanner::scanner::common::game_controller::GenshinGameController;
 use genshin_scanner::scanner::common::mappings::MappingManager;
-use genshin_scanner::scanner::common::ocr_pool::SharedOcrPools;
+use genshin_scanner::scanner::common::ocr_pool::{OcrBackends, SharedOcrPools};
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -83,8 +83,7 @@ fn main() -> Result<()> {
     let mappings = MappingManager::new(&overrides)?;
     let pools = Arc::new(SharedOcrPools::new(
         user_config.resolve_ocr_pool_config(),
-        "ppocrv4",
-        "ppocrv4",
+        &OcrBackends::default(),
     )?);
 
     let manager = ArtifactManager::new(

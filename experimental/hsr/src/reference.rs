@@ -10,12 +10,16 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     error::{hints, HsrError, HsrResult},
+    localization::BilingualName,
     model::{
         CharacterReference, GearReference, GearSlot, LightConeReference, ReferenceSnapshot,
-        RelicMainAffixReference, StatReference, StatValueKind, REFERENCE_SCHEMA_VERSION,
+        RelicMainAffixReference, StatReference, StatValueKind, TrailblazerGender,
+        TrailblazerIdentity, REFERENCE_SCHEMA_VERSION,
     },
     privacy::reject_sensitive_fields,
 };
+
+const TRAILBLAZER_NAME_PLACEHOLDER: &str = "{NICKNAME}";
 
 /// Boundary for normalized HSR reference data. A future GIlore adapter should
 /// produce this snapshot rather than leaking datamine-specific structures into
@@ -1115,6 +1119,40 @@ impl ReferenceCache {
         )
     }
 
+    /// Resolve the character-details header (`Path／Name`). Trailblazer
+    /// templates are named `{NICKNAME}`: they answer to the configured
+    /// nickname for the configured gender only, and never match without one.
+    pub fn resolve_character_header(
+        &self,
+        name: &str,
+        path: Option<&str>,
+        trailblazer: Option<&TrailblazerIdentity>,
+    ) -> Option<&CharacterReference> {
+        let nickname = trailblazer.map(|identity| BilingualName {
+            zh_cn: identity.nickname.clone(),
+            en: identity.nickname.clone(),
+        });
+        let visible: Vec<(&CharacterReference, &BilingualName)> = self
+            .characters
+            .values()
+            .filter_map(|entry| {
+                if entry.name.zh_cn != TRAILBLAZER_NAME_PLACEHOLDER {
+                    return Some((entry, &entry.name));
+                }
+                let identity = trailblazer?;
+                (TrailblazerGender::of(entry.game_id) == Some(identity.gender))
+                    .then_some((entry, nickname.as_ref()?))
+            })
+            .collect();
+        exactly_one(
+            best_name_candidates(name, &visible, |entry| entry.1)
+                .into_iter()
+                .map(|entry| entry.0)
+                .filter(|entry| path.is_none_or(|path| character_path_matches(&entry.path, path)))
+                .collect(),
+        )
+    }
+
     pub fn resolve_light_cone_name(&self, text: &str) -> Option<&LightConeReference> {
         unique_best_name(text, self.light_cones.values(), |entry| &entry.name)
     }
@@ -1595,12 +1633,21 @@ fn best_name_candidates<'a, T: 'a>(
         .collect()
 }
 
+/// Reference names carry client rich-text markup (`银狼LV.<unbreak>999</unbreak>`)
+/// that is never rendered, so tags are dropped before comparing with OCR.
 fn normalize_name(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+    let mut normalized = String::with_capacity(value.len());
+    let mut in_tag = false;
+    for character in value.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if in_tag => {},
+            _ if character.is_alphanumeric() => normalized.extend(character.to_lowercase()),
+            _ => {},
+        }
+    }
+    normalized
 }
 
 fn character_path_matches(canonical_path: &str, observed_path: &str) -> bool {
@@ -1654,5 +1701,45 @@ mod name_tests {
     fn levenshtein_is_unicode_character_based() {
         assert_eq!(levenshtein_chars("暴击率", "暴擊率"), 1);
         assert_eq!(levenshtein_chars("March7th", "March7th"), 0);
+    }
+
+    fn header_id(
+        references: &ReferenceCache,
+        name: &str,
+        path: Option<&str>,
+        trailblazer: Option<&TrailblazerIdentity>,
+    ) -> Option<u32> {
+        references
+            .resolve_character_header(name, path, trailblazer)
+            .map(|entry| entry.game_id)
+    }
+
+    #[test]
+    fn rich_text_markup_does_not_hide_silver_wolf_lv999() {
+        let references = crate::load_embedded_gilore_reference().unwrap();
+
+        assert_eq!(header_id(&references, "银狼LV.999", Some("欢愉"), None), Some(1506));
+        assert_eq!(header_id(&references, "银狼LV.999", None, None), Some(1506));
+        assert_eq!(header_id(&references, "银狼", Some("虚无"), None), Some(1006));
+    }
+
+    #[test]
+    fn trailblazer_nickname_resolves_by_gender_and_path() {
+        let references = crate::load_embedded_gilore_reference().unwrap();
+        let stelle = TrailblazerIdentity {
+            nickname: "青雀又又又和了".to_string(),
+            gender: TrailblazerGender::Stelle,
+        };
+        let caelus = TrailblazerIdentity {
+            gender: TrailblazerGender::Caelus,
+            ..stelle.clone()
+        };
+
+        assert_eq!(header_id(&references, "青雀又又又和了", Some("欢愉"), Some(&stelle)), Some(8010));
+        assert_eq!(header_id(&references, "青雀又又又和了", Some("毁灭"), Some(&stelle)), Some(8002));
+        assert_eq!(header_id(&references, "青雀又又又和了", Some("欢愉"), Some(&caelus)), Some(8009));
+        assert_eq!(header_id(&references, "青雀又又又和了", Some("欢愉"), None), None);
+        assert_eq!(header_id(&references, "NICKNAME", Some("欢愉"), None), None);
+        assert_eq!(header_id(&references, "青雀", Some("智识"), Some(&stelle)), Some(1201));
     }
 }

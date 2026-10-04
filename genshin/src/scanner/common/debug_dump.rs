@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -5,6 +6,7 @@ use std::sync::OnceLock;
 use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
 use image::{GenericImageView, Rgb, RgbImage};
 
+use super::capture_frame::CaptureFrame;
 use super::coord_scaler::CoordScaler;
 use super::grid_icon_detector::GridCellAnnotation;
 use super::pixel_utils::ConstellationResult;
@@ -447,10 +449,12 @@ pub enum LabelPosition {
     Below,
 }
 
+/// Entry coordinates are base 1920×1080 units relative to their image's origin,
+/// so region captures crop exactly what OCR saw via [`CaptureFrame::crop`].
 pub enum DumpEntry {
     OcrRegion {
         field_name: String,
-        /// Base 1920×1080 coords (already shifted by y_shift where applicable)
+        /// Base coords (already shifted by y_shift where applicable)
         rect: (f64, f64, f64, f64),
         raw_text: String,
         /// GOOD key / code-level result (used in result.txt).
@@ -486,6 +490,8 @@ pub enum DumpEntry {
 pub struct DumpCollector {
     dir: PathBuf,
     images: Vec<(String, RgbImage)>,
+    /// Window-space origin of each image (parallel to `images`).
+    image_origins: Vec<(f64, f64)>,
     entries: Vec<(usize, DumpEntry)>,
     warnings: Vec<String>,
     scaler: CoordScaler,
@@ -505,6 +511,7 @@ impl DumpCollector {
         Self {
             dir,
             images: Vec::new(),
+            image_origins: Vec::new(),
             entries: Vec::new(),
             warnings: Vec::new(),
             scaler: scaler.clone(),
@@ -519,9 +526,34 @@ impl DumpCollector {
 
     /// Register a captured image. Returns the image index for later entry references.
     pub fn add_image(&mut self, label: &str, image: &RgbImage) -> usize {
+        self.push_image(label, image, (0.0, 0.0))
+    }
+
+    /// Register a region capture; entries recorded in window coords are
+    /// translated by the frame origin.
+    pub fn add_frame(&mut self, label: &str, frame: &CaptureFrame) -> usize {
+        self.push_image(label, &frame.image, frame.origin)
+    }
+
+    fn push_image(&mut self, label: &str, image: &RgbImage, origin: (f64, f64)) -> usize {
         let idx = self.images.len();
         self.images.push((label.to_string(), image.clone()));
+        self.image_origins.push(origin);
         idx
+    }
+
+    fn to_image_pos(&self, img_idx: usize, pos: (f64, f64)) -> (f64, f64) {
+        let (ox, oy) = self
+            .image_origins
+            .get(img_idx)
+            .copied()
+            .unwrap_or((0.0, 0.0));
+        (pos.0 - ox, pos.1 - oy)
+    }
+
+    fn to_image_rect(&self, img_idx: usize, rect: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+        let (x, y) = self.to_image_pos(img_idx, (rect.0, rect.1));
+        (x, y, rect.2, rect.3)
     }
 
     /// Record an OCR region result. `rect` should already include any y_shift.
@@ -532,6 +564,7 @@ impl DumpCollector {
         rect: (f64, f64, f64, f64),
         raw_text: &str,
     ) {
+        let rect = self.to_image_rect(img_idx, rect);
         self.entries.push((
             img_idx,
             DumpEntry::OcrRegion {
@@ -621,6 +654,7 @@ impl DumpCollector {
         result_text: &str,
         color: Option<Rgb<u8>>,
     ) {
+        let pos = self.to_image_pos(img_idx, pos);
         self.entries.push((
             img_idx,
             DumpEntry::PixelCheck {
@@ -639,7 +673,10 @@ impl DumpCollector {
         let nodes: Vec<_> = result
             .nodes
             .iter()
-            .map(|n| (n.pos, n.activated, n.brightness, n.threshold))
+            .map(|n| {
+                let pos = self.to_image_pos(img_idx, n.pos);
+                (pos, n.activated, n.brightness, n.threshold)
+            })
             .collect();
         self.entries.push((
             img_idx,
@@ -658,6 +695,14 @@ impl DumpCollector {
         cells: Vec<GridCellAnnotation>,
         detections: Vec<(usize, bool, bool)>,
     ) {
+        let cells = cells
+            .into_iter()
+            .map(|cell| GridCellAnnotation {
+                rect: self.to_image_rect(img_idx, cell.rect),
+                lock_pos: self.to_image_pos(img_idx, cell.lock_pos),
+                astral_pos: self.to_image_pos(img_idx, cell.astral_pos),
+            })
+            .collect();
         self.entries
             .push((img_idx, DumpEntry::GridOverlay { cells, detections }));
     }
@@ -670,15 +715,19 @@ impl DumpCollector {
     /// Write all output files for a successfully scanned item.
     pub fn finalize_success(mut self, result_json: &str) {
         self.finalized = true;
-        self.write_images();
+        let crop_names = self.crop_file_names();
+        self.write_images(&crop_names);
         self.write_result_txt(Some(result_json), None);
+        self.write_ocr_manifest(&crop_names, Some(result_json), None);
     }
 
     /// Write output files for a failed scan.
     pub fn finalize_error(mut self, partial_json: Option<&str>, error: &str) {
         self.finalized = true;
-        self.write_images();
+        let crop_names = self.crop_file_names();
+        self.write_images(&crop_names);
         self.write_result_txt(partial_json, Some(error));
+        self.write_ocr_manifest(&crop_names, partial_json, Some(error));
     }
 
     /// Write output files for a skipped item.
@@ -691,7 +740,40 @@ impl DumpCollector {
 
     // ── Private helpers ─────────────────────────────────────────────────
 
-    fn write_images(&self) {
+    /// Crop file name per entry (parallel to `self.entries`). Field names can
+    /// repeat across images, so later duplicates get a numeric suffix instead
+    /// of overwriting an earlier crop.
+    fn crop_file_names(&self) -> Vec<Option<String>> {
+        let mut used = HashSet::new();
+        self.entries
+            .iter()
+            .map(|(_, entry)| {
+                let field_name = match entry {
+                    DumpEntry::OcrRegion {
+                        field_name, rect, ..
+                    } => {
+                        if self.scaler.x(rect.2) <= 0 || self.scaler.y(rect.3) <= 0 {
+                            return None;
+                        }
+                        field_name
+                    },
+                    DumpEntry::PixelCheck { field_name, .. } => field_name,
+                    DumpEntry::Constellation { .. } | DumpEntry::GridOverlay { .. } => {
+                        return None;
+                    },
+                };
+                let mut name = field_name.clone();
+                let mut n = 1;
+                while !used.insert(name.clone()) {
+                    n += 1;
+                    name = format!("{}_{}", field_name, n);
+                }
+                Some(format!("{}.png", name))
+            })
+            .collect()
+    }
+
+    fn write_images(&self, crop_names: &[Option<String>]) {
         let single = self.images.len() == 1;
 
         for (img_idx, (label, image)) in self.images.iter().enumerate() {
@@ -714,29 +796,30 @@ impl DumpCollector {
 
             // Build annotated image
             let mut annotated = image.clone();
-            for (entry_img_idx, entry) in &self.entries {
+            for ((entry_img_idx, entry), crop_name) in self.entries.iter().zip(crop_names) {
                 if *entry_img_idx != img_idx {
                     continue;
                 }
                 match entry {
                     DumpEntry::OcrRegion {
-                        field_name,
                         rect,
                         raw_text,
                         display_result,
                         label_pos,
                         ..
                     } => {
+                        // Zero-area entries (synthetic/metadata) have no crop name
+                        let Some(crop_name) = crop_name else {
+                            continue;
+                        };
                         let (bx, by, bw, bh) = *rect;
                         let x = self.scaler.x(bx);
                         let y = self.scaler.y(by);
                         let w = self.scaler.x(bw);
                         let h = self.scaler.y(bh);
 
-                        // Skip zero-area entries (synthetic/metadata entries)
-                        if w <= 0 || h <= 0 {
-                            continue;
-                        }
+                        // Saved before labeling so empty-OCR regions still yield a crop
+                        self.save_crop(image, crop_name, *rect);
 
                         // Expand outward so floor(t/2) pixels sit on/inside the region
                         draw_rect(
@@ -803,12 +886,8 @@ impl DumpCollector {
                             BLACK,
                             fs,
                         );
-
-                        // Save individual crop
-                        self.save_crop(image, field_name, *rect);
                     },
                     DumpEntry::PixelCheck {
-                        field_name,
                         pos,
                         rgb: _,
                         result_text,
@@ -846,8 +925,9 @@ impl DumpCollector {
                             fs,
                         );
 
-                        // Save pixel neighbourhood crop
-                        self.save_pixel_crop(image, field_name, *pos);
+                        if let Some(crop_name) = crop_name {
+                            self.save_pixel_crop(image, crop_name, *pos);
+                        }
                     },
                     DumpEntry::Constellation { level, nodes } => {
                         // Draw bounding box per node with label on the left
@@ -982,7 +1062,7 @@ impl DumpCollector {
         }
     }
 
-    fn save_crop(&self, image: &RgbImage, name: &str, rect: (f64, f64, f64, f64)) {
+    fn save_crop(&self, image: &RgbImage, file_name: &str, rect: (f64, f64, f64, f64)) {
         let (bx, by, bw, bh) = rect;
         let x = (self.scaler.x(bx) as u32).min(image.width().saturating_sub(1));
         let y = (self.scaler.y(by) as u32).min(image.height().saturating_sub(1));
@@ -992,10 +1072,54 @@ impl DumpCollector {
             return;
         }
         let sub = image.view(x, y, w, h).to_image();
-        let _ = sub.save(self.dir.join(format!("{}.png", name)));
+        let _ = sub.save(self.dir.join(file_name));
     }
 
-    fn save_pixel_crop(&self, image: &RgbImage, name: &str, pos: (f64, f64)) {
+    /// Machine-readable companion to result.txt: one record per OCR crop so
+    /// offline tooling can pair each crop with a verified label.
+    fn write_ocr_manifest(
+        &self,
+        crop_names: &[Option<String>],
+        result_json: Option<&str>,
+        error: Option<&str>,
+    ) {
+        let fields: Vec<serde_json::Value> = self
+            .entries
+            .iter()
+            .zip(crop_names)
+            .filter_map(|((img_idx, entry), crop_name)| match entry {
+                DumpEntry::OcrRegion {
+                    field_name,
+                    rect,
+                    raw_text,
+                    final_result,
+                    display_result,
+                    ..
+                } => Some(serde_json::json!({
+                    "field": field_name,
+                    "image": self.images.get(*img_idx).map(|(label, _)| label.as_str()),
+                    "crop": crop_name,
+                    "rect": [rect.0, rect.1, rect.2, rect.3],
+                    "raw": raw_text.trim(),
+                    "final": final_result,
+                    "display": display_result,
+                })),
+                _ => None,
+            })
+            .collect();
+        let final_object = result_json
+            .map(|s| serde_json::from_str(s).unwrap_or_else(|_| serde_json::Value::from(s)));
+        let manifest = serde_json::json!({
+            "error": error,
+            "fields": fields,
+            "final_object": final_object,
+        });
+        if let Ok(text) = serde_json::to_string_pretty(&manifest) {
+            let _ = std::fs::write(self.dir.join("ocr_fields.json"), text);
+        }
+    }
+
+    fn save_pixel_crop(&self, image: &RgbImage, file_name: &str, pos: (f64, f64)) {
         let padding = 10u32;
         let cx = self.scaler.x(pos.0) as i32;
         let cy = self.scaler.y(pos.1) as i32;
@@ -1007,7 +1131,7 @@ impl DumpCollector {
             return;
         }
         let sub = image.view(x, y, w, h).to_image();
-        let _ = sub.save(self.dir.join(format!("{}.png", name)));
+        let _ = sub.save(self.dir.join(file_name));
     }
 
     fn write_result_txt(&self, result_json: Option<&str>, error: Option<&str>) {
@@ -1241,4 +1365,41 @@ fn save_region(
     }
     let sub = image.view(x, y, w, h).to_image();
     let _ = sub.save(dir.join(format!("{}.png", name)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn region_frame_crop_matches_ocr_crop() {
+        // Arrange: a panel capture whose pixels encode their image-local position.
+        let scaler = CoordScaler::new(1920, 1080);
+        let mut image = RgbImage::new(480, 860);
+        for (x, y, px) in image.enumerate_pixels_mut() {
+            *px = Rgb([(x % 256) as u8, (y % 256) as u8, 0]);
+        }
+        let frame = CaptureFrame {
+            image,
+            origin: (1310.0, 110.0),
+        };
+        let rect = (1356.0, 475.0, 255.0, 30.0);
+        let base =
+            std::env::temp_dir().join(format!("goodscanner_dump_test_{}", std::process::id()));
+
+        // Act
+        let mut collector = DumpCollector::new(&base.to_string_lossy(), "artifacts", 0, &scaler);
+        let img_idx = collector.add_frame("panel", &frame);
+        collector.record_ocr(img_idx, "sub[0]", rect, "text");
+        collector.finalize_success("{}");
+
+        // Assert
+        let saved = image::open(base.join("artifacts").join("0000").join("sub[0].png"))
+            .unwrap()
+            .to_rgb8();
+        let _ = std::fs::remove_dir_all(&base);
+        let expected = frame.crop(rect, 0.0, &scaler).unwrap();
+        assert_eq!(saved.dimensions(), expected.dimensions());
+        assert_eq!(saved.as_raw(), expected.as_raw());
+    }
 }

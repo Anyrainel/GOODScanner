@@ -162,7 +162,7 @@ All help text is bilingual (Chinese + English). Flags are grouped into four sect
 - `--continue-on-failure` — keep scanning when individual items fail
 - `--log-progress` — log each scanned item
 - `--output-dir <DIR>` — output directory (default: `.`)
-- `--ocr-backend <NAME>` — override OCR backend globally (ppocrv4 or ppocrv5)
+- `--ocr-backend <NAME>` — override every category's secondary (v5-slot) backend: character name/level check, weapon equip fallback, artifact level (also achievements)
 - `--dump-images` — save OCR region screenshots to `debug_images/`
 
 ### Scanner Config
@@ -170,7 +170,9 @@ All help text is bilingual (Chinese + English). Flags are grouped into four sect
 - `--artifact-min-rarity <N>` — min artifact rarity (default: 4)
 - `--char-max-count <N>` / `--weapon-max-count <N>` / `--artifact-max-count <N>` — max items (0 = unlimited)
 - `--weapon-skip-delay` / `--artifact-skip-delay` — skip panel delay (faster but less reliable lock/astral detection)
-- `--artifact-substat-ocr <NAME>` — substat/general OCR backend (default: ppocrv4)
+- `--char-ocr <NAME>` — character general backend (default: ppocrv4)
+- `--weapon-ocr <NAME>` — weapon general backend (default: ppocrv6tiny)
+- `--artifact-substat-ocr <NAME>` — artifact substat/general backend (default: ppocrv6tiny)
 
 ### Debug
 - `--debug-compare <PATH>` — groundtruth JSON comparison
@@ -274,13 +276,15 @@ In `OCR_CONFUSIONS` array. Rules:
 
 ### Dual-Engine OCR Pipeline
 
-The artifact scanner uses two OCR backends (based on systematic eval — v4 dominates all fields except level):
-- **Level engine** (ppocrv5, `--ocr-backend`): Only used for artifact level OCR ("+20" style text). v5 is 100% vs v4's 39.4% on level.
-- **General engine** (ppocrv4, `--artifact-substat-ocr`): Used for everything else — name, main stat, set, equip, substats. v4 is strictly better on all these fields.
+`SharedOcrPools` holds one pool pair per category (character / weapon / artifact); each pair has a general (v4-slot) and a secondary (v5-slot) pool, and pairs naming the same backend share instances. Defaults live in `ocr_pool.rs` (`DEFAULT_*_OCR`), chosen from a live eval against groundtruth:
+- **Characters**: general ppocrv4 (`--char-ocr`), secondary ppocrv5. v6 tiny read names 70.7% / levels 67.5% vs v4's 94.7% / 99.2%, and its dictionary lacks 魈.
+- **Weapons**: ppocrv6tiny in both slots (`--weapon-ocr`). Name 97.5% vs v4's 89%.
+- **Artifacts**: level engine ppocrv6tiny, general engine ppocrv6tiny (`--artifact-substat-ocr`) for name, main stat, set, equip, substats. Substats 100% vs v4's 96.4%, set name 99.2% vs 93.7%; level tied at 100% (v4 alone is only 39.4% on level).
+- `--ocr-backend` overrides every category's secondary slot. The equip manager reads character names, so it uses the character pair.
 
-Level uses dual-engine (tries both, takes max valid). Substats use only the general engine (v4). Results are collected as `OcrCandidate` lists per line, then validated by the roll solver.
+Level uses dual-engine (tries both, takes max valid). Substats use only the general engine. Results are collected as `OcrCandidate` lists per line, then validated by the roll solver.
 
-Weapon and character scanners use a single engine (v4 by default).
+Second-engine reads (level cross-read, equip retry, substat same-rect retry, character name cross-check, weapon equip fallback) are skipped when both engines run the same model (`ocr_factory::same_model`, via `ImageToText::model_id`) — re-running identical weights on an identical crop cannot change the result. Retries on a different crop (shifted/narrowed substat rects, icon-masked, grayscale set name, other Y probes) always run.
 
 ### Roll Solver (`roll_solver.rs`)
 

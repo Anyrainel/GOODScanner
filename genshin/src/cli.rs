@@ -21,7 +21,10 @@ use crate::scanner::common::constants::*;
 use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::mappings::{MappingManager, NameOverrides};
 use crate::scanner::common::models::GoodExport;
-use crate::scanner::common::ocr_pool::{OcrPoolConfig, SharedOcrPools};
+use crate::scanner::common::ocr_pool::{
+    OcrBackends, OcrPoolConfig, SharedOcrPools, DEFAULT_ARTIFACT_OCR, DEFAULT_CHARACTER_OCR,
+    DEFAULT_WEAPON_OCR,
+};
 use crate::scanner::common::scan_runner::{run_scan_phases, ScanFailurePolicy, ScanRunOptions};
 use crate::scanner::weapon::GoodWeaponScannerConfig;
 
@@ -998,6 +1001,69 @@ fn load_or_create_config() -> Result<GoodUserConfig> {
 // CLI config
 // ================================================================
 
+/// OCR engine selection, shared by the CLI, GUI and manager server.
+#[derive(Clone, Debug, clap::Args)]
+pub struct OcrEngineArgs {
+    /// 覆盖各类别的辅助OCR后端 / Override every category's secondary OCR backend
+    #[arg(
+        long = "ocr-backend",
+        help = "覆盖所有类别的辅助OCR后端（角色名/等级校验、武器装备回退、圣遗物等级；也用于成就）\n\
+                Override the secondary OCR backend of every category (character name/level check, \
+                weapon equip fallback, artifact level; also achievements)",
+        help_heading = "通用选项 / Global Options"
+    )]
+    pub ocr_backend: Option<String>,
+
+    /// 角色OCR后端 / Character OCR backend
+    #[arg(
+        long = "char-ocr",
+        help = "角色界面通用OCR后端\nCharacter screen general OCR backend",
+        default_value = DEFAULT_CHARACTER_OCR,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
+    pub char_ocr: String,
+
+    /// 武器OCR后端 / Weapon OCR backend
+    #[arg(
+        long = "weapon-ocr",
+        help = "武器通用OCR后端\nWeapon general OCR backend",
+        default_value = DEFAULT_WEAPON_OCR,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
+    pub weapon_ocr: String,
+
+    /// 圣遗物副词条OCR后端 / Artifact substat OCR backend
+    #[arg(
+        long = "artifact-substat-ocr",
+        help = "圣遗物副词条/通用OCR后端\nArtifact substat/general OCR backend",
+        default_value = DEFAULT_ARTIFACT_OCR,
+        help_heading = "扫描器配置 / Scanner Config"
+    )]
+    pub artifact_substat_ocr: String,
+}
+
+impl Default for OcrEngineArgs {
+    fn default() -> Self {
+        Self {
+            ocr_backend: None,
+            char_ocr: DEFAULT_CHARACTER_OCR.to_string(),
+            weapon_ocr: DEFAULT_WEAPON_OCR.to_string(),
+            artifact_substat_ocr: DEFAULT_ARTIFACT_OCR.to_string(),
+        }
+    }
+}
+
+impl OcrEngineArgs {
+    pub fn backends(&self) -> OcrBackends {
+        OcrBackends::resolve(
+            self.ocr_backend.as_deref(),
+            &self.char_ocr,
+            &self.weapon_ocr,
+            &self.artifact_substat_ocr,
+        )
+    }
+}
+
 #[derive(Clone, clap::Args)]
 #[command(about = "原神GOOD格式扫描器 / Genshin Impact GOOD Format Scanner")]
 pub struct GoodScannerConfig {
@@ -1077,13 +1143,8 @@ pub struct GoodScannerConfig {
     )]
     pub output_dir: String,
 
-    /// 覆盖OCR后端 / Override OCR backend
-    #[arg(
-        long = "ocr-backend",
-        help = "覆盖OCR后端（ppocrv4、ppocrv5 或 ppocrv6tiny）\nOverride OCR backend (ppocrv4, ppocrv5, or ppocrv6tiny)",
-        help_heading = "通用选项 / Global Options"
-    )]
-    pub ocr_backend: Option<String>,
+    #[command(flatten)]
+    pub ocr: OcrEngineArgs,
 
     /// 保存OCR区域截图 / Dump OCR screenshots
     #[arg(
@@ -1159,15 +1220,6 @@ pub struct GoodScannerConfig {
     pub achievement_max_count: usize,
 
     // weapon_skip_delay and artifact_skip_delay removed — grid-based detection always used
-    /// 圣遗物副词条OCR后端 / Artifact substat OCR backend
-    #[arg(
-        long = "artifact-substat-ocr",
-        help = "圣遗物副词条OCR后端\nArtifact substat/general OCR backend",
-        default_value = "ppocrv4",
-        help_heading = "扫描器配置 / Scanner Config"
-    )]
-    pub artifact_substat_ocr: String,
-
     #[clap(skip = false)]
     pub artifact_keep_five_star_filter: bool,
 
@@ -1215,10 +1267,7 @@ impl GoodScannerApplication {
     ) -> GoodCharacterScannerConfig {
         GoodCharacterScannerConfig {
             verbose: config.verbose,
-            ocr_backend: config
-                .ocr_backend
-                .clone()
-                .unwrap_or_else(|| "ppocrv4".to_string()),
+            ocr_backend: config.ocr.backends().character.v4,
             tab_delay: user_config.char_tab_delay,
             next_delay: user_config.char_next_delay,
             open_delay: user_config.char_open_delay,
@@ -1238,10 +1287,7 @@ impl GoodScannerApplication {
         GoodWeaponScannerConfig {
             min_rarity: config.weapon_min_rarity,
             verbose: config.verbose,
-            ocr_backend: config
-                .ocr_backend
-                .clone()
-                .unwrap_or_else(|| "ppocrv4".to_string()),
+            ocr_backend: config.ocr.backends().weapon.v4,
             delay_scroll: user_config.inv_scroll_delay,
             delay_tab: user_config.inv_tab_delay,
             open_delay: user_config.inv_open_delay,
@@ -1258,14 +1304,12 @@ impl GoodScannerApplication {
         config: &GoodScannerConfig,
         user_config: &GoodUserConfig,
     ) -> GoodArtifactScannerConfig {
+        let backends = config.ocr.backends().artifact;
         GoodArtifactScannerConfig {
             min_rarity: config.artifact_min_rarity,
             verbose: config.verbose,
-            ocr_backend: config
-                .ocr_backend
-                .clone()
-                .unwrap_or_else(|| "ppocrv5".to_string()),
-            substat_ocr_backend: config.artifact_substat_ocr.clone(),
+            ocr_backend: backends.v5,
+            substat_ocr_backend: backends.v4,
             delay_scroll: user_config.inv_scroll_delay,
             delay_tab: user_config.inv_tab_delay,
             open_delay: user_config.inv_open_delay,
@@ -1288,6 +1332,7 @@ impl GoodScannerApplication {
         GoodAchievementScannerConfig {
             verbose: config.verbose,
             ocr_backend: config
+                .ocr
                 .ocr_backend
                 .clone()
                 .unwrap_or_else(|| "ppocrv6tiny".to_string()),
@@ -1355,8 +1400,7 @@ impl GoodScannerApplication {
             hdr_white_point: DEFAULT_HDR_WHITE_POINT,
             capture_method: capture_method_for_hdr_mode(config.hdr_mode || user_config.hdr_mode),
             output_dir: config.output_dir.clone(),
-            ocr_backend: config.ocr_backend.clone(),
-            artifact_substat_ocr: config.artifact_substat_ocr.clone(),
+            ocr: config.ocr.clone(),
             char_max_count: config.char_max_count,
             weapon_max_count: config.weapon_max_count,
             artifact_max_count: config.artifact_max_count,
@@ -1477,8 +1521,7 @@ pub struct ScanCoreConfig {
     pub hdr_white_point: f32,
     pub capture_method: CaptureMethod,
     pub output_dir: String,
-    pub ocr_backend: Option<String>,
-    pub artifact_substat_ocr: String,
+    pub ocr: OcrEngineArgs,
     pub char_max_count: usize,
     pub weapon_max_count: usize,
     pub artifact_max_count: usize,
@@ -1508,8 +1551,7 @@ impl Default for ScanCoreConfig {
             hdr_white_point: default_hdr_white_point(),
             capture_method: CaptureMethod::default(),
             output_dir: ".".to_string(),
-            ocr_backend: None,
-            artifact_substat_ocr: "ppocrv4".to_string(),
+            ocr: OcrEngineArgs::default(),
             char_max_count: 0,
             weapon_max_count: 0,
             artifact_max_count: 0,
@@ -1534,7 +1576,7 @@ impl ScanCoreConfig {
             continue_on_failure: self.continue_on_failure,
             log_progress: self.log_progress,
             output_dir: self.output_dir.clone(),
-            ocr_backend: self.ocr_backend.clone(),
+            ocr: self.ocr.clone(),
             dump_images: self.dump_images,
             hdr_mode: self.hdr_mode,
             hdr_white_point: self.hdr_white_point,
@@ -1544,7 +1586,6 @@ impl ScanCoreConfig {
             weapon_max_count: self.weapon_max_count,
             artifact_max_count: self.artifact_max_count,
             achievement_max_count: self.achievement_max_count,
-            artifact_substat_ocr: self.artifact_substat_ocr.clone(),
             artifact_keep_five_star_filter: self.artifact_keep_five_star_filter,
             debug_ach_scroll: self.debug_ach_scroll,
         }
@@ -1609,13 +1650,7 @@ pub fn run_scan_core(
     // Create shared OCR pools for all scanners
     report("加载OCR模型 / Loading OCR models...");
     let pool_config = user_config.resolve_ocr_pool_config();
-    let ocr_backend = config.ocr_backend.as_deref().unwrap_or("ppocrv5");
-    let substat_backend = config.artifact_substat_ocr.as_str();
-    let pools = Arc::new(SharedOcrPools::new(
-        pool_config,
-        ocr_backend,
-        substat_backend,
-    )?);
+    let pools = Arc::new(SharedOcrPools::new(pool_config, &config.ocr.backends())?);
     log_info!("OCR模型加载完成", "OCR models loaded");
 
     let save_on_cancel = config.save_on_cancel;
@@ -1693,8 +1728,7 @@ pub fn run_scan_core(
 pub fn run_server_core(
     user_config: &GoodUserConfig,
     server_port: u16,
-    ocr_backend: Option<&str>,
-    artifact_substat_ocr: &str,
+    ocr: &OcrEngineArgs,
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     stop_on_all_matched: bool,
@@ -1724,8 +1758,7 @@ pub fn run_server_core(
         mappings.artifact_set_map.len()
     );
 
-    let ocr_be = ocr_backend.unwrap_or("ppocrv5").to_string();
-    let substat_ocr = artifact_substat_ocr.to_string();
+    let ocr_backends = ocr.backends();
     let scroll_delay = user_config.inv_scroll_delay;
     let capture_delay = user_config.artifact_extra_delay;
     let panel_timeout = user_config.artifact_panel_timeout;
@@ -1746,8 +1779,7 @@ pub fn run_server_core(
         dump_images,
         hdr_mode: user_config.hdr_mode,
         capture_method: capture_method_for_hdr_mode(user_config.hdr_mode),
-        ocr_backend: ocr_backend.map(|s| s.to_string()),
-        artifact_substat_ocr: artifact_substat_ocr.to_string(),
+        ocr: ocr.clone(),
         ..ScanCoreConfig::default()
     };
     let exec_user_config = user_config.clone();
@@ -1764,12 +1796,10 @@ pub fn run_server_core(
         let ctrl = GenshinGameController::new(game_info, capture_method)?;
         log_info!("加载OCR模型...", "Loading OCR models...");
         let pool_config = exec_user_config.resolve_ocr_pool_config();
-        let pools = Arc::new(
-            SharedOcrPools::new(pool_config, &ocr_be, &substat_ocr).context(
-                "OCR模型加载失败，请确认内存充足（建议8GB以上）\
+        let pools = Arc::new(SharedOcrPools::new(pool_config, &ocr_backends).context(
+            "OCR模型加载失败，请确认内存充足（建议8GB以上）\
                      / OCR model load failed — ensure sufficient memory (8 GB+ recommended)",
-            )?,
-        );
+        )?);
         let manager = crate::manager::orchestrator::ArtifactManager::new(
             mappings_clone.clone(),
             pools,
@@ -1803,8 +1833,7 @@ pub fn run_server_core(
 pub fn run_manage_json(
     user_config: &GoodUserConfig,
     json_str: &str,
-    ocr_backend: Option<&str>,
-    artifact_substat_ocr: &str,
+    ocr: &OcrEngineArgs,
     cancel_token: Option<yas::cancel::CancelToken>,
 ) -> Result<crate::manager::models::ManageResult> {
     crate::scanner::common::pixel_profile::set_hdr_mode(user_config.hdr_mode);
@@ -1841,13 +1870,8 @@ pub fn run_manage_json(
     let mut ctrl = GenshinGameController::new(game_info, capture_method)?;
     let token = cancel_token.unwrap_or_else(yas::cancel::CancelToken::new);
 
-    let ocr_be = ocr_backend.unwrap_or("ppocrv5");
     let pool_config = user_config.resolve_ocr_pool_config();
-    let pools = Arc::new(SharedOcrPools::new(
-        pool_config,
-        ocr_be,
-        artifact_substat_ocr,
-    )?);
+    let pools = Arc::new(SharedOcrPools::new(pool_config, &ocr.backends())?);
     let manager = crate::manager::orchestrator::ArtifactManager::new(
         mappings,
         pools,
@@ -1867,6 +1891,45 @@ pub fn run_manage_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scanner::common::ocr_pool::OcrSlotBackends;
+    use clap::{Args, Command, FromArgMatches};
+
+    fn parse_scanner_args(args: &[&str]) -> GoodScannerConfig {
+        let cmd = GoodScannerConfig::augment_args(Command::new("scan"));
+        cmd.clone().debug_assert();
+        let matches = cmd.get_matches_from(std::iter::once("scan").chain(args.iter().copied()));
+        GoodScannerConfig::from_arg_matches(&matches).unwrap()
+    }
+
+    #[test]
+    fn ocr_flags_default_per_category() {
+        let cfg = parse_scanner_args(&[]);
+
+        assert_eq!(cfg.ocr.backends(), OcrBackends::default());
+    }
+
+    #[test]
+    fn ocr_flags_override_each_category() {
+        let cfg = parse_scanner_args(&[
+            "--char-ocr",
+            "ppocrv5",
+            "--weapon-ocr",
+            "ppocrv4",
+            "--artifact-substat-ocr",
+            "ppocrv4",
+            "--ocr-backend",
+            "ppocrv5",
+        ]);
+
+        let backends = cfg.ocr.backends();
+        let expect = |v4: &str| OcrSlotBackends {
+            v5: "ppocrv5".to_string(),
+            v4: v4.to_string(),
+        };
+        assert_eq!(backends.character, expect("ppocrv5"));
+        assert_eq!(backends.weapon, expect("ppocrv4"));
+        assert_eq!(backends.artifact, expect("ppocrv4"));
+    }
 
     #[test]
     fn user_config_accepts_legacy_recent_manager_key() {
