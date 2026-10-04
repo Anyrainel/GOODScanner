@@ -72,15 +72,6 @@ pub fn show(
                         ui.add_space(12.0);
                         ui.checkbox(&mut state.scan_achievements, l.t("成就", "Achievements"));
                     });
-                    if state.scan_achievements {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(160, 160, 160),
-                            l.t(
-                                "成就扫描会先进行，并从暂停菜单自动打开成就界面。",
-                                "Achievements scan first and open the screen from the pause menu.",
-                            ),
-                        );
-                    }
                     ui.checkbox(&mut state.hdr_mode, l.t("我的原神在使用HDR", "HDR mode"));
                     ui.checkbox(
                         &mut state.only_keep_latest_export,

@@ -200,34 +200,13 @@ pub fn run_scan_phases(
     let mut characters = ScanPhaseResult::NotAttempted;
     let mut weapons = ScanPhaseResult::NotAttempted;
     let mut artifacts = ScanPhaseResult::NotAttempted;
-    let mut achievements = ScanPhaseResult::NotAttempted;
-
-    // Achievements first: they open the pause menu themselves, then later
-    // phases return to the main UI on their own.
-    if config.scan_achievements {
-        achievements = if scan_cancelled(&cancel_token, ctrl) {
-            ScanPhaseResult::Incomplete
-        } else {
-            report("扫描成就 / Scanning achievements...");
-            log_info!("扫描成就...", "Scanning achievements...");
-            let cfg = GoodScannerApplication::make_achievement_config(&scanner_config, user_config);
-            let scan_result = AchievementCatalog::new().and_then(|catalog| {
-                GoodAchievementScanner::new(cfg, Arc::new(catalog))?.scan(
-                    ctrl,
-                    &pools,
-                    Some(&achievements_progress),
-                )
-            });
-            phase_result(scan_result, &cancel_token, options, "achievement")?
-        };
-    }
 
     if scan_cancelled(&cancel_token, ctrl) {
         return Ok(ScanRunResult {
             characters: skipped_due_to_cancel(config.scan_characters),
             weapons: skipped_due_to_cancel(config.scan_weapons),
             artifacts: skipped_due_to_cancel(config.scan_artifacts),
-            achievements,
+            achievements: skipped_due_to_cancel(config.scan_achievements),
         });
     }
 
@@ -256,7 +235,7 @@ pub fn run_scan_phases(
             characters,
             weapons: skipped_due_to_cancel(config.scan_weapons),
             artifacts: skipped_due_to_cancel(config.scan_artifacts),
-            achievements,
+            achievements: skipped_due_to_cancel(config.scan_achievements),
         });
     }
 
@@ -276,7 +255,7 @@ pub fn run_scan_phases(
             characters,
             weapons,
             artifacts: skipped_due_to_cancel(config.scan_artifacts),
-            achievements,
+            achievements: skipped_due_to_cancel(config.scan_achievements),
         });
     }
 
@@ -291,6 +270,25 @@ pub fn run_scan_phases(
         };
         artifacts = phase_result(scan_result, &cancel_token, options, "artifact")?;
     }
+
+    // Achievements run after all requested roster and inventory scans.
+    let achievements = if !config.scan_achievements {
+        ScanPhaseResult::NotAttempted
+    } else if scan_cancelled(&cancel_token, ctrl) {
+        ScanPhaseResult::Incomplete
+    } else {
+        report("扫描成就 / Scanning achievements...");
+        log_info!("扫描成就...", "Scanning achievements...");
+        let cfg = GoodScannerApplication::make_achievement_config(&scanner_config, user_config);
+        let scan_result = AchievementCatalog::new().and_then(|catalog| {
+            GoodAchievementScanner::new(cfg, Arc::new(catalog))?.scan(
+                ctrl,
+                &pools,
+                Some(&achievements_progress),
+            )
+        });
+        phase_result(scan_result, &cancel_token, options, "achievement")?
+    };
 
     Ok(ScanRunResult {
         characters,
