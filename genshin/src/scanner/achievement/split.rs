@@ -765,9 +765,10 @@ mod tests {
     #[test]
     fn expands_a_short_percentage_band_up_to_the_category_name() {
         let mut img = RgbImage::from_pixel(1920, 1080, Rgb([40, 45, 60]));
-        // Name row (darker text area) plus a short bright "100 %" strip.
-        fill_rect(&mut img, 70, 176, 310, 96, Rgb([200, 195, 185]));
-        fill_rect(&mut img, 70, 220, 310, 48, Rgb([236, 229, 216]));
+        // Match the current sidebar width, with a darker name row above
+        // a short bright "100 %" strip. Only the strip should be detected.
+        fill_rect(&mut img, 70, 176, 600, 96, Rgb([200, 195, 185]));
+        fill_rect(&mut img, 70, 220, 600, 48, Rgb([236, 229, 216]));
         fill_rect(&mut img, 700, 120, 1140, 860, Rgb([231, 231, 231]));
         let rect = detect_selected_category_rect(&img).expect("expanded row");
         assert!(
