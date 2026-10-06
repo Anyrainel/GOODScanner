@@ -94,29 +94,6 @@ fn scanner_config(
     settings: &StarRailSettings,
     targets: ScanTargets,
 ) -> Result<ScanConfig, UiError> {
-    let mut keys = settings.next_character_key.chars();
-    let next_character_key = keys.next().ok_or_else(|| {
-        UiError::from_message(
-            UiText::new(
-                "“下一个角色”按键不能为空。请输入一个按键。",
-                "The Next Character key cannot be empty. Enter one key.",
-            ),
-            "starRail.nextCharacterKey is empty",
-        )
-    })?;
-    if keys.next().is_some() {
-        return Err(UiError::from_message(
-            UiText::new(
-                "“下一个角色”按键只能包含一个字符。",
-                "The Next Character key must contain exactly one character.",
-            ),
-            format!(
-                "starRail.nextCharacterKey has {} characters",
-                settings.next_character_key.chars().count()
-            ),
-        ));
-    }
-
     let trailblazer = settings.trailblazer();
     if targets.characters && trailblazer.is_none() {
         return Err(UiError::from_message(
@@ -137,7 +114,6 @@ fn scanner_config(
         max_characters: settings.max_characters,
         expected_characters: (settings.expected_characters > 0)
             .then_some(settings.expected_characters),
-        next_character_key,
         trailblazer,
         dump_images: settings.dump_images,
         ..ScanConfig::default()
@@ -316,70 +292,74 @@ pub fn spawn_scan(settings: &StarRailSettings, status: Arc<Mutex<TaskStatus>>) -
             "正在安全停止星穹铁道扫描...",
             "Stopping the Star Rail scan safely...",
         ),
-        move |cancel| {
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            ensure_ocr_runtime()?;
-            let targets = ScanTargets {
-                characters: settings.scan_characters,
-                light_cones: settings.scan_light_cones,
-                gear: settings.scan_relics_and_ornaments,
-            };
-            let config = scanner_config(&settings, targets)?;
-            let output_dir = ensure_output_dir(&settings)?;
-            let references = load_references().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
-                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let _controller_lease = HsrControllerLease::try_acquire().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "另一个星穹铁道操作正在使用游戏控制器。请等待完成后重试。",
-                        "Another Star Rail operation is using the game controller. Wait for it to finish, then retry.",
-                    ),
-                    error,
-                )
-            })?;
-            let result = match HsrScanner::live_with_cancel(
-                references.clone(),
-                config,
-                cancel.clone(),
-            )
-            .and_then(HsrScanner::scan)
-            {
-                Ok(result) => result,
-                Err(_) if user_aborted(&cancel) => return Ok(stopped(TaskKind::Scanner)),
-                Err(error) => {
-                    return Err(hsr_ui_error(
-                        UiText::new(
-                            "星穹铁道扫描未能完成。请复制完整错误以搜索或寻求帮助。",
-                            "The Star Rail scan could not finish. Copy the full error to search or ask for help.",
-                        ),
-                        error,
-                    ));
-                },
-            };
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let export = write_v4_export(
-                &result.observations,
-                &references,
-                &output_dir,
-                &result.export_details,
-            )?;
-            Ok(v4_export_message(false, export.counts, &export.path))
-        },
+        move |cancel| run_scan(&settings, cancel, None),
     )
+}
+
+/// The GUI and shipped command line use the same runtime, lease, scan, and export path.
+pub(crate) fn run_scan(
+    settings: &StarRailSettings,
+    cancel: yas::cancel::CancelToken,
+    sample_limit: Option<usize>,
+) -> Result<UiText, UiError> {
+    if user_aborted(&cancel) {
+        return Ok(stopped(TaskKind::Scanner));
+    }
+    ensure_ocr_runtime()?;
+    let targets = ScanTargets {
+        characters: settings.scan_characters,
+        light_cones: settings.scan_light_cones,
+        gear: settings.scan_relics_and_ornaments,
+    };
+    let mut config = scanner_config(settings, targets)?;
+    config.scan_item_limit = sample_limit;
+    let output_dir = ensure_output_dir(settings)?;
+    let references = load_references().map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
+                "Star Rail game data could not be loaded. Download the latest app build and retry.",
+            ),
+            error,
+        )
+    })?;
+    if user_aborted(&cancel) {
+        return Ok(stopped(TaskKind::Scanner));
+    }
+    let _controller_lease = HsrControllerLease::try_acquire().map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "另一个星穹铁道操作正在使用游戏控制器。请等待完成后重试。",
+                "Another Star Rail operation is using the game controller. Wait for it to finish, then retry.",
+            ),
+            error,
+        )
+    })?;
+    let result = match HsrScanner::live_with_cancel(references.clone(), config, cancel.clone())
+        .and_then(HsrScanner::scan)
+    {
+        Ok(result) => result,
+        Err(_) if user_aborted(&cancel) => return Ok(stopped(TaskKind::Scanner)),
+        Err(error) => {
+            return Err(hsr_ui_error(
+                UiText::new(
+                    "星穹铁道扫描未能完成。请复制完整错误以搜索或寻求帮助。",
+                    "The Star Rail scan could not finish. Copy the full error to search or ask for help.",
+                ),
+                error,
+            ));
+        },
+    };
+    if user_aborted(&cancel) {
+        return Ok(stopped(TaskKind::Scanner));
+    }
+    let export = write_v4_export(
+        &result.observations,
+        &references,
+        &output_dir,
+        &result.export_details,
+    )?;
+    Ok(v4_export_message(false, export.counts, &export.path))
 }
 
 pub fn spawn_offline_import(

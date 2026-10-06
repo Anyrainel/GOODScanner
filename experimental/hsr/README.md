@@ -111,6 +111,35 @@ geometry drift, the GUI Stop action, or right-click emergency abort prevents
 further input. Automated replay tests likewise do not prove live screenshot
 recognition or live game mutation.
 
+Character screenshot scans require the **ViGEmBus 1.22.0** virtual-controller
+driver from the [official release](https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0).
+Restart HSR after installing it. Keep the mouse still during character scans:
+mouse movement switches HSR out of controller mode. Light Cone and Relic scans
+do not require ViGEmBus. Missing-driver checks happen before game navigation.
+The legacy `nextCharacterKey` setting is retained only to read older config
+files; character traversal uses the controller's right shoulder button.
+
+角色截图扫描需要安装 [官方 ViGEmBus 1.22.0 虚拟手柄驱动](https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0)，
+安装后请重启游戏。扫描角色时请勿移动鼠标，以免游戏退出手柄模式。仅扫描光锥和遗器无需此驱动。
+缺少驱动时，程序会在操作游戏前明确提示。旧设置中的 `nextCharacterKey` 仅为兼容已有配置保留，
+角色切换实际使用手柄右肩键。
+
+Both shipped executables expose the same scan path as the GUI:
+
+```powershell
+.\GOODCapture.exe star-rail check --capture-method wgc --log-file wgc-check.log
+.\GOODCapture.exe star-rail scan --characters --max-characters 2 --dump-images --log-file characters.log
+.\GOODCapture.exe star-rail scan --light-cones --relics --sample-items 3 --capture-method bitblt --dump-images --log-file inventory.log
+```
+
+`scan` loads saved GUI settings beside the executable. Explicit target flags
+replace the saved targets for that run; overrides never rewrite the settings.
+Sampling keeps inventory coverage incomplete. `check` focuses the game and
+captures its client without navigating menus or requiring a virtual controller.
+Commands exit with a nonzero status on failure and retain full errors in
+`--log-file`; they do not pause for a keypress. Use these shipped binaries for
+live verification instead of claiming success from the example programs.
+
 实机截图扫描和管理器应用属于有人值守的 Windows 操作。请保持选定游戏窗口位于前台；焦点丢失、
 窗口位置/尺寸变化、点击界面“停止”或鼠标右键紧急中止，都会阻止后续输入。自动回放测试同样不能证明
 实机截图识别或实机游戏状态变更。

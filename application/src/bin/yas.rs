@@ -80,6 +80,11 @@ pub fn main() {
     }
 
     // CLI mode: attach console and run
+    if std::env::args().nth(1).as_deref() == Some("star-rail") {
+        #[cfg(windows)]
+        attach_console();
+        std::process::exit(good_tools_app::star_rail_cli::run());
+    }
     init_cli();
     let command = GoodScannerApplication::build_command();
     let matches = match command.try_get_matches() {

@@ -47,7 +47,10 @@ pub enum InputCommand {
     Scroll(i32),
     /// Press, move, and release. The character header scrolls when dragged
     /// along the portrait row; the wheel does not move it.
-    Drag { from: Point, to: Point },
+    Drag {
+        from: Point,
+        to: Point,
+    },
     Gamepad(GamepadButton),
     Escape,
 }
@@ -206,6 +209,16 @@ impl WindowsHsrDevice {
 
 #[cfg(target_os = "windows")]
 fn gamepad_error(error: vigem_client::Error) -> HsrError {
+    if error == vigem_client::Error::BusNotFound {
+        return HsrError::new(
+            "HSR-DEVICE-GAMEPAD-MISSING",
+            crate::LocalizedText::new(
+                "扫描角色需要 ViGEmBus 虚拟手柄驱动。请从官方发布页安装 1.22.0，重启游戏后重试。仅扫描光锥和遗器不需要此驱动。",
+                "Character scanning requires the ViGEmBus virtual-controller driver. Install 1.22.0 from the official release, restart the game, and retry. Light Cone and Relic scans do not need this driver.",
+            ),
+            "ViGEmBus not found; official installer: https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0",
+        );
+    }
     HsrError::new(
         "HSR-DEVICE-GAMEPAD",
         hints::DEVICE_UNAVAILABLE,
@@ -215,6 +228,11 @@ fn gamepad_error(error: vigem_client::Error) -> HsrError {
 
 #[cfg(target_os = "windows")]
 impl WindowsHsrDevice {
+    /// Check the character-only dependency before focusing or navigating the game.
+    pub fn prepare_character_input(&mut self) -> HsrResult<()> {
+        self.ensure_gamepad()
+    }
+
     fn ensure_gamepad(&mut self) -> HsrResult<()> {
         if self.gamepad.is_some() {
             return Ok(());
@@ -274,21 +292,35 @@ impl WindowsHsrDevice {
                 Duration::from_millis(140),
             ),
         };
-        target.update(&report).or_else(|error| {
-            // The first report after the virtual pad is plugged in often
-            // returns 259 until the Xbox device has finished starting.
-            if !matches!(error, vigem_client::Error::WinError(259)) {
-                return Err(error);
-            }
-            std::thread::sleep(Duration::from_millis(200));
-            target.update(&report)
-        }).map_err(gamepad_error)?;
+        target
+            .update(&report)
+            .or_else(|error| {
+                // The first report after the virtual pad is plugged in often
+                // returns 259 until the Xbox device has finished starting.
+                if !matches!(error, vigem_client::Error::WinError(259)) {
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(200));
+                target.update(&report)
+            })
+            .map_err(gamepad_error)?;
         std::thread::sleep(hold);
         target
             .update(&vigem_client::XGamepad::default())
             .map_err(gamepad_error)?;
         std::thread::sleep(Duration::from_millis(30));
         Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+impl WindowsHsrDevice {
+    pub fn prepare_character_input(&mut self) -> HsrResult<()> {
+        Err(HsrError::new(
+            "HSR-DEVICE-PLATFORM",
+            hints::DEVICE_UNAVAILABLE,
+            "character input requires Windows",
+        ))
     }
 }
 
@@ -842,6 +874,21 @@ impl HsrDevice for ReplayDevice {
 mod tests {
     use super::*;
     use yas::cancel::StopReason;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn missing_gamepad_driver_explains_character_only_dependency() {
+        let error = gamepad_error(vigem_client::Error::BusNotFound);
+        assert_eq!(error.code(), "HSR-DEVICE-GAMEPAD-MISSING");
+        let message = error.localized_message(crate::Language::En);
+        assert!(message.contains("ViGEmBus"));
+        assert!(message.contains("Light Cone and Relic scans do not need"));
+        assert!(message.contains("https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0"));
+        assert_eq!(
+            gamepad_error(vigem_client::Error::BusAccessFailed(5)).code(),
+            "HSR-DEVICE-GAMEPAD"
+        );
+    }
 
     #[test]
     fn caller_owned_token_can_cancel_before_device_discovery() {

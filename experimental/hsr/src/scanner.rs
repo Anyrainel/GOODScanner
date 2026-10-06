@@ -36,8 +36,7 @@ use crate::{
 
 #[cfg(test)]
 use crate::vision::{
-    classify_inventory_scroll, inventory_scrollbar_bottom_confidence, selected_cell,
-    ScrollEvidence,
+    classify_inventory_scroll, inventory_scrollbar_bottom_confidence, selected_cell, ScrollEvidence,
 };
 
 /// Name plate only. The portrait bar and the 3D preview sit inside the old
@@ -99,10 +98,6 @@ pub struct ScanConfig {
     pub scan_item_limit: Option<usize>,
     pub max_characters: usize,
     pub expected_characters: Option<usize>,
-    /// Configurable because current public evidence uses virtual-controller RB
-    /// for roster traversal. The default `e` is not claimed live-proven until
-    /// the device calibration step succeeds.
-    pub next_character_key: char,
     /// Without it the Trailblazer's header cannot be resolved and is omitted.
     pub trailblazer: Option<TrailblazerIdentity>,
     /// GOODScanner-style OCR dump. When true, crops and full frames are written
@@ -124,7 +119,6 @@ impl Default for ScanConfig {
             scan_item_limit: None,
             max_characters: 200,
             expected_characters: None,
-            next_character_key: 'e',
             trailblazer: None,
             dump_images: false,
         }
@@ -173,7 +167,10 @@ impl HsrScanner<WindowsHsrDevice, PaddleOcrReader> {
         config: ScanConfig,
         cancel: CancelToken,
     ) -> HsrResult<Self> {
-        let device = WindowsHsrDevice::locate_with_cancel(config.capture_method, cancel)?;
+        let mut device = WindowsHsrDevice::locate_with_cancel(config.capture_method, cancel)?;
+        if config.targets.characters {
+            device.prepare_character_input()?;
+        }
         let reader = PaddleOcrReader::new()?;
         Ok(Self::new(device, reader, references, config))
     }
@@ -416,9 +413,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 Ok(item) => items.push(item),
                 Err(error) if is_omittable_scan_error(error.code()) => {
                     incomplete_reason.get_or_insert_with(|| {
-                        format!(
-                            "one or more entries were omitted; firstCause={error}"
-                        )
+                        format!("one or more entries were omitted; firstCause={error}")
                     });
                     yas::log_warn!(
                         "一个库存条目无法可靠读出，已省略并继续下一项；覆盖率将标记为未知。完整错误详情：{}",
@@ -578,8 +573,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     if !frames_similar(
                         &panel.immutable_panel().crop(&selected)?,
                         &panel.immutable_panel().crop(&confirmation_frame)?,
-                    )
-                    {
+                    ) {
                         let error = HsrError::new(
                             "HSR-SCAN-QUANTITY-FRAME",
                             hints::SCREEN_INVALID,
@@ -643,7 +637,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
             let frame = self.capture_stable()?;
             observed = selected_card(grid, &frame);
-            if observed.is_some_and(|card| card.column == 0 && (card.y - first.y).abs() < SELECTION_ROW_SHIFT) {
+            if observed.is_some_and(|card| {
+                card.column == 0 && (card.y - first.y).abs() < SELECTION_ROW_SHIFT
+            }) {
                 return Ok(frame);
             }
         }
@@ -765,7 +761,8 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                         grid_moved_at = Some(Instant::now());
                     }
                 }
-                if panel_changed || grid_moved_at.is_some_and(|at| at.elapsed() >= Duration::from_millis(280))
+                if panel_changed
+                    || grid_moved_at.is_some_and(|at| at.elapsed() >= Duration::from_millis(280))
                 {
                     if panel_changed {
                         self.wait_attended(Duration::from_millis(80))?;
@@ -1116,13 +1113,12 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             details = fresh;
             self.observe_uid(&details);
             let parsed = match dump_parsed_item("characters", index, &details, || {
-                self.parser
-                    .parse_character_details(
-                        &details,
-                        &self.references,
-                        self.config.trailblazer.as_ref(),
-                        eidolon,
-                    )
+                self.parser.parse_character_details(
+                    &details,
+                    &self.references,
+                    self.config.trailblazer.as_ref(),
+                    eidolon,
+                )
             }) {
                 Ok(parsed) => Some(parsed),
                 Err(error) if error.code() == "HSR-OCR-CHARACTER-AMBIGUOUS" => {
@@ -1181,7 +1177,8 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     );
                 } else {
                     duplicate_streak = 0;
-                    if let Some(trace_details) = self.read_character_traces(index, &parsed.reference.path)?
+                    if let Some(trace_details) =
+                        self.read_character_traces(index, &parsed.reference.path)?
                     {
                         export_details
                             .characters
@@ -1192,11 +1189,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                             Some(path_name(&parsed.reference.path)?.to_string());
                     }
                     items.push(parsed.observation);
-                    yas::log_info!(
-                        "角色进度：{}。",
-                        "Character progress: {}.",
-                        items.len()
-                    );
+                    yas::log_info!("角色进度：{}。", "Character progress: {}.", items.len());
                 }
             }
             // Traces replace the details panel. Returning first keeps the
@@ -1291,7 +1284,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             )),
             Err(error) if error.code() == "HSR-CHAR-ADVANCE" || error.code() == "HSR-CHAR-END" => {
                 Ok(false)
-            }
+            },
             Err(error) => Err(error),
         }
     }
@@ -2265,7 +2258,11 @@ fn eidolon_node_unlocked(frame: &RgbImage, node: Point) -> bool {
         if x < 0.0 || y < 0.0 || x >= frame.width() as f64 || y >= height {
             return false;
         }
-        frame.get_pixel(x as u32, y as u32).0.iter().all(|&channel| channel > 170)
+        frame
+            .get_pixel(x as u32, y as u32)
+            .0
+            .iter()
+            .all(|&channel| channel > 170)
     };
     // The badge can sit a few pixels off its nominal center, so the ring is
     // matched over a small shift search.
@@ -2288,7 +2285,12 @@ fn eidolon_node_unlocked(frame: &RgbImage, node: Point) -> bool {
     if ring < MIN_RING_FRACTION {
         return false;
     }
-    disk_warmth(frame, center_x, center_y, layout::EIDOLON_DISK_RADIUS * height) < MAX_DISK_WARMTH
+    disk_warmth(
+        frame,
+        center_x,
+        center_y,
+        layout::EIDOLON_DISK_RADIUS * height,
+    ) < MAX_DISK_WARMTH
 }
 
 fn disk_warmth(frame: &RgbImage, center_x: f64, center_y: f64, radius: f64) -> f64 {
@@ -2347,7 +2349,12 @@ mod tests {
             ReplayDevice::new(1280, 720, Vec::new()),
             ScriptedOcrReader::default().with(
                 OcrField::Uid,
-                ["UID:600732506", "UID:600782506", "UID:600732506", "UID:600732506"],
+                [
+                    "UID:600732506",
+                    "UID:600782506",
+                    "UID:600732506",
+                    "UID:600732506",
+                ],
             ),
             ReferenceCache::from_snapshot(snapshot).unwrap(),
             ScanConfig::default(),
@@ -2382,7 +2389,12 @@ mod tests {
         let activated_art = Rgb([120, 110, 105]);
         paint_badge(&mut frame, layout::EIDOLON_NODES[0], true, activated_art);
         paint_badge(&mut frame, layout::EIDOLON_NODES[1], true, activated_art);
-        paint_badge(&mut frame, layout::EIDOLON_NODES[2], true, Rgb([220, 150, 60]));
+        paint_badge(
+            &mut frame,
+            layout::EIDOLON_NODES[2],
+            true,
+            Rgb([220, 150, 60]),
+        );
         paint_badge(&mut frame, layout::EIDOLON_NODES[3], false, activated_art);
 
         let unlocked: Vec<bool> = layout::EIDOLON_NODES
@@ -2711,10 +2723,7 @@ mod tests {
             0.02,
             Rgb([180, 120, 90]),
         );
-        let config = ScanConfig {
-            next_character_key: 'n',
-            ..ScanConfig::default()
-        };
+        let config = ScanConfig::default();
         paint_character_portraits(&mut previous);
         let mut scanner =
             scanner_with_frames(vec![changed.clone(), changed.clone()], config.clone());
@@ -2778,7 +2787,10 @@ mod tests {
     /// `open_menu` spends one stable capture (two frames) reading the title.
     fn with_character_menu_open(frames: Vec<RgbImage>) -> Vec<RgbImage> {
         let title_frame = frames[0].clone();
-        [title_frame.clone(), title_frame].into_iter().chain(frames).collect()
+        [title_frame.clone(), title_frame]
+            .into_iter()
+            .chain(frames)
+            .collect()
     }
 
     fn two_character_references() -> ReferenceCache {
@@ -3203,7 +3215,11 @@ mod tests {
             ..ScanConfig::default()
         };
         let mut scanner = HsrScanner::new(
-            ReplayDevice::new(1280, 720, std::iter::repeat_with(|| frame.clone()).take(12).collect()),
+            ReplayDevice::new(
+                1280,
+                720,
+                std::iter::repeat_with(|| frame.clone()).take(12).collect(),
+            ),
             ScriptedOcrReader::default()
                 .with(OcrField::MenuTitle, ["角色详情"])
                 .with(OcrField::CharacterName, ["三月七"]),

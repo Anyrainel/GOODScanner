@@ -142,6 +142,14 @@ pub fn show(
                         });
                         if settings.scan_characters {
                             trailblazer_row(ui, lang, settings);
+                            ui.label(lang.t(
+                                "角色扫描需要 ViGEmBus 虚拟手柄驱动；扫描期间请勿移动鼠标。",
+                                "Character scanning needs the ViGEmBus virtual-controller driver. Keep the mouse still during the scan.",
+                            ));
+                            ui.hyperlink_to(
+                                lang.t("安装 ViGEmBus 1.22.0（官方发布页）", "Install ViGEmBus 1.22.0 (official release)"),
+                                "https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0",
+                            );
                         }
                         ui.checkbox(
                             &mut settings.dump_images,
@@ -247,15 +255,6 @@ pub fn show(
                                 );
                                 ui.end_row();
 
-                                ui.label(lang.t("下一个角色按键", "Next Character key"));
-                                ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut settings.next_character_key,
-                                    )
-                                    .desired_width(60.0)
-                                    .char_limit(1),
-                                );
-                                ui.end_row();
                             });
                         ui.label(
                             egui::RichText::new(lang.t(

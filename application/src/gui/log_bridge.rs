@@ -208,6 +208,7 @@ impl Log for GuiLogger {
                 matches!(metadata.target(),
                     t if t.starts_with("yas")
                         || t.starts_with("genshin_scanner")
+                        || t.starts_with("hsr_scanner")
                         || t.starts_with("good_tools_app")
                         || t.starts_with("yas_core"))
             },
@@ -285,4 +286,29 @@ fn format_timestamp() -> String {
     let minutes = (secs_of_day % 3600) / 60;
     let seconds = secs_of_day % 60;
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hsr_progress_is_retained_as_application_logging() {
+        let logger = GuiLogger {
+            scanner: Arc::new(LogStore::new(20)),
+            manager: Arc::new(LogStore::new(20)),
+            file_sink: None,
+        };
+        log::set_max_level(LevelFilter::Info);
+        let hsr = Metadata::builder()
+            .level(Level::Info)
+            .target("hsr_scanner::scanner")
+            .build();
+        assert!(logger.enabled(&hsr));
+        let external = Metadata::builder()
+            .level(Level::Info)
+            .target("reqwest")
+            .build();
+        assert!(!logger.enabled(&external));
+    }
 }
