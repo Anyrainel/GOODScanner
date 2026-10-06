@@ -98,18 +98,13 @@ impl GameNavigation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StarRailCaptureMethod {
-    Wgc,
+    #[default]
     BitBlt,
+    Wgc,
     PrintWindow,
-}
-
-impl Default for StarRailCaptureMethod {
-    fn default() -> Self {
-        Self::Wgc
-    }
 }
 
 impl StarRailCaptureMethod {

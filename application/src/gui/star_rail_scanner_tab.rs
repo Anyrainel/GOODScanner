@@ -182,18 +182,18 @@ pub fn show(
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(
                                             &mut settings.capture_method,
-                                            StarRailCaptureMethod::Wgc,
-                                            capture_method_label(
-                                                lang,
-                                                StarRailCaptureMethod::Wgc,
-                                            ),
-                                        );
-                                        ui.selectable_value(
-                                            &mut settings.capture_method,
                                             StarRailCaptureMethod::BitBlt,
                                             capture_method_label(
                                                 lang,
                                                 StarRailCaptureMethod::BitBlt,
+                                            ),
+                                        );
+                                        ui.selectable_value(
+                                            &mut settings.capture_method,
+                                            StarRailCaptureMethod::Wgc,
+                                            capture_method_label(
+                                                lang,
+                                                StarRailCaptureMethod::Wgc,
                                             ),
                                         );
                                         ui.selectable_value(
@@ -356,11 +356,8 @@ fn trailblazer_gender_label(lang: Lang, gender: TrailblazerGender) -> &'static s
 
 fn capture_method_label(lang: Lang, method: StarRailCaptureMethod) -> &'static str {
     match method {
-        StarRailCaptureMethod::Wgc => lang.t(
-            "Windows 图形捕获（推荐）",
-            "Windows Graphics Capture (recommended)",
-        ),
-        StarRailCaptureMethod::BitBlt => "BitBlt",
+        StarRailCaptureMethod::Wgc => lang.t("Windows 图形捕获", "Windows Graphics Capture"),
+        StarRailCaptureMethod::BitBlt => lang.t("BitBlt（推荐）", "BitBlt (recommended)"),
         StarRailCaptureMethod::PrintWindow => "PrintWindow",
     }
 }

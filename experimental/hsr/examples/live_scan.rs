@@ -20,7 +20,6 @@ use hsr_scanner::{
     scanner::{HsrScanner, ScanConfig, ScanTargets},
     TrailblazerGender, TrailblazerIdentity,
 };
-use yas::capture::CaptureMethod;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -61,7 +60,6 @@ fn main() {
 
     let config = ScanConfig {
         targets,
-        capture_method: CaptureMethod::Wgc,
         navigation_delay: Duration::from_millis(250),
         panel_timeout: Duration::from_millis(3_000),
         max_inventory_items: 4_000,

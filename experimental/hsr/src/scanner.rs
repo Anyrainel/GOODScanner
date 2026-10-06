@@ -115,7 +115,7 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             targets: ScanTargets::all(),
-            capture_method: CaptureMethod::Wgc,
+            capture_method: CaptureMethod::default(),
             navigation_delay: Duration::from_millis(250),
             panel_timeout: Duration::from_millis(900),
             inventory_scroll_ticks_per_page: 25,
@@ -2544,9 +2544,9 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_bounded_and_wgc() {
+    fn defaults_are_bounded_and_use_shared_bitblt_capture() {
         let config = ScanConfig::default();
-        assert_eq!(config.capture_method, CaptureMethod::Wgc);
+        assert_eq!(config.capture_method, CaptureMethod::BitBlt);
         assert!(config.max_inventory_items <= 4_000);
         assert!(config.max_characters <= 200);
         assert!(config.inventory_scroll_ticks_per_page > 0);

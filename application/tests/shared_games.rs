@@ -142,6 +142,49 @@ fn default_star_rail_settings_use_automatic_hosted_reference_without_a_folder() 
 }
 
 #[test]
+fn star_rail_capture_defaults_match_genshin_sdr_at_the_config_boundary() {
+    let expected = genshin_scanner::cli::capture_method_for_hdr_mode(false);
+    assert_eq!(expected, yas::capture::CaptureMethod::BitBlt);
+    assert_eq!(
+        hsr_scanner::scanner::ScanConfig::default().capture_method,
+        expected
+    );
+    assert_eq!(
+        good_tools_app::config::StarRailSettings::default()
+            .capture_method
+            .to_yas(),
+        expected
+    );
+
+    let root = temp_root("shared-capture-default");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    // Existing v2 files may omit captureMethod. Its wire shape is unchanged;
+    // explicit saved choices still round-trip rather than being forced to a default.
+    fs::write(&path, r#"{"schemaVersion":2,"starRail":{}}"#).unwrap();
+    let store = ApplicationConfigStore::load(&path).unwrap();
+    assert_eq!(store.config.star_rail.capture_method.to_yas(), expected);
+
+    for (saved, method) in [
+        ("wgc", yas::capture::CaptureMethod::Wgc),
+        ("bitBlt", yas::capture::CaptureMethod::BitBlt),
+        ("printWindow", yas::capture::CaptureMethod::PrintWindow),
+    ] {
+        fs::write(
+            &path,
+            format!(r#"{{"schemaVersion":2,"starRail":{{"captureMethod":"{saved}"}}}}"#),
+        )
+        .unwrap();
+        let mut store = ApplicationConfigStore::load(&path).unwrap();
+        assert_eq!(store.config.star_rail.capture_method.to_yas(), method);
+        store.persist_now().unwrap();
+        let reloaded = ApplicationConfigStore::load(&path).unwrap();
+        assert_eq!(reloaded.config.star_rail.capture_method.to_yas(), method);
+    }
+    remove_test_tree(&root);
+}
+
+#[test]
 fn obsolete_custom_reference_path_is_ignored_when_loading_old_settings() {
     // Version 1 serialized an optional developer referenceBundle path. Its
     // removal discards only that setting; player scan preferences survive.
