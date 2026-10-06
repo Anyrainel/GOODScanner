@@ -77,16 +77,6 @@ GOODScanner.exe --characters --weapons  # Combine targets
 - Do not move the mouse during scanning
 - Artifacts below 4-star are skipped by default (adjustable via `--artifact-min-rarity`)
 
-### Capture fails with “The specified module could not be found”
-
-`os error -2147024770` is `0x8007007E` (Windows module-not-found). GOODCapture uses the Windows `PktMonApi.dll` component for both games; both its modern and legacy capture backends require this DLL. This error occurs during backend initialization, before game packets are read. It can mean the DLL or one of its dependencies is unavailable.
-
-1. Check the Windows version with `winver`. In PowerShell, run `Test-Path "$env:WINDIR\System32\PktMonApi.dll"` to check whether the DLL exists. An existing file does not prove its dependencies can be loaded.
-2. Install Windows updates and restart. For missing or damaged system files, follow [Microsoft's repair instructions](https://support.microsoft.com/en-au/windows/experience/backup-recovery/using-system-file-checker-in-windows): run `DISM.exe /Online /Cleanup-Image /RestoreHealth`, then `sfc /scannow` in an administrator Command Prompt, and restart.
-3. If a customized Windows installation removed this component, restore it through Windows servicing or use a complete Windows installation. OCR scanning is available without pktmon; it cannot replace every capture-only feature.
-
-Do not download replacement system DLLs from third-party sites. The presence of `pktmon.exe` alone does not establish that GOODCapture can load its DLL API. If the problem persists, report the Windows version/build, the DLL check result, and the complete application error.
-
 ## CLI Options
 
 ### Global Options

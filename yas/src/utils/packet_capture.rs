@@ -13,16 +13,16 @@ pub fn initialization_hint(error: &io::Error) -> Option<(&'static str, &'static 
     };
     match code {
         126 => Some((
-            "无法加载 Windows 抓包组件 PktMonApi.dll 或其依赖。请先更新 Windows 并重启；若仍失败，请在管理员命令提示符中依次运行 DISM.exe /Online /Cleanup-Image /RestoreHealth 和 sfc /scannow，完成后重启。也可改用 OCR 扫描。",
-            "Windows could not load PktMonApi.dll or one of its dependencies. Update Windows and restart. If capture still fails, run DISM.exe /Online /Cleanup-Image /RestoreHealth, then sfc /scannow in an administrator Command Prompt, and restart. You can also use OCR scanning.",
+            "无法开始抓包：Windows 自带的抓包功能无法加载。\n请先在系统设置中安装 Windows 更新，然后重启电脑。\n若仍失败：在开始菜单搜索“命令提示符”，右键选择“以管理员身份运行”，依次运行 DISM.exe /Online /Cleanup-Image /RestoreHealth 和 sfc /scannow，完成后重启电脑。\n暂时也可以使用“扫描”功能，通过识别游戏画面导出数据。\n无法加载的系统组件：PktMonApi.dll 或其依赖。",
+            "Capture could not start: Windows could not load its built-in packet capture feature.\nInstall Windows updates in Settings, then restart your computer.\nIf this still fails: search for Command Prompt in the Start menu, right-click it and choose Run as administrator. Run DISM.exe /Online /Cleanup-Image /RestoreHealth, then sfc /scannow, and restart your computer.\nYou can also use the Scanner to export data by reading the game screen.\nSystem component that could not be loaded: PktMonApi.dll or one of its dependencies.",
         )),
         127 => Some((
-            "Windows 抓包组件 PktMonApi.dll 缺少所需功能。请更新 Windows 并重启，或改用 OCR 扫描。",
-            "The Windows PktMonApi.dll capture component is missing a required function. Update Windows and restart, or use OCR scanning.",
+            "无法开始抓包：当前 Windows 自带的抓包功能缺少程序需要的功能。请在系统设置中安装 Windows 更新，然后重启电脑。暂时也可以使用“扫描”功能，通过识别游戏画面导出数据。\n系统组件 PktMonApi.dll 缺少所需接口。",
+            "Capture could not start: the built-in Windows capture feature is missing a required function. Install Windows updates in Settings, then restart your computer. You can also use the Scanner to export data by reading the game screen.\nPktMonApi.dll is missing a required API function.",
         )),
         5 => Some((
-            "Windows 拒绝访问抓包组件。请以管理员身份运行 GOODCapture 后重试。",
-            "Windows denied access to the packet capture component. Run GOODCapture as administrator and try again.",
+            "无法开始抓包：Windows 没有允许程序使用抓包功能。请关闭 GOODCapture，右键点击程序，选择“以管理员身份运行”，然后重试。",
+            "Capture could not start: Windows denied permission to use packet capture. Close GOODCapture, right-click the program, choose Run as administrator, and try again.",
         )),
         _ => None,
     }
