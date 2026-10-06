@@ -9,7 +9,7 @@ use yas::{cancel::CancelToken, capture::CaptureMethod};
 
 use crate::{
     annotator,
-    device::{GamepadButton, HsrDevice, InputCommand, WindowsHsrDevice},
+    device::{HsrDevice, InputCommand, WindowsHsrDevice},
     error::{hints, HsrError, HsrResult},
     layout,
     manager::{
@@ -63,6 +63,26 @@ const SELECTION_ROW_SHIFT: f64 = 0.08;
 const INVENTORY_TITLE: &[&str] = &["背包", "inventory"];
 const CHARACTER_TITLE: &[&str] = &["角色", "character"];
 const TRACES_OPEN: Duration = Duration::from_millis(2_000);
+
+/// Shared by live traversal and the shipped executable's drag diagnostic.
+pub fn drag_character_page<D: HsrDevice>(device: &mut D, forward: bool) -> HsrResult<RgbImage> {
+    let (from, to) = layout::character_page_drag(forward);
+    device.input(InputCommand::Drag { from, to })?;
+    device.wait(Duration::from_millis(700))?;
+    device.capture_client()
+}
+
+fn character_bar_unchanged(before: &RgbImage, after: &RgbImage) -> HsrResult<bool> {
+    // Compare faces, excluding the animated starfield and selection rings.
+    for slot in 0..layout::CHARACTER_PAGE_SIZE {
+        let center = layout::character_portrait(slot);
+        let face = NormRect::new(center.x - 0.004, center.y - 0.0075, 0.008, 0.015);
+        if !frames_similar(&face.crop(before)?, &face.crop(after)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanTargets {
@@ -167,10 +187,7 @@ impl HsrScanner<WindowsHsrDevice, PaddleOcrReader> {
         config: ScanConfig,
         cancel: CancelToken,
     ) -> HsrResult<Self> {
-        let mut device = WindowsHsrDevice::locate_with_cancel(config.capture_method, cancel)?;
-        if config.targets.characters {
-            device.prepare_character_input()?;
-        }
+        let device = WindowsHsrDevice::locate_with_cancel(config.capture_method, cancel)?;
         let reader = PaddleOcrReader::new()?;
         Ok(Self::new(device, reader, references, config))
     }
@@ -1057,13 +1074,15 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     fn scan_characters(&mut self) -> HsrResult<CharacterScan> {
         yas::log_info!("正在扫描角色详情。", "Scanning Character details.");
         self.open_menu('c', CHARACTER_TITLE)?;
+        // Leave controller UI once, then use only mouse traversal.
+        self.issue_input(InputCommand::Key('1'))?;
+        self.wait_attended(Duration::from_millis(180))?;
         self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
         self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
-        // A right-stick nudge switches the client into controller UI. Later
-        // roster steps are right-shoulder presses; the client scrolls the
-        // portrait bar itself.
-        self.issue_input(InputCommand::Gamepad(GamepadButton::Enter))?;
-        self.wait_attended(Duration::from_millis(700))?;
+        self.reset_character_bar()?;
+        self.issue_input(InputCommand::Click(layout::character_portrait(0)))?;
+        self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+        let mut slot = 0;
 
         let limit = self
             .config
@@ -1080,24 +1099,17 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             ..CaptureExportDetails::default()
         };
         let mut seen = BTreeSet::new();
-        let mut duplicate_streak = 0_usize;
         let mut unreadable_streak = 0_usize;
         let mut terminal_proven = false;
         let mut coverage_degraded = false;
         let mut visited = 0_usize;
-        let mut details = self.capture_stable()?;
-        let first_details = details.clone();
-        for index in 0..limit {
+        for index in 0..limit + layout::CHARACTER_PAGE_SIZE {
             visited = index + 1;
-            // Pointer clicks miss once the client is in controller UI, which
-            // left every eidolon count at zero. Leave that UI before clicking.
-            self.issue_input(InputCommand::Key('1'))?;
-            self.wait_attended(Duration::from_millis(180))?;
             let (eidolon, eidolon_frame) = self.read_eidolon_count(index)?;
             self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
             self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
             // Parse the panel seen right after the eidolon screen, and check
-            // both show one breadcrumb, so a late shoulder press cannot pair
+            // both show one breadcrumb, so a delayed click cannot pair
             // one Character's eidolons with another's details.
             let fresh = self.capture_stable()?;
             if !glyphs_match(
@@ -1110,7 +1122,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     "The selected Character changed while eidolons were read, so one Character may have been skipped; coverage will be marked unknown."
                 );
             }
-            details = fresh;
+            let mut details = fresh;
             self.observe_uid(&details);
             let parsed = match dump_parsed_item("characters", index, &details, || {
                 self.parser.parse_character_details(
@@ -1147,36 +1159,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             };
             if let Some(parsed) = parsed {
                 unreadable_streak = 0;
-                if !seen.insert(parsed.observation.character_id) {
-                    // Only the first scanned character coming back is the list
-                    // wrapping. Any other repeat means the shoulder press did
-                    // not move the roster (the name plate can still shift while
-                    // the same character stays selected), so press again.
-                    let wrapped = items.len() > 1
-                        && items.first().map(|first| first.character_id)
-                            == Some(parsed.observation.character_id);
-                    if wrapped {
-                        yas::log_info!(
-                            "角色列表回到了第一个角色，停止继续翻页。",
-                            "The character list returned to the first Character; roster traversal stopped."
-                        );
-                        break;
-                    }
-                    duplicate_streak += 1;
-                    if duplicate_streak >= 4 {
-                        coverage_degraded = true;
-                        yas::log_warn!(
-                            "右肩键四次后仍是已扫描的角色，角色列表在此停止。",
-                            "An already scanned Character was still selected after four right-shoulder presses; roster traversal stopped."
-                        );
-                        break;
-                    }
-                    yas::log_warn!(
-                        "右肩键后仍是已扫描的角色，继续按。",
-                        "Right shoulder left an already scanned Character selected; pressing it again."
-                    );
-                } else {
-                    duplicate_streak = 0;
+                // A final drag clamps to the end and overlaps the previous
+                // page. Revisited identities are expected and are not exported
+                // twice; continue clicking through the rest of that page.
+                if seen.insert(parsed.observation.character_id) {
                     if let Some(trace_details) =
                         self.read_character_traces(index, &parsed.reference.path)?
                     {
@@ -1195,35 +1181,38 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             // Traces replace the details panel. Returning first keeps the
             // identity baseline on the same character; otherwise the traces
             // screen is read as the next roster entry and the scan stops.
-            let prove_wrap = self.config.expected_characters == Some(visited);
-            let continue_roster = index + 1 < limit && !prove_wrap;
-            if continue_roster || prove_wrap {
-                self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-                self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
-                details = self.capture_stable()?;
-            }
-            if prove_wrap {
-                terminal_proven = self.probe_character_wrap(&details, &first_details, index)?;
-                if !terminal_proven {
-                    yas::log_warn!(
-                        "角色数量已达到预期值，但下一张稳定角色面板未回到首个角色；覆盖率将标记为未知。",
-                        "The expected Character count was reached, but the next stable panel did not wrap to the first Character; coverage will be marked unknown."
-                    );
+            if items.len() >= limit {
+                if self.config.expected_characters == Some(items.len())
+                    && slot + 1 == layout::CHARACTER_PAGE_SIZE
+                {
+                    self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
+                    self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+                    details = self.capture_stable()?;
+                    match self.advance_character(&details, &mut slot, index) {
+                        Err(error) if error.code() == "HSR-CHAR-END" => terminal_proven = true,
+                        Err(error) if error.code() == "HSR-CHAR-ADVANCE" => {},
+                        Err(error) => return Err(error),
+                        Ok(_) => {},
+                    }
                 }
                 break;
             }
-            if index + 1 == limit {
-                break;
-            }
+            self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
+            self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+            details = self.capture_stable()?;
             // The next iteration parses the panel captured after its eidolon
             // read, so the frame that proved the advance is not kept.
-            match self.advance_character(&details, index) {
+            match self.advance_character(&details, &mut slot, index) {
                 Ok(_) => {},
+                Err(error) if error.code() == "HSR-CHAR-END" => {
+                    terminal_proven = true;
+                    break;
+                },
                 Err(error) if error.code() == "HSR-CHAR-ADVANCE" => {
                     coverage_degraded = true;
                     yas::log_warn!(
-                        "右肩键没有切换到下一个角色，角色列表在此停止。完整错误详情：{}",
-                        "Right shoulder did not open another character; roster traversal stopped here. Full error details: {}",
+                        "点击后没有切换到下一个角色，角色列表在此停止。完整错误详情：{}",
+                        "Clicking did not open another Character; roster traversal stopped here. Full error details: {}",
                         error
                     );
                     break;
@@ -1231,12 +1220,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 Err(error) => return Err(error),
             };
         }
-        // `1` leaves controller UI so the following inventory keys are received.
-        self.issue_input(InputCommand::Key('1'))?;
-        self.wait_attended(Duration::from_millis(200))?;
         self.leave_menu()?;
         if let Some(expected) = self.config.expected_characters {
-            if visited != expected {
+            if items.len() != expected && !coverage_degraded {
                 return Err(HsrError::new(
                     "HSR-CHAR-COUNT",
                     hints::SCREEN_INVALID,
@@ -1247,7 +1233,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 ));
             }
         }
-        let coverage = if terminal_proven && !coverage_degraded {
+        let coverage = if terminal_proven
+            && !coverage_degraded
+            && self.config.expected_characters == Some(items.len())
+        {
             CoverageLevel::Complete
         } else {
             CoverageLevel::Unknown
@@ -1264,73 +1253,75 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         })
     }
 
-    fn probe_character_wrap(
-        &mut self,
-        current: &RgbImage,
-        first: &RgbImage,
-        ordinal: usize,
-    ) -> HsrResult<bool> {
-        let current_identity = CHARACTER_IDENTITY_REGION.crop(current)?;
-        let first_identity = CHARACTER_IDENTITY_REGION.crop(first)?;
-        if frames_similar(&current_identity, &first_identity) {
-            // A single visible identity cannot distinguish a real one-entry
-            // wrap from an ignored next-character command.
-            return Ok(false);
+    fn reset_character_bar(&mut self) -> HsrResult<()> {
+        self.issue_input(InputCommand::Hover(Point::new(0.85, 0.15)))?;
+        let mut previous = self.capture_stable()?;
+        for _ in 0..self
+            .config
+            .max_characters
+            .div_ceil(layout::CHARACTER_PAGE_SIZE)
+            + 2
+        {
+            let next = drag_character_page(&mut self.device, false)?;
+            if character_bar_unchanged(&previous, &next)? {
+                return Ok(());
+            }
+            previous = next;
         }
-        match self.advance_character(current, ordinal) {
-            Ok(next) => Ok(frames_similar(
-                &first_identity,
-                &CHARACTER_IDENTITY_REGION.crop(&next)?,
-            )),
-            Err(error) if error.code() == "HSR-CHAR-ADVANCE" || error.code() == "HSR-CHAR-END" => {
-                Ok(false)
-            },
-            Err(error) => Err(error),
-        }
+        Err(HsrError::new(
+            "HSR-CHAR-START",
+            hints::SCREEN_INVALID,
+            "portrait bar did not reach a stationary first page",
+        ))
     }
 
-    fn advance_character(&mut self, previous: &RgbImage, ordinal: usize) -> HsrResult<RgbImage> {
+    fn advance_character(
+        &mut self,
+        previous: &RgbImage,
+        slot: &mut usize,
+        ordinal: usize,
+    ) -> HsrResult<RgbImage> {
         let previous_identity = CHARACTER_IDENTITY_REGION.crop(previous)?;
-        let mut last_error = None;
+        let paged = *slot + 1 == layout::CHARACTER_PAGE_SIZE;
+        let next_slot = if paged {
+            let after = drag_character_page(&mut self.device, true)?;
+            if character_bar_unchanged(previous, &after)? {
+                return Err(HsrError::new(
+                    "HSR-CHAR-END",
+                    hints::SCREEN_INVALID,
+                    "nine portraits visited; forward page drag stayed at the roster end",
+                ));
+            }
+            0
+        } else {
+            *slot + 1
+        };
+        // Retry the same absolute portrait position. A delayed click plus a
+        // retry cannot skip another character, and a page is dragged only once.
         for attempt in 1..=3 {
-            // Mouse clicks on Details or Traces drop the client back to pointer
-            // mode, and a shoulder press is ignored until the stick is nudged.
-            self.issue_input(InputCommand::Gamepad(GamepadButton::Enter))?;
-            self.wait_attended(Duration::from_millis(220))?;
-            self.issue_input(InputCommand::Gamepad(GamepadButton::RightShoulder))?;
-            // A slow press that lands after the timeout plus a retry press
-            // would skip a character, so look once more before pressing again.
-            let changed = self
-                .wait_until_identity_changes(&previous_identity, ordinal, self.config.panel_timeout)
-                .or_else(|error| {
-                    if error.code() != "HSR-CHAR-ADVANCE" {
-                        return Err(error);
-                    }
-                    self.wait_until_identity_changes(
-                        &previous_identity,
-                        ordinal,
-                        self.config.panel_timeout,
-                    )
-                });
-            match changed {
-                Ok(frame) => return Ok(frame),
-                Err(error) if error.code() == "HSR-CHAR-ADVANCE" => {
-                    last_error = Some(error);
-                    yas::log_warn!(
-                        "右肩键后角色名没有变化，正在重试（{attempt}/3）。",
-                        "Character name did not change after right shoulder; retrying ({attempt}/3)."
-                    );
+            self.issue_input(InputCommand::Click(layout::character_portrait(next_slot)))?;
+            match self.wait_until_identity_changes(
+                &previous_identity,
+                ordinal,
+                self.config.panel_timeout,
+            ) {
+                Ok(frame) => {
+                    *slot = next_slot;
+                    return Ok(frame);
                 },
+                Err(error) if error.code() == "HSR-CHAR-ADVANCE" && paged => {
+                    // A clamped page can start with the character that was
+                    // selected at the previous page's end. The bar did move;
+                    // read this overlap once and continue to the second slot.
+                    let frame = self.capture_stable()?;
+                    *slot = next_slot;
+                    return Ok(frame);
+                },
+                Err(error) if error.code() == "HSR-CHAR-ADVANCE" && attempt < 3 => {},
                 Err(error) => return Err(error),
             }
         }
-        Err(last_error.unwrap_or_else(|| {
-            HsrError::new(
-                "HSR-CHAR-ADVANCE",
-                hints::SCREEN_INVALID,
-                format!("failed after character ordinal={ordinal}; right shoulder did not change the name plate"),
-            )
-        }))
+        unreachable!()
     }
 
     fn wait_until_identity_changes(
@@ -1362,7 +1353,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         let detail = if changed_frame.is_some() {
             "identity region changed but did not stabilize"
         } else {
-            "identity region never changed after right shoulder"
+            "identity region never changed after the portrait click"
         };
         Err(HsrError::new(
             "HSR-CHAR-ADVANCE",
@@ -2727,32 +2718,130 @@ mod tests {
         paint_character_portraits(&mut previous);
         let mut scanner =
             scanner_with_frames(vec![changed.clone(), changed.clone()], config.clone());
-        let next = scanner.advance_character(&previous, 0).unwrap();
+        let mut slot = 0;
+        let next = scanner.advance_character(&previous, &mut slot, 0).unwrap();
         assert_eq!(next, changed);
         assert_eq!(
             scanner.device().commands(),
-            &[
-                InputCommand::Gamepad(GamepadButton::Enter),
-                InputCommand::Gamepad(GamepadButton::RightShoulder),
-            ]
+            &[InputCommand::Click(layout::character_portrait(1))]
         );
+        assert_eq!(slot, 1);
 
         let mut unchanged = RgbImage::from_pixel(1280, 720, Rgb([24, 28, 35]));
         paint_character_portraits(&mut unchanged);
         let mut stuck = scanner_with_frames(vec![unchanged.clone(); 12], config);
-        let error = stuck.advance_character(&unchanged, 0).unwrap_err();
+        slot = 0;
+        let error = stuck
+            .advance_character(&unchanged, &mut slot, 0)
+            .unwrap_err();
         assert_eq!(error.code(), "HSR-CHAR-ADVANCE");
         assert_eq!(
             stuck.device().commands(),
             &[
-                InputCommand::Gamepad(GamepadButton::Enter),
-                InputCommand::Gamepad(GamepadButton::RightShoulder),
-                InputCommand::Gamepad(GamepadButton::Enter),
-                InputCommand::Gamepad(GamepadButton::RightShoulder),
-                InputCommand::Gamepad(GamepadButton::Enter),
-                InputCommand::Gamepad(GamepadButton::RightShoulder),
+                InputCommand::Click(layout::character_portrait(1)),
+                InputCommand::Click(layout::character_portrait(1)),
+                InputCommand::Click(layout::character_portrait(1)),
             ]
         );
+        assert_eq!(slot, 0);
+    }
+
+    #[test]
+    fn ninth_portrait_pages_once_and_waits_for_a_delayed_first_slot_click() {
+        let previous = character_frame(Rgb([90, 120, 170]));
+        let mut paged = previous.clone();
+        paint_character_portraits(&mut paged);
+        let mut changed = character_frame(Rgb([170, 90, 120]));
+        paint_character_portraits(&mut changed);
+        let mut scanner = scanner_with_frames(
+            vec![
+                paged.clone(),
+                paged.clone(),
+                paged,
+                changed.clone(),
+                changed.clone(),
+            ],
+            ScanConfig {
+                panel_timeout: Duration::from_millis(40),
+                ..ScanConfig::default()
+            },
+        );
+        let mut slot = 8;
+        assert_eq!(
+            scanner.advance_character(&previous, &mut slot, 8).unwrap(),
+            changed
+        );
+        assert_eq!(slot, 0);
+        let (from, to) = layout::character_page_drag(true);
+        assert_eq!(
+            scanner.device().commands(),
+            &[
+                InputCommand::Drag { from, to },
+                InputCommand::Click(layout::character_portrait(0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn clamped_page_may_start_with_the_previous_selected_character() {
+        let previous = character_frame(Rgb([90, 120, 170]));
+        let mut paged = previous.clone();
+        paint_character_portraits(&mut paged);
+        let mut scanner = scanner_with_frames(
+            vec![paged.clone(); 5],
+            ScanConfig {
+                panel_timeout: Duration::from_millis(40),
+                ..ScanConfig::default()
+            },
+        );
+        let mut slot = 8;
+        assert_eq!(
+            scanner.advance_character(&previous, &mut slot, 8).unwrap(),
+            paged
+        );
+        assert_eq!(slot, 0);
+    }
+
+    #[test]
+    fn stationary_final_page_stops_without_clicking_the_first_slot_again() {
+        let previous = character_frame(Rgb([90, 120, 170]));
+        let mut scanner = scanner_with_frames(vec![previous.clone()], ScanConfig::default());
+        let mut slot = 8;
+        assert_eq!(
+            scanner
+                .advance_character(&previous, &mut slot, 8)
+                .unwrap_err()
+                .code(),
+            "HSR-CHAR-END"
+        );
+        let (from, to) = layout::character_page_drag(true);
+        assert_eq!(
+            scanner.device().commands(),
+            &[InputCommand::Drag { from, to }]
+        );
+        assert_eq!(slot, 8);
+    }
+
+    #[test]
+    fn portrait_page_comparison_ignores_animation_outside_the_faces() {
+        let before = RgbImage::from_pixel(1280, 720, Rgb([24, 28, 35]));
+        let mut after = before.clone();
+        paint_rect(
+            &mut after,
+            Point::new(0.25, 0.1),
+            0.04,
+            0.02,
+            Rgb([255, 255, 255]),
+        );
+        assert!(character_bar_unchanged(&before, &after).unwrap());
+        paint_rect(
+            &mut after,
+            layout::character_portrait(4),
+            0.02,
+            0.03,
+            Rgb([170, 90, 120]),
+        );
+        assert!(!character_bar_unchanged(&before, &after).unwrap());
     }
 
     fn paint_character_portraits(frame: &mut RgbImage) {
@@ -2841,7 +2930,7 @@ mod tests {
         let visually_changed_same_id = character_frame(Rgb([170, 90, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(10));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(11));
             frames.extend(std::iter::repeat_with(|| visually_changed_same_id.clone()).take(40));
             frames
         };
@@ -2857,7 +2946,7 @@ mod tests {
         let extra = character_frame(Rgb([90, 170, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(10));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(11));
             frames.extend(std::iter::repeat_with(|| second.clone()).take(10));
             frames.extend(std::iter::repeat_with(|| extra.clone()).take(2));
             frames
@@ -2868,19 +2957,19 @@ mod tests {
     }
 
     #[test]
-    fn expected_character_count_plus_stable_wrap_proves_complete() {
+    fn repeating_first_character_does_not_prove_mouse_roster_completion() {
         let first = character_frame(Rgb([90, 120, 170]));
         let second = character_frame(Rgb([170, 90, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(10));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(11));
             frames.extend(std::iter::repeat_with(|| second.clone()).take(10));
             frames.extend(std::iter::repeat_with(|| first.clone()).take(2));
             frames
         };
         let scan = run_character_simulation(frames, &["三月七", "希儿"], Some(2), 3);
         assert_eq!(scan.items.len(), 2);
-        assert_eq!(scan.coverage, CoverageLevel::Complete);
+        assert_eq!(scan.coverage, CoverageLevel::Unknown);
     }
 
     #[test]
@@ -3218,7 +3307,7 @@ mod tests {
             ReplayDevice::new(
                 1280,
                 720,
-                std::iter::repeat_with(|| frame.clone()).take(12).collect(),
+                std::iter::repeat_with(|| frame.clone()).take(24).collect(),
             ),
             ScriptedOcrReader::default()
                 .with(OcrField::MenuTitle, ["角色详情"])

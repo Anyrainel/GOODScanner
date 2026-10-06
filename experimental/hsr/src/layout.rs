@@ -26,6 +26,35 @@ pub const FIRST_ITEM: Point = Point::new(0.071, 0.26);
 /// Empty strip below the backpack grid, clear of the sort and bulk buttons.
 pub const INVENTORY_POINTER_REST: Point = Point::new(0.36, 0.955);
 
+/// Nine fully visible portraits, measured in the 1920x1080 Character header.
+pub const CHARACTER_PAGE_SIZE: usize = 9;
+pub const CHARACTER_PORTRAIT_GAP: f64 = 108.0 / 1920.0;
+// Click a quarter-gap to the right of the initial center. This stays inside
+// the disc both on normal pages and when the final page clamps half a gap
+// farther right (505.5px initial center, 559.5px final-page center at 1080p).
+pub const CHARACTER_FIRST_PORTRAIT: Point = Point::new(532.5 / 1920.0, 0.064);
+
+pub fn character_portrait(slot: usize) -> Point {
+    assert!(slot < CHARACTER_PAGE_SIZE);
+    Point::new(
+        CHARACTER_FIRST_PORTRAIT.x + slot as f64 * CHARACTER_PORTRAIT_GAP,
+        CHARACTER_FIRST_PORTRAIT.y,
+    )
+}
+
+pub fn character_page_drag(forward: bool) -> (Point, Point) {
+    let right = Point::new(0.755, CHARACTER_FIRST_PORTRAIT.y);
+    let left = Point::new(
+        right.x - CHARACTER_PAGE_SIZE as f64 * CHARACTER_PORTRAIT_GAP,
+        right.y,
+    );
+    if forward {
+        (right, left)
+    } else {
+        (left, right)
+    }
+}
+
 /// Backpack card centers measured on live 1920x1080 frames from the white
 /// selection frame (137..140 / 270..272 px on the first column). The relic
 /// tab's sub-filter bar pushes its rows 72px lower than the light cone tab's.

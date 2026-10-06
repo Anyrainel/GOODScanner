@@ -23,17 +23,6 @@ pub struct WindowIdentity {
     hwnd: isize,
 }
 
-/// Xbox buttons the character roster actually moves on. Keyboard portrait
-/// clicks do not scroll that list; the client does it after a controller
-/// shoulder press.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GamepadButton {
-    /// Nudge the right stick so the client switches into controller UI.
-    Enter,
-    RightShoulder,
-    LeftShoulder,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputCommand {
     Click(Point),
@@ -51,7 +40,6 @@ pub enum InputCommand {
         from: Point,
         to: Point,
     },
-    Gamepad(GamepadButton),
     Escape,
 }
 
@@ -74,8 +62,6 @@ pub struct WindowsHsrDevice {
     capturer: Rc<dyn Capturer<RgbImage>>,
     control: SystemControl,
     cancel: CancelToken,
-    #[cfg(target_os = "windows")]
-    gamepad: Option<vigem_client::Xbox360Wired<vigem_client::Client>>,
 }
 
 impl WindowsHsrDevice {
@@ -120,7 +106,6 @@ impl WindowsHsrDevice {
                 capturer,
                 control: SystemControl::new(),
                 cancel,
-                gamepad: None,
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -158,6 +143,7 @@ impl WindowsHsrDevice {
     fn revalidate_rect(&self) -> HsrResult<Rect<i32>> {
         #[cfg(target_os = "windows")]
         {
+            self.validate_window()?;
             let current =
                 yas::utils::get_client_rect(self.identity.hwnd as _).map_err(device_error)?;
             validate_client_geometry(self.client_rect, current, self.verified_frame_dimensions)?;
@@ -168,6 +154,8 @@ impl WindowsHsrDevice {
     }
 
     fn ensure_input_attended(&self) -> HsrResult<()> {
+        #[cfg(target_os = "windows")]
+        self.validate_window()?;
         if self.cancel.check_rmb() {
             return Err(HsrError::new(
                 "HSR-DEVICE-CANCELLED",
@@ -180,6 +168,28 @@ impl WindowsHsrDevice {
                 "HSR-DEVICE-FOCUS",
                 hints::FOCUS_REQUIRED,
                 "input refused because the selected HSR client is not foreground",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn validate_window(&self) -> HsrResult<()> {
+        let hwnd = self.identity.hwnd as _;
+        let title_matches = yas::utils::get_window_title(hwnd)
+            .is_some_and(|title| title.trim() == self.identity.title);
+        if !yas::utils::is_window_handle_valid(hwnd)
+            || unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd) } == 0
+            || !title_matches
+            || !matches!(
+                window_class(hwnd).as_str(),
+                "UnityWndClass" | "Qt5152QWindowIcon"
+            )
+        {
+            return Err(HsrError::new(
+                "HSR-DEVICE-LOST",
+                hints::DEVICE_UNAVAILABLE,
+                "selected window is no longer the located HSR client",
             ));
         }
         Ok(())
@@ -207,129 +217,13 @@ impl WindowsHsrDevice {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn gamepad_error(error: vigem_client::Error) -> HsrError {
-    if error == vigem_client::Error::BusNotFound {
-        return HsrError::new(
-            "HSR-DEVICE-GAMEPAD-MISSING",
-            crate::LocalizedText::new(
-                "扫描角色需要 ViGEmBus 虚拟手柄驱动。请从官方发布页安装 1.22.0，重启游戏后重试。仅扫描光锥和遗器不需要此驱动。",
-                "Character scanning requires the ViGEmBus virtual-controller driver. Install 1.22.0 from the official release, restart the game, and retry. Light Cone and Relic scans do not need this driver.",
-            ),
-            "ViGEmBus not found; official installer: https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0",
-        );
-    }
-    HsrError::new(
-        "HSR-DEVICE-GAMEPAD",
-        hints::DEVICE_UNAVAILABLE,
-        format!("virtual Xbox controller failed: {error}"),
-    )
-}
-
-#[cfg(target_os = "windows")]
-impl WindowsHsrDevice {
-    /// Check the character-only dependency before focusing or navigating the game.
-    pub fn prepare_character_input(&mut self) -> HsrResult<()> {
-        self.ensure_gamepad()
-    }
-
-    fn ensure_gamepad(&mut self) -> HsrResult<()> {
-        if self.gamepad.is_some() {
-            return Ok(());
-        }
-        let client = vigem_client::Client::connect().map_err(gamepad_error)?;
-        let mut target =
-            vigem_client::Xbox360Wired::new(client, vigem_client::TargetId::XBOX360_WIRED);
-        target.plugin().map_err(gamepad_error)?;
-        let mut ready = false;
-        for _ in 0..30 {
-            if target.wait_ready().is_ok() {
-                ready = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if !ready {
-            return Err(HsrError::new(
-                "HSR-DEVICE-GAMEPAD",
-                hints::DEVICE_UNAVAILABLE,
-                "virtual Xbox controller did not become ready",
-            ));
-        }
-        self.gamepad = Some(target);
-        Ok(())
-    }
-
-    fn pulse_gamepad(&mut self, button: GamepadButton) -> HsrResult<()> {
-        self.ensure_gamepad()?;
-        let Some(target) = self.gamepad.as_mut() else {
-            return Err(HsrError::new(
-                "HSR-DEVICE-GAMEPAD",
-                hints::DEVICE_UNAVAILABLE,
-                "virtual Xbox controller was not connected",
-            ));
-        };
-        let (report, hold) = match button {
-            GamepadButton::Enter => (
-                vigem_client::XGamepad {
-                    thumb_rx: 28_000,
-                    ..Default::default()
-                },
-                Duration::from_millis(400),
-            ),
-            GamepadButton::RightShoulder => (
-                vigem_client::XGamepad {
-                    buttons: vigem_client::XButtons!(RB),
-                    ..Default::default()
-                },
-                Duration::from_millis(140),
-            ),
-            GamepadButton::LeftShoulder => (
-                vigem_client::XGamepad {
-                    buttons: vigem_client::XButtons!(LB),
-                    ..Default::default()
-                },
-                Duration::from_millis(140),
-            ),
-        };
-        target
-            .update(&report)
-            .or_else(|error| {
-                // The first report after the virtual pad is plugged in often
-                // returns 259 until the Xbox device has finished starting.
-                if !matches!(error, vigem_client::Error::WinError(259)) {
-                    return Err(error);
-                }
-                std::thread::sleep(Duration::from_millis(200));
-                target.update(&report)
-            })
-            .map_err(gamepad_error)?;
-        std::thread::sleep(hold);
-        target
-            .update(&vigem_client::XGamepad::default())
-            .map_err(gamepad_error)?;
-        std::thread::sleep(Duration::from_millis(30));
-        Ok(())
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-impl WindowsHsrDevice {
-    pub fn prepare_character_input(&mut self) -> HsrResult<()> {
-        Err(HsrError::new(
-            "HSR-DEVICE-PLATFORM",
-            hints::DEVICE_UNAVAILABLE,
-            "character input requires Windows",
-        ))
-    }
-}
-
 impl HsrDevice for WindowsHsrDevice {
     fn identity(&self) -> &WindowIdentity {
         &self.identity
     }
 
     fn capture_client(&mut self) -> HsrResult<RgbImage> {
+        self.ensure_input_attended()?;
         let rect = self.revalidate_rect()?;
         let mut captured = None;
         let mut last_error = None;
@@ -378,6 +272,7 @@ impl HsrDevice for WindowsHsrDevice {
     fn focus_and_verify(&mut self) -> HsrResult<()> {
         #[cfg(target_os = "windows")]
         {
+            self.validate_window()?;
             if !yas::utils::is_window_handle_valid(self.identity.hwnd as _) {
                 return Err(HsrError::new(
                     "HSR-DEVICE-LOST",
@@ -455,6 +350,16 @@ impl HsrDevice for WindowsHsrDevice {
                 self.control.mouse_scroll(amount).map_err(device_error)?;
             },
             InputCommand::Drag { from, to } => {
+                if [from.x, from.y, to.x, to.y]
+                    .into_iter()
+                    .any(|v| !(0.0..=1.0).contains(&v))
+                {
+                    return Err(HsrError::new(
+                        "HSR-DEVICE-INPUT",
+                        hints::SCREEN_INVALID,
+                        "normalized drag endpoints outside the client",
+                    ));
+                }
                 #[cfg(target_os = "windows")]
                 {
                     let rect = self.revalidate_rect()?;
@@ -483,19 +388,6 @@ impl HsrDevice for WindowsHsrDevice {
                 }
             },
             InputCommand::Escape => self.control.key_press(Key::Escape).map_err(device_error)?,
-            InputCommand::Gamepad(button) => {
-                #[cfg(target_os = "windows")]
-                self.pulse_gamepad(button)?;
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = button;
-                    return Err(HsrError::new(
-                        "HSR-DEVICE-GAMEPAD",
-                        hints::DEVICE_UNAVAILABLE,
-                        "virtual Xbox input is implemented for the Windows client only",
-                    ));
-                }
-            },
         }
         Ok(())
     }
@@ -592,6 +484,9 @@ fn locate_hsr_window() -> HsrResult<(isize, String, Rect<i32>)> {
     ];
     let mut matches = Vec::new();
     for hwnd in yas::utils::iterate_window() {
+        if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd) } == 0 {
+            continue;
+        }
         let Some(title) = yas::utils::get_window_title(hwnd) else {
             continue;
         };
@@ -874,21 +769,6 @@ impl HsrDevice for ReplayDevice {
 mod tests {
     use super::*;
     use yas::cancel::StopReason;
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn missing_gamepad_driver_explains_character_only_dependency() {
-        let error = gamepad_error(vigem_client::Error::BusNotFound);
-        assert_eq!(error.code(), "HSR-DEVICE-GAMEPAD-MISSING");
-        let message = error.localized_message(crate::Language::En);
-        assert!(message.contains("ViGEmBus"));
-        assert!(message.contains("Light Cone and Relic scans do not need"));
-        assert!(message.contains("https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0"));
-        assert_eq!(
-            gamepad_error(vigem_client::Error::BusAccessFailed(5)).code(),
-            "HSR-DEVICE-GAMEPAD"
-        );
-    }
 
     #[test]
     fn caller_owned_token_can_cancel_before_device_discovery() {

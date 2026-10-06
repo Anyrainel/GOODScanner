@@ -39,8 +39,11 @@ impl WindowsSystemControl {
             let x = x0 + (x1 - x0) * step / steps;
             let y = y0 + (y1 - y0) * step / steps;
             self.enigo.mouse_move_to(x, y);
-            std::thread::sleep(std::time::Duration::from_millis(12));
+            std::thread::sleep(std::time::Duration::from_millis(35));
         }
+        // Stop while still holding so a precise page drag does not become a
+        // fling with inertia after the button is released.
+        std::thread::sleep(std::time::Duration::from_millis(180));
         self.enigo.mouse_up(MouseButton::Left);
         anyhow::Ok(())
     }

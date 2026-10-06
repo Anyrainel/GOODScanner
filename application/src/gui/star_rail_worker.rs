@@ -305,7 +305,6 @@ pub(crate) fn run_scan(
     if user_aborted(&cancel) {
         return Ok(stopped(TaskKind::Scanner));
     }
-    ensure_ocr_runtime()?;
     let targets = ScanTargets {
         characters: settings.scan_characters,
         light_cones: settings.scan_light_cones,
@@ -314,6 +313,10 @@ pub(crate) fn run_scan(
     let mut config = scanner_config(settings, targets)?;
     config.scan_item_limit = sample_limit;
     let output_dir = ensure_output_dir(settings)?;
+    if user_aborted(&cancel) {
+        return Ok(stopped(TaskKind::Scanner));
+    }
+    ensure_ocr_runtime()?;
     let references = load_references().map_err(|error| {
         hsr_ui_error(
             UiText::new(

@@ -32,6 +32,12 @@ enum Command {
     Check {
         #[arg(long, value_enum, default_value = "bitblt")]
         capture_method: Capture,
+        /// Test the scanner's top-bar drag / 测试角色栏拖动
+        #[arg(long)]
+        drag_character_bar: bool,
+        /// Save the captured client for troubleshooting / 保存实机截图
+        #[arg(long)]
+        save_frame: Option<PathBuf>,
     },
 }
 
@@ -156,11 +162,26 @@ pub fn run() -> i32 {
                     )
                     .map_err(|error| anyhow::anyhow!(error.copy_text(lang)))
                 },
-                Command::Check { capture_method } => {
+                Command::Check {
+                    capture_method,
+                    drag_character_bar,
+                    save_frame,
+                } => {
                     let _lease = hsr_scanner::manager::HsrControllerLease::try_acquire()?;
                     let mut device = WindowsHsrDevice::locate(capture_method.setting().to_yas())?;
+                    log::info!("Selected HSR window: {:?}", device.identity());
                     device.focus_and_verify()?;
-                    let frame = device.capture_client()?;
+                    device.wait(std::time::Duration::from_millis(700))?;
+                    let mut frame = device.capture_client()?;
+                    if drag_character_bar {
+                        if let Some(path) = &save_frame {
+                            frame.save(path.with_extension("before.png"))?;
+                        }
+                        frame = hsr_scanner::scanner::drag_character_page(&mut device, true)?;
+                    }
+                    if let Some(path) = save_frame {
+                        frame.save(path)?;
+                    }
                     let (width, height) = frame.dimensions();
                     Ok(UiText::new(
                         format!("截图验证成功：{width} × {height}。"),

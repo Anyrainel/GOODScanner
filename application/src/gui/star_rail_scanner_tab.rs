@@ -143,13 +143,9 @@ pub fn show(
                         if settings.scan_characters {
                             trailblazer_row(ui, lang, settings);
                             ui.label(lang.t(
-                                "角色扫描需要 ViGEmBus 虚拟手柄驱动；扫描期间请勿移动鼠标。",
-                                "Character scanning needs the ViGEmBus virtual-controller driver. Keep the mouse still during the scan.",
+                                "扫描会自动点击并拖动顶部角色栏；扫描期间请勿操作鼠标或键盘。",
+                                "Scanning clicks and drags the top Character bar. Keep the mouse and keyboard idle during scanning.",
                             ));
-                            ui.hyperlink_to(
-                                lang.t("安装 ViGEmBus 1.22.0（官方发布页）", "Install ViGEmBus 1.22.0 (official release)"),
-                                "https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0",
-                            );
                         }
                         ui.checkbox(
                             &mut settings.dump_images,

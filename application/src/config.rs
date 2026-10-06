@@ -167,7 +167,7 @@ pub struct StarRailSettings {
     #[serde(default = "default_panel_timeout_ms")]
     pub panel_timeout_ms: u64,
     #[serde(default = "default_next_character_key")]
-    // Retained for round-tripping older settings. Character navigation uses RB.
+    // Retained for round-tripping older settings. Character navigation uses mouse clicks/drags.
     pub next_character_key: String,
     /// The Trailblazer's in-game nickname. Required for Character scans.
     #[serde(default)]

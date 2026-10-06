@@ -111,23 +111,22 @@ geometry drift, the GUI Stop action, or right-click emergency abort prevents
 further input. Automated replay tests likewise do not prove live screenshot
 recognition or live game mutation.
 
-Character screenshot scans require the **ViGEmBus 1.22.0** virtual-controller
-driver from the [official release](https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0).
-Restart HSR after installing it. Keep the mouse still during character scans:
-mouse movement switches HSR out of controller mode. Light Cone and Relic scans
-do not require ViGEmBus. Missing-driver checks happen before game navigation.
-The legacy `nextCharacterKey` setting is retained only to read older config
-files; character traversal uses the controller's right shoulder button.
+Character screenshot scans click the nine visible top-bar portraits, drag by
+nine portrait gaps, and resume at the first click position. The scanner resets
+the bar to its beginning first and deduplicates overlapping entries on the
+clamped final page. No virtual-controller driver is needed. Keep the mouse
+and keyboard idle during scanning. The legacy `nextCharacterKey` setting is
+retained only to read older config files.
 
-角色截图扫描需要安装 [官方 ViGEmBus 1.22.0 虚拟手柄驱动](https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0)，
-安装后请重启游戏。扫描角色时请勿移动鼠标，以免游戏退出手柄模式。仅扫描光锥和遗器无需此驱动。
-缺少驱动时，程序会在操作游戏前明确提示。旧设置中的 `nextCharacterKey` 仅为兼容已有配置保留，
-角色切换实际使用手柄右肩键。
+角色截图扫描会依次点击顶部九个头像，再拖动九个头像间距，从第一处点击位置继续。
+扫描前会先将角色栏移回开头，最后一页重叠的角色会自动去重，无需安装虚拟手柄驱动。
+扫描期间请勿操作鼠标或键盘。旧设置中的 `nextCharacterKey` 仅为兼容已有配置保留。
 
 Both shipped executables expose the same scan path as the GUI:
 
 ```powershell
 .\GOODCapture.exe star-rail check --capture-method wgc --log-file wgc-check.log
+.\GOODCapture.exe star-rail check --capture-method bitblt --drag-character-bar --save-frame drag.png --log-file drag.log
 .\GOODCapture.exe star-rail scan --characters --max-characters 2 --dump-images --log-file characters.log
 .\GOODCapture.exe star-rail scan --light-cones --relics --sample-items 3 --capture-method bitblt --dump-images --log-file inventory.log
 ```
@@ -135,7 +134,9 @@ Both shipped executables expose the same scan path as the GUI:
 `scan` loads saved GUI settings beside the executable. Explicit target flags
 replace the saved targets for that run; overrides never rewrite the settings.
 Sampling keeps inventory coverage incomplete. `check` focuses the game and
-captures its client without navigating menus or requiring a virtual controller.
+captures its client without navigating menus. `--drag-character-bar` tests the
+same page-drag function used by the scan; open Character Details first. With
+`--save-frame`, it saves both the before and after screenshots.
 Commands exit with a nonzero status on failure and retain full errors in
 `--log-file`; they do not pause for a keypress. Use these shipped binaries for
 live verification instead of claiming success from the example programs.
