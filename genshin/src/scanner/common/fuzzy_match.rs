@@ -1,15 +1,21 @@
 use std::collections::HashMap;
 use yas::log_debug;
 
-/// OCR confusion pairs: (wrong char, correct char)
-/// When OCR produces one character, try substituting the other.
+/// OCR confusion pairs: (misread text, correct text).
+/// Whole-name pairs keep corrections scoped when the wrong glyph also occurs
+/// in legitimate names. Single-character pairs can be combined in one pass.
 ///
 /// Focus: characters NOT in GB2312 (6763 common chars) are high-risk for OCR
 /// misreads.  Use `ch.encode('gb2312')` in Python to identify them automatically.
-/// Only add pairs where the "wrong" char does NOT appear in any legitimate name
-/// in mappings.json — otherwise the substitution would break correct matches.
-/// Chars with collisions (菈↔莱, 鹮↔鹤/环) rely on Tier 4/5 fallback instead.
+/// Prefer whole-name pairs when the wrong glyph occurs in legitimate names;
+/// broad substitutions can make noisy text match the wrong entity.
 const OCR_CONFUSIONS: &[(&str, &str)] = &[
+    // Citlali: v4's dictionary cannot emit 菈. Account for a simultaneous loss
+    // of 茜's 艹 radical (西) and 菈 being read as 拉/莱. Keep these whole-name
+    // corrections scoped: 西 and 莱 occur in other legitimate character names.
+    ("西特拉莉", "茜特菈莉"),
+    ("西特莱莉", "茜特菈莉"),
+    ("茜特莱莉", "茜特菈莉"),
     ("\u{8332}", "\u{5179}"), // 茲 → 兹
     ("\u{5179}", "\u{8332}"), // 兹 → 茲
     ("\u{789F}", "\u{78F2}"), // 碟 → 磲 (海染砗磲 misread as 海染碟)
@@ -21,7 +27,7 @@ const OCR_CONFUSIONS: &[(&str, &str)] = &[
     ("\u{62C9}", "\u{83C8}"), // 拉 → 菈 (菈乌玛: OCR drops 艹 radical, reads 菈 as 拉)
     ("\u{9E1F}", "\u{4E4C}"), // 鸟 → 乌 (菈乌玛: OCR adds stroke, reads 乌 as 鸟)
     // Achievement titles, one-character misses. Only pairs whose wrong glyph
-    // does not appear in any catalog title — substitution runs before exact match.
+    // does not appear in any catalog title.
     ("\u{9798}", "\u{97B4}"), // 鞘 → 鞴
     ("\u{9E45}", "\u{9E2B}"), // 鹅 → 鸫
     ("\u{636E}", "\u{88FE}"), // 据 → 裾
@@ -37,8 +43,8 @@ const OCR_CONFUSIONS: &[(&str, &str)] = &[
 /// Fuzzy match OCR text against a name→key map.
 ///
 /// Matching strategy (in order):
-/// 1. OCR confusion substitution → exact match
-/// 2. Exact match on cleaned text
+/// 1. Exact match on cleaned text
+/// 2. OCR confusion substitution → exact match
 /// 3. Substring match (longest match wins, both directions)
 /// 4. Levenshtein distance fallback (threshold: 30% of name length)
 /// 5. Longest common substring uniqueness fallback — if the OCR text shares a
@@ -100,6 +106,11 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
         return None;
     }
 
+    // Exact catalog names must win over OCR corrections, including user names.
+    if let Some(val) = map.get(&cleaned) {
+        return Some((cleaned, val.clone()));
+    }
+
     // Try OCR confusion substitutions (individual)
     for &(from, to) in OCR_CONFUSIONS {
         if cleaned.contains(from) {
@@ -139,11 +150,6 @@ fn fuzzy_match_map_inner(text: &str, map: &HashMap<String, String>) -> Option<(S
                 return Some((combined, val.clone()));
             }
         }
-    }
-
-    // Exact match
-    if let Some(val) = map.get(&cleaned) {
-        return Some((cleaned, val.clone()));
     }
 
     // Substring match: prefer "cleaned contains map key" (OCR added noise around real name)
@@ -657,6 +663,48 @@ mod tests {
             fuzzy_match_map("芭芭拉", &map),
             Some("Barbara".to_string()),
             "芭芭拉 should still match Barbara exactly"
+        );
+    }
+
+    #[test]
+    fn test_citlali_ocr_confusions_are_scoped_to_her_name() {
+        let map: HashMap<String, String> = [
+            ("茜特菈莉", "Citlali"),
+            ("莱依拉", "Layla"),
+            ("莱欧斯利", "Wriothesley"),
+            ("纳西妲", "Nahida"),
+            ("可莉", "Klee"),
+            ("芭芭拉", "Barbara"),
+            ("菈乌玛", "Lauoma"),
+        ]
+        .into_iter()
+        .map(|(name, key)| (name.to_string(), key.to_string()))
+        .collect();
+
+        for text in ["茜特菈莉", "茜特拉莉", "茜特莱莉", "西特拉莉", "西特莱莉"]
+        {
+            assert_eq!(
+                fuzzy_match_map_pair(text, &map),
+                Some(("茜特菈莉".to_string(), "Citlali".to_string())),
+                "{text}"
+            );
+        }
+        for (name, key) in &map {
+            assert_eq!(fuzzy_match_map(name, &map), Some(key.clone()), "{name}");
+        }
+    }
+
+    #[test]
+    fn test_exact_custom_name_wins_over_citlali_ocr_correction() {
+        let map: HashMap<String, String> = [
+            ("茜特菈莉".to_string(), "Citlali".to_string()),
+            ("西特拉莉".to_string(), "Wanderer".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            fuzzy_match_map("西特拉莉", &map),
+            Some("Wanderer".to_string())
         );
     }
 

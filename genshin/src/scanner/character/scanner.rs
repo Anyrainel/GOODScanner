@@ -262,6 +262,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_name_recognizes_citlali_with_two_ocr_confusions() {
+        let scanner = scanner_with_names(&[
+            ("茜特菈莉", "Citlali", "cryo"),
+            ("莱依拉", "Layla", "cryo"),
+            ("莱欧斯利", "Wriothesley", "cryo"),
+            ("可莉", "Klee", "pyro"),
+        ]);
+        for text in ["冰/西特拉莉", "冰/西特莱莉", "冰/茜特莱莉", "西特拉莉"] {
+            let (key, _, entity) = scanner.parse_name_and_element(text);
+            assert_eq!(key.as_deref(), Some("Citlali"), "{text}");
+            assert_eq!(entity.as_deref(), Some("茜特菈莉"), "{text}");
+        }
+    }
+
+    #[test]
     fn parse_name_handles_no_separator() {
         let scanner = scanner_with_names(&[
             ("\u{95F2}\u{4E91}", "Xianyun", "anemo"), // 闲云

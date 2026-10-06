@@ -35,12 +35,12 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_STAGING,
 };
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
 use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
-use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
 use crate::capture::Capturer;
 use crate::positioning::{Pos, Rect};
@@ -50,7 +50,7 @@ pub struct WgcCapturer {
     d3d_context: ID3D11DeviceContext,
     frame_pool: Direct3D11CaptureFramePool,
     _session: GraphicsCaptureSession,
-    frame_origin: (i32, i32),
+    hwnd: isize,
     hdr_mode: bool,
     /// f16 bit-pattern → u8 tone-mapped value. Only populated in HDR mode.
     hdr_lut: Vec<u8>,
@@ -93,10 +93,6 @@ impl WgcCapturer {
         let session = frame_pool.CreateCaptureSession(&item)?;
         session.StartCapture()?;
 
-        let mut wr = RECT::default();
-        unsafe { GetWindowRect(HWND(hwnd as *mut _), &mut wr)? };
-        let frame_origin = (wr.left, wr.top);
-
         // Build the tone-curve LUT once at construction time (~3 ms for 65536 entries).
         // In SDR mode the LUT is empty and never used.
         let hdr_lut = if hdr_mode {
@@ -116,7 +112,7 @@ impl WgcCapturer {
             d3d_context,
             frame_pool,
             _session: session,
-            frame_origin,
+            hwnd,
             hdr_mode,
             hdr_lut,
         })
@@ -135,12 +131,26 @@ impl WgcCapturer {
             f.ok_or_else(|| anyhow!("WGC: no frame received within 200 ms timeout"))?
         };
 
+        let content_size = frame.ContentSize()?;
         let surface = frame.Surface()?;
         let dxgi_access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
         let frame_tex: ID3D11Texture2D = unsafe { dxgi_access.GetInterface()? };
 
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { frame_tex.GetDesc(&mut desc) };
+
+        // The texture is allocated at the frame pool's size. Only ContentSize
+        // describes valid pixels after a window size change.
+        if content_size.Width <= 0
+            || content_size.Height <= 0
+            || content_size.Width as u32 > desc.Width
+            || content_size.Height as u32 > desc.Height
+        {
+            return Err(anyhow!(
+                "WGC: invalid frame content size={}x{} for texture={}x{}; retry after the window settles",
+                content_size.Width, content_size.Height, desc.Width, desc.Height
+            ));
+        }
 
         let staging_desc = D3D11_TEXTURE2D_DESC {
             Width: desc.Width,
@@ -172,8 +182,8 @@ impl WgcCapturer {
                 .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
         }
 
-        let width = desc.Width as u32;
-        let height = desc.Height as u32;
+        let width = content_size.Width as u32;
+        let height = content_size.Height as u32;
         let pitch = mapped.RowPitch as u32;
 
         let img = if self.hdr_mode {
@@ -202,36 +212,83 @@ impl WgcCapturer {
 
         Ok(img)
     }
+
+    fn frame_bounds(&self) -> Result<Rect<i32>> {
+        // WGC captures the visible DWM frame, whereas GetWindowRect includes
+        // invisible resize borders (often seven pixels). Using that origin
+        // shifts the crop and cuts pixels off the right/bottom of the client.
+        // Query every time: focusing/restoring a window can move it after new().
+        let mut bounds = RECT::default();
+        unsafe {
+            DwmGetWindowAttribute(
+                HWND(self.hwnd as *mut _),
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut bounds as *mut RECT as *mut _,
+                std::mem::size_of::<RECT>() as u32,
+            )?;
+        }
+        Ok(Rect {
+            left: bounds.left,
+            top: bounds.top,
+            width: bounds.right - bounds.left,
+            height: bounds.bottom - bounds.top,
+        })
+    }
+
+    fn capture_region(&self, rect: Rect<i32>) -> Result<RgbImage> {
+        let full = self.grab_frame()?;
+        let bounds = self.frame_bounds()?;
+        if bounds.width <= 0
+            || bounds.height <= 0
+            || full.dimensions() != (bounds.width as u32, bounds.height as u32)
+        {
+            return Err(anyhow!(
+                "WGC: frame dimensions={:?} do not match visible window bounds={bounds:?}; retry after the window settles",
+                full.dimensions()
+            ));
+        }
+        crop_frame(&full, bounds, rect)
+    }
 }
 
 impl Capturer<RgbImage> for WgcCapturer {
     fn capture_rect(&self, rect: Rect<i32>) -> Result<RgbImage> {
-        let full = self.grab_frame()?;
-
-        let fx = (rect.left - self.frame_origin.0).max(0) as u32;
-        let fy = (rect.top - self.frame_origin.1).max(0) as u32;
-        let fw = (rect.width as u32).min(full.width().saturating_sub(fx));
-        let fh = (rect.height as u32).min(full.height().saturating_sub(fy));
-
-        if fw == 0 || fh == 0 {
-            return Err(anyhow!(
-                "WGC: cropped rect is empty (screen rect outside captured window)"
-            ));
-        }
-
-        use image::GenericImageView;
-        Ok(full.view(fx, fy, fw, fh).to_image())
+        self.capture_region(rect)
     }
 
     fn capture_color(&self, pos: Pos<i32>) -> Result<image::Rgb<u8>> {
-        let full = self.grab_frame()?;
-        let x = ((pos.x - self.frame_origin.0).max(0) as u32).min(full.width() - 1);
-        let y = ((pos.y - self.frame_origin.1).max(0) as u32).min(full.height() - 1);
-        Ok(*full.get_pixel(x, y))
+        let pixel = self.capture_region(Rect {
+            left: pos.x,
+            top: pos.y,
+            width: 1,
+            height: 1,
+        })?;
+        Ok(*pixel.get_pixel(0, 0))
     }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn crop_frame(full: &RgbImage, bounds: Rect<i32>, rect: Rect<i32>) -> Result<RgbImage> {
+    let x = i64::from(rect.left) - i64::from(bounds.left);
+    let y = i64::from(rect.top) - i64::from(bounds.top);
+    if rect.width <= 0
+        || rect.height <= 0
+        || x < 0
+        || y < 0
+        || x + i64::from(rect.width) > i64::from(full.width())
+        || y + i64::from(rect.height) > i64::from(full.height())
+    {
+        return Err(anyhow!(
+            "WGC: requested screen rect={rect:?} is outside captured bounds={bounds:?}, frame dimensions={:?}",
+            full.dimensions()
+        ));
+    }
+    use image::GenericImageView;
+    Ok(full
+        .view(x as u32, y as u32, rect.width as u32, rect.height as u32)
+        .to_image())
+}
 
 fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device: Option<ID3D11Device> = None;
@@ -290,4 +347,76 @@ fn tone_curve(v: f32, white_point: f32) -> u8 {
     }
     let t = (v / white_point).min(1.0);
     (t.powf(1.0 / 2.2) * 255.0).round() as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windowed_client_crop_preserves_all_1920_columns() {
+        // GetWindowRect starts at x=93, seven pixels before the DWM frame.
+        // The old crop used x=7 and silently returned 1913 columns.
+        let bounds = Rect {
+            left: 100,
+            top: 70,
+            width: 1920,
+            height: 1110,
+        };
+        let client = Rect {
+            left: 100,
+            top: 100,
+            width: 1920,
+            height: 1080,
+        };
+        let mut full = RgbImage::new(1920, 1110);
+        full.put_pixel(0, 30, image::Rgb([10, 20, 30]));
+        full.put_pixel(1919, 1109, image::Rgb([40, 50, 60]));
+
+        let cropped = crop_frame(&full, bounds, client).unwrap();
+        assert_eq!(cropped.dimensions(), (1920, 1080));
+        assert_eq!(*cropped.get_pixel(0, 0), image::Rgb([10, 20, 30]));
+        assert_eq!(*cropped.get_pixel(1919, 1079), image::Rgb([40, 50, 60]));
+    }
+
+    #[test]
+    fn fullscreen_and_moved_window_crops_use_current_screen_bounds() {
+        let full = RgbImage::from_pixel(1920, 1080, image::Rgb([1, 2, 3]));
+        for (left, top) in [(0, 0), (300, 150), (-1920, -100)] {
+            let bounds = Rect {
+                left,
+                top,
+                width: 1920,
+                height: 1080,
+            };
+            assert_eq!(crop_frame(&full, bounds, bounds).unwrap(), full);
+        }
+    }
+
+    #[test]
+    fn incomplete_or_outside_crops_fail_instead_of_clamping() {
+        let full = RgbImage::new(1920, 1080);
+        let bounds = Rect {
+            left: 100,
+            top: 100,
+            width: 1920,
+            height: 1080,
+        };
+        for rect in [
+            Rect {
+                left: 107,
+                ..bounds
+            },
+            Rect { top: 101, ..bounds },
+            Rect { left: 99, ..bounds },
+            Rect { top: 99, ..bounds },
+            Rect { width: 0, ..bounds },
+            Rect {
+                height: -1,
+                ..bounds
+            },
+        ] {
+            assert!(crop_frame(&full, bounds, rect).is_err(), "{rect:?}");
+        }
+    }
 }
