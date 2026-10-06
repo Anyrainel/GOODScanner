@@ -156,8 +156,9 @@ fn fetch_remote() -> Result<String> {
 }
 
 fn fetch_url(url: &str) -> Result<String> {
-    let resp =
-        reqwest::blocking::get(url).with_context(|| format!("HTTP request to {url} failed"))?;
+    let resp = crate::data_http::client()
+        .and_then(|client| client.get(url).send())
+        .with_context(|| format!("HTTP request to {url} failed"))?;
     let status = resp.status();
     if !status.is_success() {
         anyhow::bail!("HTTP {} from {}", status, url);

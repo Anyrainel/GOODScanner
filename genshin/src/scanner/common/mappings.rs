@@ -191,7 +191,7 @@ fn fetch_if_needed() -> Result<()> {
         })?;
     }
 
-    match reqwest::blocking::get(MAPPINGS_URL) {
+    match crate::data_http::client().and_then(|client| client.get(MAPPINGS_URL).send()) {
         Ok(response) => {
             if response.status().is_success() {
                 let body = response
