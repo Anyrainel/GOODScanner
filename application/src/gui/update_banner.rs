@@ -10,7 +10,7 @@ use super::widgets;
 ///
 /// Call this from the `eframe::App::update` method, before the central panel.
 /// `update_state` is the shared state that tracks the update lifecycle.
-pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>) {
+pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>, game_busy: bool) {
     let state_snapshot = update_state.lock().unwrap().clone();
 
     let show = !matches!(state_snapshot, UpdateState::None | UpdateState::Checking);
@@ -32,7 +32,9 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
                     ))
                     .color(egui::Color32::from_rgb(255, 200, 50)),
                 );
-                if ui.button(l.t("下载更新", "Download Update")).clicked() {
+                if ui.add_enabled(!game_busy, egui::Button::new(l.t("下载更新", "Download Update")))
+                    .on_disabled_hover_text(l.t("请先停止当前任务。", "Stop the current task first."))
+                    .clicked() {
                     let arc = update_state.clone();
                     let url = download_url.clone();
                     let lang = l;
@@ -94,7 +96,7 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
             });
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         },
-        UpdateState::ShowingDialog => {
+        UpdateState::ShowingDialog | UpdateState::RestartRequested(_) => {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
@@ -206,21 +208,7 @@ fn show_restart_dialog(exe_path: PathBuf, update_state: Arc<Mutex<UpdateState>>,
     match result {
         rfd::MessageDialogResult::Yes => {
             yas::log_info!("用户选择立即重启", "User chose to restart now");
-            match std::process::Command::new(&exe_path).spawn() {
-                Ok(_) => std::process::exit(0),
-                Err(e) => {
-                    yas::log_error!("启动新版本失败: {}", "Failed to launch new version: {}", e);
-                    *update_state.lock().unwrap() = UpdateState::Failed(
-                        UiError::from_error(
-                            UiText::new(
-                                "更新已安装，但新版本无法自动启动。请手动重新打开程序。",
-                                "The update was installed, but the new version could not start automatically. Reopen the application manually.",
-                            ),
-                            e,
-                        ),
-                    );
-                },
-            }
+            *update_state.lock().unwrap() = UpdateState::RestartRequested(exe_path);
         },
         _ => {
             yas::log_info!("用户选择稍后重启", "User chose to restart later");

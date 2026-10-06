@@ -1,7 +1,7 @@
 //! Auto-update: check GitHub for new releases and self-replace the executable.
 //!
 //! Version scheme: CalVer tags (e.g. `v2026.03.27`) mapped to semver
-//! `YYYYMMDD.0.0` in Cargo.toml by CI.  Dev builds (major < 20000000)
+//! `YYYYMMDD.build.0` in Cargo.toml by CI. Dev builds (major < 20000000)
 //! skip the update check entirely.
 //!
 //! **Version check** uses two strategies:
@@ -10,12 +10,13 @@
 //!      works through download mirrors when the API is blocked
 //!
 //! **Downloads** use the same mirror chain as the ONNX Runtime download:
-//!   ghfast.top → gh-proxy.com → direct GitHub
+//!   gh-proxy.com → ghfast.top → direct GitHub
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use yas::{log_debug, log_info, log_warn};
 
@@ -43,6 +44,30 @@ const MIN_EXE_SIZE: usize = 1_000_000;
 #[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReleaseBuild {
+    tag: String,
+    revision: u32,
+}
+
+fn release_revision(body: Option<&str>) -> u32 {
+    body.and_then(|body| {
+        body.lines()
+            .find_map(|line| line.strip_prefix("Build revision: ")?.trim().parse().ok())
+    })
+    .unwrap_or(0)
+}
+
+fn current_revision() -> u32 {
+    env!("CARGO_PKG_VERSION")
+        .split('.')
+        .nth(1)
+        .and_then(|minor| minor.parse().ok())
+        .unwrap_or(0)
 }
 
 // ── Public types ─────────────────────────────────────────────────
@@ -82,7 +107,7 @@ fn parse_calver_tag(tag: &str) -> Option<u32> {
 
 /// The current build's CalVer integer, or `None` for dev builds.
 ///
-/// CI sets `CARGO_PKG_VERSION` to `YYYYMMDD.0.0`; the major component
+/// CI sets `CARGO_PKG_VERSION` to `YYYYMMDD.build.0`; the major component
 /// is ≥ 20000000.  Local dev builds have `0.x.y` (major < 20000000).
 fn current_version_int() -> Option<u32> {
     let version = env!("CARGO_PKG_VERSION");
@@ -111,7 +136,12 @@ pub fn current_version_display() -> String {
         let year = major / 10000;
         let month = (major % 10000) / 100;
         let day = major % 100;
-        format!("v{}.{:02}.{:02}", year, month, day)
+        let revision = current_revision();
+        if revision == 0 {
+            format!("v{}.{:02}.{:02}", year, month, day)
+        } else {
+            format!("v{}.{:02}.{:02} (build {})", year, month, day, revision)
+        }
     } else {
         format!("v{}", version)
     }
@@ -120,7 +150,7 @@ pub fn current_version_display() -> String {
 // ── Tag resolution strategies ────────────────────────────────────
 
 /// Strategy 1: GitHub REST API (fast, works in most regions).
-fn get_tag_via_api() -> Option<String> {
+fn get_tag_via_api() -> Option<(String, u32)> {
     let url = "https://api.github.com/repos/Anyrainel/GOODScanner/releases/latest";
     log_debug!("检查更新(API): {}", "Checking via API: {}", url);
 
@@ -139,7 +169,7 @@ fn get_tag_via_api() -> Option<String> {
     let release: GitHubRelease = resp.json().ok()?;
     // Validate it looks like a CalVer tag before returning
     if parse_calver_tag(&release.tag_name).is_some() {
-        Some(release.tag_name)
+        Some((release.tag_name, release_revision(release.body.as_deref())))
     } else {
         log_debug!(
             "无法解析版本号: {}",
@@ -148,6 +178,38 @@ fn get_tag_via_api() -> Option<String> {
         );
         None
     }
+}
+
+/// The daily tag stays compatible with old updaters. A small mirrored asset
+/// carries the revision when the GitHub API is unavailable.
+fn get_revision_via_mirrors(tag: &str) -> u32 {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .user_agent("GOODScanner-Updater")
+        .build()
+    else {
+        return 0;
+    };
+    let check = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    for mirror in DOWNLOAD_MIRRORS {
+        let url = format!(
+            "{mirror}https://github.com/Anyrainel/GOODScanner/releases/download/{tag}/update.json?check={check}"
+        );
+        if let Ok(response) = client.get(url).send() {
+            if response.status().is_success() {
+                if let Ok(build) = response.json::<ReleaseBuild>() {
+                    if build.tag == tag {
+                        return build.revision;
+                    }
+                }
+            }
+        }
+    }
+    0 // Legacy releases have no revision asset.
 }
 
 /// Strategy 2: Follow `/releases/latest` redirect through download mirrors.
@@ -239,21 +301,25 @@ pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
     };
 
     // Try API first, then redirect fallback
-    let latest_tag = get_tag_via_api()
+    let (latest_tag, latest_revision) = get_tag_via_api()
         .or_else(|| {
             log_debug!("API失败，尝试redirect方式", "API failed, trying redirect");
-            get_tag_via_redirect()
+            get_tag_via_redirect().map(|tag| {
+                let revision = get_revision_via_mirrors(&tag);
+                (tag, revision)
+            })
         })
         .ok_or_else(|| anyhow!("无法获取最新版本信息 / Cannot determine latest version"))?;
 
     let latest_int = parse_calver_tag(&latest_tag)
         .ok_or_else(|| anyhow!("无法解析版本号 / Cannot parse release tag: {}", latest_tag))?;
 
-    if latest_int <= current_int {
+    if (latest_int, latest_revision) <= (current_int, current_revision()) {
         return Ok(UpdateStatus::UpToDate);
     }
 
     // Construct download URL from tag (don't rely on API assets list)
+    let asset_name = revision_asset_name(asset_name, latest_revision);
     let download_url = format!(
         "https://github.com/Anyrainel/GOODScanner/releases/download/{}/{}",
         latest_tag, asset_name,
@@ -261,9 +327,20 @@ pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
 
     Ok(UpdateStatus::UpdateAvailable {
         current_version: current_version_display(),
-        latest_version: latest_tag,
+        latest_version: if latest_revision == 0 {
+            latest_tag
+        } else {
+            format!("{latest_tag} (build {latest_revision})")
+        },
         download_url,
     })
+}
+
+fn revision_asset_name(asset_name: &str, revision: u32) -> String {
+    match asset_name.strip_suffix(".exe") {
+        Some(stem) if revision > 0 => format!("{stem}-{revision}.exe"),
+        _ => asset_name.to_string(),
+    }
 }
 
 // ── Public: cleanup ──────────────────────────────────────────────
@@ -309,9 +386,10 @@ pub fn cleanup_old_exe() {
 /// On Windows the running exe cannot be overwritten, but it *can* be
 /// renamed.  The sequence is:
 ///
-/// 1. Rename the current executable → `<current>.exe.old`
-/// 2. Write the downloaded bytes at the current executable path
-/// 3. On next launch, `cleanup_old_exe()` removes the `.old` file
+/// 1. Write and flush the complete download to a staging file
+/// 2. Rename the current executable → `<current>.exe.old`
+/// 3. Rename the staging file to the current executable path
+/// 4. On next launch, `cleanup_old_exe()` removes the `.old` file
 ///
 /// If writing the new file fails, the rename is rolled back so the
 /// original exe is restored.
@@ -366,23 +444,7 @@ pub fn download_and_replace(download_url: &str) -> Result<PathBuf> {
                         continue;
                     }
 
-                    // Self-replace: rename running exe → .old, write new
-                    if old_path.exists() {
-                        if let Err(e) = std::fs::remove_file(&old_path) {
-                            log_warn!("无法删除旧版本备份: {}", "Cannot remove old backup: {}", e);
-                        }
-                    }
-                    std::fs::rename(&exe_path, &old_path).map_err(|e| {
-                        anyhow!("无法重命名当前程序 / Cannot rename current exe: {}", e)
-                    })?;
-
-                    if let Err(e) = std::fs::write(&exe_path, &bytes) {
-                        // Rollback: restore the original exe
-                        if let Err(re) = std::fs::rename(&old_path, &exe_path) {
-                            log_warn!("回滚失败: {}", "Rollback failed: {}", re);
-                        }
-                        return Err(anyhow!("无法写入新版本 / Cannot write new version: {}", e));
-                    }
+                    replace_executable(&exe_path, &old_path, &bytes)?;
 
                     log_info!("更新完成！请重启程序。", "Update complete! Please restart.");
                     return Ok(exe_path);
@@ -407,4 +469,129 @@ pub fn download_and_replace(download_url: &str) -> Result<PathBuf> {
         "所有下载源均失败 / All download sources failed: {}",
         last_error
     ))
+}
+
+fn replace_executable(exe_path: &Path, old_path: &Path, bytes: &[u8]) -> Result<()> {
+    let staged = exe_path.with_extension(format!("exe.{}.new", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged)
+        .with_context(|| format!("Cannot stage update: {}", staged.display()))?;
+    let result = (|| {
+        file.write_all(bytes)
+            .context("Cannot write staged update")?;
+        file.sync_all().context("Cannot flush staged update")?;
+        drop(file);
+        match std::fs::remove_file(old_path) {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error).context(
+                "Cannot remove previous update backup; close the previous application before updating again",
+            ),
+        }
+        std::fs::rename(exe_path, old_path).context("Cannot rename current executable")?;
+        if let Err(error) = std::fs::rename(&staged, exe_path) {
+            std::fs::rename(old_path, exe_path).with_context(|| {
+                format!("Cannot restore original executable after installation failed: {error}; backup={}", old_path.display())
+            })?;
+            return Err(error)
+                .context("Cannot install staged update; original executable restored");
+        }
+        Ok(())
+    })();
+    if staged.exists() {
+        if let Err(error) = std::fs::remove_file(&staged) {
+            log_warn!(
+                "无法清理更新临时文件: {}",
+                "Cannot remove staged update file: {}",
+                error
+            );
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_and_revised_releases_are_compatible() {
+        let release: GitHubRelease = serde_json::from_str(r#"{"tag_name":"v2026.10.05"}"#).unwrap();
+        assert_eq!(release_revision(release.body.as_deref()), 0);
+        assert_eq!(
+            release_revision(Some("Build revision: 123\n\nRelease notes")),
+            123
+        );
+        assert_eq!(release_revision(Some("Build revision: invalid")), 0);
+        assert_eq!(parse_calver_tag("v2026.10.05"), Some(20261005));
+        assert_eq!(revision_asset_name(ASSET_CAPTURE, 0), "GOODCapture.exe");
+        assert_eq!(
+            revision_asset_name(ASSET_CAPTURE, 123),
+            "GOODCapture-123.exe"
+        );
+        assert_eq!(
+            revision_asset_name(ASSET_SCANNER, 123),
+            "GOODScanner-123.exe"
+        );
+    }
+
+    fn test_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("goodscanner-update-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn replacement_preserves_original_as_backup() {
+        let dir = test_dir();
+        let exe = dir.join("scanner.exe");
+        let old = exe.with_extension("exe.old");
+        std::fs::write(&exe, b"original").unwrap();
+        std::fs::write(&old, b"previous backup").unwrap();
+        replace_executable(&exe, &old, b"replacement").unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"replacement");
+        assert_eq!(std::fs::read(&old).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_old_backup_leaves_current_executable_intact() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = test_dir();
+        let exe = dir.join("scanner.exe");
+        let old = exe.with_extension("exe.old");
+        std::fs::write(&exe, b"original").unwrap();
+        std::fs::write(&old, b"locked backup").unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&old)
+            .unwrap();
+        let error = replace_executable(&exe, &old, b"replacement").unwrap_err();
+        assert!(error.to_string().contains("close the previous application"));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        drop(lock);
+        assert_eq!(std::fs::read(&old).unwrap(), b"locked backup");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staging_failure_does_not_rename_current_executable() {
+        let dir = test_dir();
+        let exe = dir.join("scanner.exe");
+        let old = exe.with_extension("exe.old");
+        let staged = exe.with_extension(format!("exe.{}.new", std::process::id()));
+        std::fs::write(&exe, b"original").unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        assert!(replace_executable(&exe, &old, b"replacement").is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"original");
+        assert!(!old.exists());
+        assert!(staged.is_dir());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

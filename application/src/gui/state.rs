@@ -516,6 +516,8 @@ pub enum UpdateState {
     Downloading,
     /// Update downloaded and applied — showing restart dialog.
     ShowingDialog,
+    /// User accepted the restart; the GUI performs the shutdown and handoff.
+    RestartRequested(std::path::PathBuf),
     /// Update downloaded, user chose to restart later.
     Ready,
     /// Already on the latest version (or dev build).

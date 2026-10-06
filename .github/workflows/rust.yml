@@ -41,7 +41,10 @@ jobs:
         run: rustup default stable-msvc
 
       - name: Test user-facing error diagnostics
-        run: cargo test -p good_tools_app --features test-as-invoker --test ui_error
+        run: |
+          cargo test -p genshin_scanner --lib updater::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p good_tools_app --features test-as-invoker --test ui_error --test update_restart --test shared_games
 
       - name: Set version in Cargo.toml
         run: |
@@ -51,20 +54,27 @@ jobs:
               './genshin/Cargo.toml'
               './application/Cargo.toml'
           )
-          # Convert calver v2026.03.12 to valid semver: 20260312.0.0
+          # Pack the date into major and the release build into minor.
           # Cargo requires 3-part semver; pack YYYYMMDD into major
           $d = Get-Date -Format "yyyyMMdd"
-          $ver = "$d.0.0"
+          $ver = "$d.${{ github.run_number }}.0"
           [regex]$pattern = '(?<=version = ").*(?=")'
           foreach ($file in $files) {
               $pattern.Replace((Get-Content -Raw $file), $ver, 1) | Out-File -FilePath $file
           }
+          @{ tag = $env:VERSION; revision = [int]${{ github.run_number }} } |
+            ConvertTo-Json | Set-Content -Encoding utf8 update.json
 
       - name: Build GOODScanner (Release)
         run: cargo build --release --bin GOODScanner
 
       - name: Build GOODCapture (Release)
         run: cargo build --release --bin GOODCapture --features capture
+
+      - name: Preserve revision-specific download names
+        run: |
+          Copy-Item target/release/GOODScanner.exe target/release/GOODScanner-${{ github.run_number }}.exe
+          Copy-Item target/release/GOODCapture.exe target/release/GOODCapture-${{ github.run_number }}.exe
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -85,7 +95,11 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}
           name: ${{ env.VERSION }}
+          body: "Build revision: ${{ github.run_number }}"
           files: |
             target/release/GOODScanner.exe
             target/release/GOODCapture.exe
+            update.json
+            target/release/GOODScanner-${{ github.run_number }}.exe
+            target/release/GOODCapture-${{ github.run_number }}.exe
           make_latest: true

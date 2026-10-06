@@ -6,6 +6,7 @@ pub mod log_bridge;
 pub mod log_panel;
 pub mod manager_tab;
 mod privilege;
+pub mod restart;
 pub mod scanner_tab;
 #[cfg(feature = "capture")]
 pub mod star_rail_capture_tab;
@@ -31,6 +32,17 @@ pub fn run_gui() {
     const PRODUCT_NAME: &str = "GOODCapture Scanner";
     #[cfg(not(feature = "capture"))]
     const PRODUCT_NAME: &str = "GOOD Scanner";
+
+    if let Err(error) = restart::wait_for_update_parent() {
+        show_startup_error(PRODUCT_NAME, Lang::Zh, &state::UiError::from_error(
+            state::UiText::new(
+                "上一个版本尚未退出，更新无法启动。请关闭旧版本后重新打开程序。",
+                "The update could not start while waiting for the previous version. Close the old application and reopen this one.",
+            ),
+            error,
+        ));
+        return;
+    }
 
     // Register the process-wide SEH handler early. Worker threads explicitly
     // enroll in it when they start; unregistered threads are left alone.
@@ -113,6 +125,7 @@ pub fn run_gui() {
         ..Default::default()
     };
 
+    let update_state = state.update_state.clone();
     if let Err(error) = eframe::run_native(
         PRODUCT_NAME,
         options,
@@ -135,6 +148,12 @@ pub fn run_gui() {
         );
         log::error!(target: yas::lang::LOCALIZED_LOG_TARGET, "{}", failure.copy_text(lang));
         show_startup_error(PRODUCT_NAME, lang, &failure);
+    }
+    if matches!(
+        *update_state.lock().unwrap(),
+        UpdateState::RestartRequested(_)
+    ) {
+        restart::exit_for_update();
     }
 }
 
@@ -190,6 +209,7 @@ fn install_panic_hook() {
 }
 
 struct GuiApp {
+    restart_started: bool,
     state: AppState,
     app_config: ApplicationConfigStore,
     star_rail: star_rail_state::StarRailState,
@@ -207,6 +227,7 @@ impl GuiApp {
         let star_rail =
             star_rail_state::StarRailState::new(app_config.config.star_rail.output_dir.clone());
         Self {
+            restart_started: false,
             state,
             app_config,
             star_rail,
@@ -220,6 +241,10 @@ impl GuiApp {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.restart_started {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         // Debounced auto-save: check if config changed and save after 300ms
         #[cfg(feature = "capture")]
         self.capture_tab.sync_to_config(&mut self.state.user_config);
@@ -336,7 +361,44 @@ impl eframe::App for GuiApp {
         });
 
         // Update banner (between tabs and content)
-        update_banner::show(ctx, self.state.lang, &self.state.update_state);
+        update_banner::show(
+            ctx,
+            self.state.lang,
+            &self.state.update_state,
+            game_task_busy,
+        );
+        let update_in_progress = matches!(
+            *self.state.update_state.lock().unwrap(),
+            UpdateState::Downloading
+                | UpdateState::ShowingDialog
+                | UpdateState::RestartRequested(_)
+        );
+        let restart_path = match self.state.update_state.lock().unwrap().clone() {
+            UpdateState::RestartRequested(path) => Some(path),
+            _ => None,
+        };
+        if let Some(path) = restart_path {
+            if !game_task_busy {
+                match restart::launch_updated_app(&path) {
+                    Ok(_) => {
+                        self.restart_started = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    },
+                    Err(error) => {
+                        *self.state.update_state.lock().unwrap() = UpdateState::Failed(
+                            state::UiError::from_error(
+                                state::UiText::new(
+                                    "更新已安装，但新版本无法自动启动。请手动重新打开程序。",
+                                    "The update was installed, but the new version could not start automatically. Reopen the application manually.",
+                                ),
+                                error,
+                            ),
+                        );
+                    },
+                }
+            }
+        }
 
         // Bottom panel: per-tab log area.
         // Manager tab shows manager logs; everything else shows scanner logs
@@ -377,7 +439,7 @@ impl eframe::App for GuiApp {
                     ui,
                     &mut self.state,
                     &mut self.scan_handle,
-                    is_server_running || is_capture_busy || star_rail_busy,
+                    is_server_running || is_capture_busy || star_rail_busy || update_in_progress,
                     restart_required,
                 );
             },
@@ -386,7 +448,7 @@ impl eframe::App for GuiApp {
                     ui,
                     &mut self.state,
                     &mut self.server_handle,
-                    is_scan_running || is_capture_busy || star_rail_busy,
+                    is_scan_running || is_capture_busy || star_rail_busy || update_in_progress,
                     restart_required,
                 );
             },
@@ -396,7 +458,7 @@ impl eframe::App for GuiApp {
                     ui,
                     self.state.lang,
                     &mut self.capture_tab,
-                    is_scan_running || is_server_running || star_rail_busy,
+                    is_scan_running || is_server_running || star_rail_busy || update_in_progress,
                     restart_required,
                 );
             },
@@ -412,7 +474,10 @@ impl eframe::App for GuiApp {
                     l,
                     &mut self.app_config.config.star_rail,
                     &mut self.star_rail,
-                    genshin_busy || star_rail_manager_running || star_rail_capture_busy,
+                    genshin_busy
+                        || star_rail_manager_running
+                        || star_rail_capture_busy
+                        || update_in_progress,
                     restart_required,
                 );
             },
@@ -422,7 +487,10 @@ impl eframe::App for GuiApp {
                     l,
                     &mut self.app_config.config.star_rail,
                     &mut self.star_rail,
-                    genshin_busy || star_rail_scan_running || star_rail_capture_busy,
+                    genshin_busy
+                        || star_rail_scan_running
+                        || star_rail_capture_busy
+                        || update_in_progress,
                     restart_required,
                 );
             },
@@ -433,7 +501,10 @@ impl eframe::App for GuiApp {
                     l,
                     &mut self.app_config.config.star_rail,
                     &mut self.star_rail.capture,
-                    genshin_busy || star_rail_scan_running || star_rail_manager_running,
+                    genshin_busy
+                        || star_rail_scan_running
+                        || star_rail_manager_running
+                        || update_in_progress,
                     restart_required,
                 );
             },
@@ -447,7 +518,10 @@ impl eframe::App for GuiApp {
         // Request repaint while tasks or update check are in progress
         let update_busy = matches!(
             *self.state.update_state.lock().unwrap(),
-            UpdateState::Checking | UpdateState::Downloading | UpdateState::ShowingDialog,
+            UpdateState::Checking
+                | UpdateState::Downloading
+                | UpdateState::ShowingDialog
+                | UpdateState::RestartRequested(_),
         );
         let config_save_pending =
             self.state.config_dirty_since.is_some() || self.app_config.save_pending();
