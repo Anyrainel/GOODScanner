@@ -262,14 +262,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_name_recognizes_citlali_with_two_ocr_confusions() {
+    fn parse_name_recognizes_citlali_ocr_variants() {
         let scanner = scanner_with_names(&[
             ("茜特菈莉", "Citlali", "cryo"),
             ("莱依拉", "Layla", "cryo"),
             ("莱欧斯利", "Wriothesley", "cryo"),
             ("可莉", "Klee", "pyro"),
         ]);
-        for text in ["冰/西特拉莉", "冰/西特莱莉", "冰/茜特莱莉", "西特拉莉"] {
+        for text in [
+            "冰/西特拉莉",
+            "冰/西特莱莉",
+            "冰/茜特莱莉",
+            "西特拉莉",
+            // Observed v4/v5 outputs from the user's 417x76 screenshot.
+            "冰元素/茜特莉",
+            "冰元素／ 茜特菈莉",
+        ] {
             let (key, _, entity) = scanner.parse_name_and_element(text);
             assert_eq!(key.as_deref(), Some("Citlali"), "{text}");
             assert_eq!(entity.as_deref(), Some("茜特菈莉"), "{text}");
