@@ -46,7 +46,7 @@ impl PacketCapture {
     pub fn new() -> Result<Self> {
         let mut capture = Capture::new().map_err(|e| CaptureError::Capture {
             has_captured: false,
-            error: e.into(),
+            error: yas::utils::packet_capture::initialization_error(e),
         })?;
 
         let filter1 = PktMonFilter {

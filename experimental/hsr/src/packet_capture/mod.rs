@@ -649,10 +649,16 @@ impl NativePacketSource {
         })?;
 
         let mut capture = Capture::new().map_err(|error| {
+            let hint = yas::utils::packet_capture::initialization_hint(&error)
+                .map(|(zh, en)| LocalizedText::new(zh, en))
+                .unwrap_or(CAPTURE_HINT);
             HsrError::new(
                 "HSR-CAPTURE-OPEN",
-                CAPTURE_HINT,
-                format!("pktmon capture could not be created; cause={error}"),
+                hint,
+                format!(
+                    "pktmon capture could not be created; cause={:#}",
+                    yas::utils::packet_capture::initialization_error(error)
+                ),
             )
         })?;
         for (index, port) in HSR_PACKET_PORTS.into_iter().enumerate() {

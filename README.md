@@ -77,6 +77,16 @@ GOODScanner.exe --characters --weapons  # 组合扫描
 - 扫描过程中请勿操作鼠标
 - 默认 4 星以下圣遗物不扫描（可通过 `--artifact-min-rarity` 调整）
 
+### 抓包提示“找不到指定的模块”
+
+`os error -2147024770` 即 `0x8007007E`（Windows 找不到所需模块）。GOODCapture 的两款游戏抓包均依赖 Windows 的 `PktMonApi.dll`；新版与旧版抓包后端都需要该 DLL。此错误发生在初始化抓包组件时，尚未读取游戏数据包，可能是 DLL 本身或其依赖无法加载。
+
+1. 运行 `winver` 查看 Windows 版本；在 PowerShell 中运行 `Test-Path "$env:WINDIR\System32\PktMonApi.dll"` 检查 DLL 是否存在。文件存在不代表其依赖一定能加载。
+2. 安装 Windows 更新并重启。若系统文件缺失或损坏，请按 [微软的修复说明](https://support.microsoft.com/en-au/windows/experience/backup-recovery/using-system-file-checker-in-windows)，在管理员命令提示符中依次运行 `DISM.exe /Online /Cleanup-Image /RestoreHealth` 和 `sfc /scannow`，完成后重启。
+3. 若精简系统移除了该组件，需要通过 Windows 系统修复恢复组件，或使用完整的 Windows 系统。也可改用不依赖 pktmon 的 OCR 扫描，但部分仅支持抓包的功能无法替代。
+
+请勿从第三方网站下载替换系统 DLL。能运行 `pktmon.exe` 不代表 GOODCapture 所需的 DLL 接口一定可用。若仍失败，请反馈 Windows 版本与内部版本号、DLL 检查结果及程序完整错误信息。
+
 ## 命令行参数
 
 ### 通用选项

@@ -985,6 +985,32 @@ mod tests {
     }
 
     #[test]
+    fn missing_pktmon_module_surfaces_recovery_hint_and_original_error() {
+        let state = Arc::new(Mutex::new(CaptureState {
+            capturing: true,
+            ..CaptureState::default()
+        }));
+        let source = yas::utils::packet_capture::initialization_error(
+            std::io::Error::from_raw_os_error(-2147024770),
+        );
+        let error = capture_error_with_context(
+            CaptureError::Capture {
+                has_captured: false,
+                error: source,
+            },
+            "创建抓包失败 / Error creating packet capture",
+        );
+        update_state_from_capture_task(&state, Ok(Err(error)), false);
+
+        let state = state.lock().unwrap();
+        assert!(!state.capturing);
+        let message = state.error.as_deref().unwrap();
+        assert!(message.contains("PktMonApi.dll"));
+        assert!(message.contains("DISM.exe /Online /Cleanup-Image /RestoreHealth"));
+        assert!(message.contains("os error -2147024770"));
+    }
+
+    #[test]
     fn closed_capture_stream_is_terminal_and_searchable() {
         let error = handle_capture_read_error(CaptureError::CaptureClosed)
             .expect_err("a closed capture stream must terminate the capture task");
