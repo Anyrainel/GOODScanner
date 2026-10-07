@@ -147,13 +147,6 @@ pub fn show(
                                 "Scanning clicks and drags the top Character bar. Keep the mouse and keyboard idle during scanning.",
                             ));
                         }
-                        ui.checkbox(
-                            &mut settings.dump_images,
-                            lang.t(
-                                "保存OCR截图 → debug_images/",
-                                "Dump OCR images → debug_images/",
-                            ),
-                        );
                         if !settings.scan_characters
                             && !settings.scan_light_cones
                             && !settings.scan_relics_and_ornaments
@@ -169,7 +162,36 @@ pub fn show(
                     });
                 });
 
-            egui::CollapsingHeader::new(lang.t("扫描设置", "Scan Settings"))
+            egui::CollapsingHeader::new(lang.t("延迟设置", "Timing Delays"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!is_running && !game_busy, |ui| {
+                        let defaults = hsr_scanner::scan_timing::ScanTimings::default();
+                        let timings = &mut settings.timings;
+                        ui.columns(2, |cols| {
+                            widgets::delay_group(&mut cols[0], "hsr_timing_0", lang.t("界面操作", "Navigation"), lang, &mut [
+                                (lang.t("打开界面", "Open screen"), &mut timings.menu_open_ms, defaults.menu_open_ms, lang.t("打开背包或角色界面后的总等待时间", "Total wait after opening Inventory or Characters")),
+                                (lang.t("关闭界面", "Close screen"), &mut timings.menu_close_ms, defaults.menu_close_ms, lang.t("关闭界面或弹窗后的等待时间", "Wait after closing a menu or dialog")),
+                                (lang.t("输入就绪", "Input ready"), &mut timings.input_settle_ms, defaults.input_settle_ms, lang.t("切换鼠标操作模式或激活窗口后等待输入生效", "Wait after activating the window or switching input mode")),
+                                (lang.t("背包分类切换", "Inventory tab"), &mut timings.inventory_tab_ms, defaults.inventory_tab_ms, lang.t("切换光锥或遗器分类后的等待时间", "Wait after switching Light Cone or Relic tabs")),
+                                (lang.t("详情面板切换", "Panel switch"), &mut timings.panel_switch_ms, defaults.panel_switch_ms, lang.t("角色详情、星魂以及首次选中背包物品共用此等待", "Shared wait for Character details, Eidolons and the first inventory selection")),
+                                (lang.t("打开行迹", "Open Traces"), &mut timings.traces_open_ms, defaults.traces_open_ms, lang.t("行迹界面加载后的等待时间", "Wait for the Traces screen to load")),
+                                (lang.t("角色栏翻页", "Character page"), &mut timings.character_page_ms, defaults.character_page_ms, lang.t("角色栏拖动后的等待，扫描和拖动诊断共用", "Wait after dragging the Character bar, shared with the drag diagnostic")),
+                            ]);
+                            widgets::delay_group(&mut cols[1], "hsr_timing_1", lang.t("截图与验证", "Capture & Verification"), lang, &mut [
+                                (lang.t("截图间隔", "Capture interval"), &mut timings.capture_interval_ms, defaults.capture_interval_ms, lang.t("比较稳定画面或选中框的两次截图之间的等待", "Wait between screenshots used to confirm a stable panel or selection")),
+                                (lang.t("按键后等待", "Key settle"), &mut timings.key_settle_ms, defaults.key_settle_ms, lang.t("发送下一项按键后，开始检查画面前的等待", "Wait after next-item input before checking the screen")),
+                                (lang.t("面板检查间隔", "Panel poll interval"), &mut timings.poll_interval_ms, defaults.poll_interval_ms, lang.t("等待物品或角色切换时检查画面的间隔", "Interval for checking an item or Character transition")),
+                                (lang.t("选中框动画", "Selection animation"), &mut timings.selection_settle_ms, defaults.selection_settle_ms, lang.t("相同物品副本之间切换时，选中框动画的等待时间", "Selection animation wait when moving between identical item copies")),
+                                (lang.t("面板等待上限", "Panel timeout"), &mut timings.panel_timeout_ms, defaults.panel_timeout_ms, lang.t("单次切换等待画面更新的最长时间", "Maximum wait for one item or Character transition")),
+                                (lang.t("界面检查间隔", "Menu poll interval"), &mut timings.menu_poll_interval_ms, defaults.menu_poll_interval_ms, lang.t("界面标题尚未加载时重新检查的间隔", "Interval for rechecking a menu title while it loads")),
+                                (lang.t("标记切换", "Status toggle"), &mut timings.status_toggle_ms, defaults.status_toggle_ms, lang.t("管理器切换锁定或弃置标记后共用的等待", "Shared manager wait after toggling Lock or Discard")),
+                            ]);
+                        });
+                    });
+                });
+
+            egui::CollapsingHeader::new(lang.t("高级选项", "Advanced Options"))
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!is_running && !game_busy, |ui| {
@@ -211,54 +233,24 @@ pub fn show(
                                     });
                                 ui.end_row();
 
-                                ui.label(lang.t("操作后等待 (ms)", "Navigation delay (ms)"));
-                                ui.add(
-                                    egui::DragValue::new(&mut settings.navigation_delay_ms)
-                                        .range(50..=5_000)
-                                        .speed(10.0),
-                                );
-                                ui.end_row();
-
-                                ui.label(lang.t("面板等待上限 (ms)", "Panel timeout (ms)"));
-                                ui.add(
-                                    egui::DragValue::new(&mut settings.panel_timeout_ms)
-                                        .range(250..=10_000)
-                                        .speed(10.0),
-                                );
-                                ui.end_row();
-
-                                ui.label(lang.t("背包物品安全上限", "Inventory safety limit"));
-                                ui.add(
-                                    egui::DragValue::new(&mut settings.max_inventory_items)
-                                        .range(1..=10_000),
-                                );
-                                ui.end_row();
-
-                                ui.label(lang.t("角色安全上限", "Character safety limit"));
-                                ui.add(
-                                    egui::DragValue::new(&mut settings.max_characters)
-                                        .range(1..=500),
-                                );
-                                ui.end_row();
-
-                                ui.label(lang.t(
-                                    "已知角色总数（0 = 未知）",
-                                    "Known Character total (0 = unknown)",
-                                ));
-                                ui.add(
-                                    egui::DragValue::new(&mut settings.expected_characters)
-                                        .range(0..=500),
-                                );
-                                ui.end_row();
+                                for (zh, en, value) in [
+                                    ("角色", "Characters", &mut settings.max_characters),
+                                    ("光锥", "Light Cones", &mut settings.max_light_cones),
+                                    ("遗器与饰品", "Relics & Ornaments", &mut settings.max_gear),
+                                ] {
+                                    ui.label(lang.t(zh, en));
+                                    ui.add(egui::DragValue::new(value).range(0..=10_000));
+                                    ui.end_row();
+                                }
 
                             });
-                        ui.label(
-                            egui::RichText::new(lang.t(
-                                "只有填写准确的角色总数，并验证回到首位后，角色覆盖才会标记为完整。",
-                                "Character coverage is marked complete only when the correct total is supplied and wraparound to the first Character is verified.",
-                            ))
-                            .small()
-                            .color(egui::Color32::from_rgb(120, 120, 120)),
+                        ui.label(lang.t(
+                            "最大扫描数：0 = 全部。达到上限时仅导出已扫描条目。",
+                            "Max scan count: 0 = all. Reaching a cap saves partial results.",
+                        ));
+                        ui.checkbox(
+                            &mut settings.dump_images,
+                            lang.t("保存OCR截图 → debug_images/", "Dump OCR images → debug_images/"),
                         );
                     });
                 });

@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use hsr_scanner::scan_timing::ScanTimings;
 use hsr_scanner::{TrailblazerGender, TrailblazerIdentity};
 use serde::{Deserialize, Serialize};
 
@@ -121,26 +122,6 @@ fn default_true() -> bool {
     true
 }
 
-fn default_navigation_delay_ms() -> u64 {
-    250
-}
-
-fn default_panel_timeout_ms() -> u64 {
-    900
-}
-
-fn default_max_inventory_items() -> usize {
-    4_000
-}
-
-fn default_max_characters() -> usize {
-    200
-}
-
-fn default_next_character_key() -> String {
-    "e".to_owned()
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarRailSettings {
@@ -152,23 +133,17 @@ pub struct StarRailSettings {
     pub scan_light_cones: bool,
     #[serde(default = "default_true")]
     pub scan_relics_and_ornaments: bool,
-    /// Zero means that the total is unknown, so Character coverage cannot be
-    /// claimed complete even if every visible entry was scanned.
+    /// Zero scans the whole category. Reaching a cap gives partial coverage.
     #[serde(default)]
-    pub expected_characters: usize,
-    #[serde(default = "default_max_characters")]
     pub max_characters: usize,
-    #[serde(default = "default_max_inventory_items")]
-    pub max_inventory_items: usize,
+    #[serde(default)]
+    pub max_light_cones: usize,
+    #[serde(default)]
+    pub max_gear: usize,
     #[serde(default)]
     pub capture_method: StarRailCaptureMethod,
-    #[serde(default = "default_navigation_delay_ms")]
-    pub navigation_delay_ms: u64,
-    #[serde(default = "default_panel_timeout_ms")]
-    pub panel_timeout_ms: u64,
-    #[serde(default = "default_next_character_key")]
-    // Retained for round-tripping older settings. Character navigation uses mouse clicks/drags.
-    pub next_character_key: String,
+    #[serde(default)]
+    pub timings: ScanTimings,
     /// The Trailblazer's in-game nickname. Required for Character scans.
     #[serde(default)]
     pub trailblazer_name: String,
@@ -201,13 +176,11 @@ impl Default for StarRailSettings {
             scan_characters: true,
             scan_light_cones: true,
             scan_relics_and_ornaments: true,
-            expected_characters: 0,
-            max_characters: default_max_characters(),
-            max_inventory_items: default_max_inventory_items(),
+            max_characters: 0,
+            max_light_cones: 0,
+            max_gear: 0,
             capture_method: StarRailCaptureMethod::default(),
-            navigation_delay_ms: default_navigation_delay_ms(),
-            panel_timeout_ms: default_panel_timeout_ms(),
-            next_character_key: default_next_character_key(),
+            timings: ScanTimings::default(),
             trailblazer_name: String::new(),
             trailblazer_gender: None,
             dump_images: false,
@@ -256,6 +229,64 @@ impl StarRailSettings {
 
 fn current_schema_version() -> u32 {
     APPLICATION_CONFIG_SCHEMA_VERSION
+}
+
+fn migrate_star_rail_scan_settings(value: &mut serde_json::Value) -> Result<()> {
+    use serde_json::Value;
+    if !matches!(
+        value.get("schemaVersion").and_then(Value::as_u64),
+        Some(1..=3) | None
+    ) {
+        return Ok(());
+    }
+    let Some(settings) = value.get_mut("starRail").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    if settings.contains_key("timings") {
+        return Ok(());
+    }
+    // v1/v2 used navigationDelayMs (default 250) plus hidden per-path waits,
+    // panelTimeoutMs, maxInventoryItems (an OCR rejection guard, default 4000),
+    // maxCharacters (default 200), expectedCharacters, and nextCharacterKey.
+    // Merge this transform into the existing v3 removal of archive imports.
+    // Preserve total configured waits and intentional Character sample caps;
+    // never reinterpret an inventory rejection guard as a sample size.
+    let navigation = settings
+        .remove("navigationDelayMs")
+        .map(|value| {
+            value
+                .as_u64()
+                .context("invalid Star Rail navigationDelayMs")
+        })
+        .transpose()?
+        .unwrap_or(250);
+    let timeout = settings
+        .remove("panelTimeoutMs")
+        .map(|value| value.as_u64().context("invalid Star Rail panelTimeoutMs"))
+        .transpose()?
+        .unwrap_or(900);
+    let timings = ScanTimings {
+        menu_open_ms: navigation.saturating_add(1_500),
+        menu_close_ms: navigation.saturating_add(1_000),
+        inventory_tab_ms: navigation.saturating_add(1_500),
+        panel_switch_ms: navigation.saturating_add(500),
+        traces_open_ms: navigation.saturating_add(2_000),
+        panel_timeout_ms: timeout,
+        status_toggle_ms: navigation,
+        ..ScanTimings::default()
+    };
+    settings.insert("timings".to_owned(), serde_json::to_value(timings)?);
+    if settings.get("maxCharacters").and_then(Value::as_u64) == Some(200) {
+        settings.insert("maxCharacters".to_owned(), Value::from(0));
+    }
+    for key in [
+        "maxInventoryItems",
+        "expectedCharacters",
+        "nextCharacterKey",
+    ] {
+        settings.remove(key);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,7 +362,10 @@ impl ApplicationConfigStore {
         let mut config = if path.exists() {
             let json = fs::read_to_string(&path)
                 .with_context(|| format!("could not read {}", path.display()))?;
-            serde_json::from_str::<ApplicationUiConfig>(&json)
+            let mut value: serde_json::Value = serde_json::from_str(&json)
+                .with_context(|| format!("could not parse {}", path.display()))?;
+            migrate_star_rail_scan_settings(&mut value)?;
+            serde_json::from_value::<ApplicationUiConfig>(value)
                 .with_context(|| format!("could not parse {}", path.display()))?
         } else {
             ApplicationUiConfig::default()

@@ -699,6 +699,18 @@ pub fn next_character_portrait(frame: &RgbImage) -> Option<Point> {
         .find(|portrait| portrait.x > selected.x + 0.04)
 }
 
+/// Distinguish a selected final portrait from an unreadable header. A clipped
+/// portrait to its right is still another Character to visit.
+pub fn last_visible_character_selected(frame: &RgbImage) -> Option<bool> {
+    let (selected, portraits) = character_portraits(frame)?;
+    Some(
+        !portraits
+            .iter()
+            .any(|portrait| portrait.x > selected.x + 0.04)
+            && trailing_header_glint(frame).is_none(),
+    )
+}
+
 /// Star or clipped ring of a character that is only partly on screen, to the
 /// right of the selected portrait and left of the guide button.
 pub fn trailing_header_glint(frame: &RgbImage) -> Option<Point> {

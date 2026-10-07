@@ -709,6 +709,10 @@ pub struct ReferenceCache {
 }
 
 impl ReferenceCache {
+    pub fn character_count(&self) -> usize {
+        self.characters.len()
+    }
+
     pub fn from_provider(provider: &dyn ReferenceProvider) -> HsrResult<Self> {
         Self::from_snapshot(provider.load()?)
     }

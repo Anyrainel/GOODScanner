@@ -273,8 +273,27 @@ fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() 
                 .as_object_mut()
                 .unwrap()
                 .remove("offlineImportPath");
+            // Preserve non-scanner preferences while migrating delays/caps.
             let persisted: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            for key in [
+                "expectedCharacters",
+                "maxInventoryItems",
+                "navigationDelayMs",
+                "panelTimeoutMs",
+                "nextCharacterKey",
+            ] {
+                saved["starRail"].as_object_mut().unwrap().remove(key);
+            }
+            saved["starRail"]["timings"] = serde_json::json!({
+                "menuOpenMs": 2100, "menuCloseMs": 1600, "inputSettleMs": 180,
+                "inventoryTabMs": 2100, "panelSwitchMs": 1100, "tracesOpenMs": 2600,
+                "characterPageMs": 700, "captureIntervalMs": 80, "keySettleMs": 18,
+                "pollIntervalMs": 20, "selectionSettleMs": 280, "panelTimeoutMs": 2500,
+                "menuPollIntervalMs": 300, "statusToggleMs": 600
+            });
+            saved["starRail"]["maxLightCones"] = 0.into();
+            saved["starRail"]["maxGear"] = 0.into();
             assert_eq!(persisted, saved);
             let reloaded = ApplicationConfigStore::load(&path).unwrap();
             assert_eq!(reloaded.config, store.config);
@@ -298,6 +317,75 @@ fn navigation_defaults_to_genshin_and_restores_each_games_tab() {
     assert_eq!(navigation.active_tab(), ToolTab::Manager);
     navigation.active_game = Game::StarRail;
     assert_eq!(navigation.active_tab(), ToolTab::Credits);
+}
+
+#[test]
+fn legacy_scan_guards_migrate_to_automatic_limits_and_total_timing_settings() {
+    let root = temp_root("hsr-scan-guard-migration");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    for version in [1, 2, 3] {
+        for cap in [None, Some(200), Some(17), Some(0)] {
+            let mut old = serde_json::json!({
+                "schemaVersion": version,
+                "navigation": { "activeGame": "starRail", "genshinTab": "manager", "starRailTab": "scanner" },
+                "starRail": {
+                    "navigationDelayMs": 600, "panelTimeoutMs": 2500,
+                    "maxInventoryItems": 10, "expectedCharacters": 42,
+                    "nextCharacterKey": "q", "dumpImages": true,
+                    "outputDir": "D:/exports", "scanCharacters": false
+                }
+            });
+            if let Some(cap) = cap {
+                old["starRail"]["maxCharacters"] = cap.into();
+            }
+            fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+            let mut store = ApplicationConfigStore::load(&path).unwrap();
+            let settings = &store.config.star_rail;
+            assert_eq!(
+                settings.max_characters,
+                cap.filter(|cap| *cap != 200).unwrap_or(0)
+            );
+            assert_eq!((settings.max_light_cones, settings.max_gear), (0, 0));
+            assert_eq!(settings.timings.menu_open_ms, 2100);
+            assert_eq!(settings.timings.inventory_tab_ms, 2100);
+            assert_eq!(settings.timings.panel_switch_ms, 1100);
+            assert_eq!(settings.timings.menu_close_ms, 1600);
+            assert_eq!(settings.timings.traces_open_ms, 2600);
+            assert_eq!(settings.timings.panel_timeout_ms, 2500);
+            assert_eq!(settings.timings.status_toggle_ms, 600);
+            assert_eq!(settings.output_dir, "D:/exports");
+            assert!(settings.dump_images);
+            assert!(!settings.scan_characters);
+            assert_eq!(store.config.navigation.active_game, Game::StarRail);
+            store.persist_now().unwrap();
+            let persisted = fs::read_to_string(&path).unwrap();
+            for key in [
+                "navigationDelayMs",
+                "maxInventoryItems",
+                "expectedCharacters",
+                "nextCharacterKey",
+            ] {
+                assert!(!persisted.contains(key));
+            }
+            assert_eq!(
+                ApplicationConfigStore::load(&path).unwrap().config,
+                store.config
+            );
+        }
+    }
+    // A new explicit cap of 200 is a sample preference, not the old default.
+    let mut store = ApplicationConfigStore::load(&path).unwrap();
+    store.config.star_rail.max_characters = 200;
+    store.config.star_rail.max_light_cones = 5;
+    store.config.star_rail.max_gear = 9;
+    store.config.star_rail.timings.character_page_ms = 1234;
+    store.persist_now().unwrap();
+    assert_eq!(
+        ApplicationConfigStore::load(&path).unwrap().config,
+        store.config
+    );
+    remove_test_tree(&root);
 }
 
 #[test]
@@ -344,7 +432,7 @@ fn star_rail_settings_and_per_game_navigation_round_trip_separately() {
     store.config.navigation.star_rail_tab = ToolTab::Capture;
     store.config.star_rail.output_dir = "D:\\exports\\star-rail".to_owned();
     store.config.star_rail.scan_characters = false;
-    store.config.star_rail.max_inventory_items = 789;
+    store.config.star_rail.max_gear = 789;
     store
         .persist_now()
         .expect("separate application config should save");
@@ -365,7 +453,7 @@ fn star_rail_settings_and_per_game_navigation_round_trip_separately() {
         "D:\\exports\\star-rail"
     );
     assert!(!reloaded.config.star_rail.scan_characters);
-    assert_eq!(reloaded.config.star_rail.max_inventory_items, 789);
+    assert_eq!(reloaded.config.star_rail.max_gear, 789);
 
     remove_test_tree(&root);
 }
@@ -404,7 +492,7 @@ fn unsupported_config_is_not_overwritten_by_startup_or_shutdown() {
     // Ordinary navigation/settings interaction is not permission to destroy
     // a config written by a newer version of the application.
     store.config.navigation.active_game = Game::StarRail;
-    store.config.star_rail.max_inventory_items = 456;
+    store.config.star_rail.max_gear = 456;
     store
         .auto_save_tick()
         .expect("future-schema fallback should remain read-only");

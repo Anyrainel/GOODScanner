@@ -69,7 +69,8 @@ struct ScanArgs {
     relics: bool,
     #[arg(long, value_enum)]
     capture_method: Option<Capture>,
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=500))]
+    /// Maximum Characters (0 = all) / 最大角色扫描数（0 = 全部）
+    #[arg(long, value_parser = clap::value_parser!(u32).range(0..=500))]
     max_characters: Option<u32>,
     /// Sample each inventory category; coverage remains incomplete / 背包抽样上限
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..=10000))]
@@ -168,16 +169,26 @@ pub fn run() -> i32 {
                     save_frame,
                 } => {
                     let _lease = hsr_scanner::manager::HsrControllerLease::try_acquire()?;
+                    let (store, warning) = ApplicationConfigStore::for_running_executable();
+                    if let Some(error) = warning {
+                        return Err(error);
+                    }
                     let mut device = WindowsHsrDevice::locate(capture_method.setting().to_yas())?;
                     log::info!("Selected HSR window: {:?}", device.identity());
                     device.focus_and_verify()?;
-                    device.wait(std::time::Duration::from_millis(700))?;
+                    device.wait(std::time::Duration::from_millis(
+                        store.config.star_rail.timings.input_settle_ms,
+                    ))?;
                     let mut frame = device.capture_client()?;
                     if drag_character_bar {
                         if let Some(path) = &save_frame {
                             frame.save(path.with_extension("before.png"))?;
                         }
-                        frame = hsr_scanner::scanner::drag_character_page(&mut device, true)?;
+                        frame = hsr_scanner::scanner::drag_character_page(
+                            &mut device,
+                            true,
+                            &store.config.star_rail.timings,
+                        )?;
                     }
                     if let Some(path) = save_frame {
                         frame.save(path)?;

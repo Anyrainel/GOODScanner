@@ -13,8 +13,6 @@
 //! - `HSR_SCAN_MAX_CHARACTERS` — character sample cap (default 2)
 //! - `HSR_SCAN_TRAILBLAZER_NAME` / `HSR_SCAN_TRAILBLAZER_GENDER` (`Stelle` or `Caelus`)
 
-use std::time::Duration;
-
 use hsr_scanner::{
     data_cache::load_data_cache,
     scanner::{HsrScanner, ScanConfig, ScanTargets},
@@ -32,10 +30,6 @@ fn main() {
     let targets = scan_targets();
     let scan_item_limit = env_usize("HSR_SCAN_MAX_ITEMS", 3);
     let max_characters = env_usize("HSR_SCAN_MAX_CHARACTERS", 2);
-    let expected_characters = std::env::var("HSR_SCAN_EXPECTED_CHARACTERS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .filter(|count| *count > 0);
     let dump_images = std::env::var("HSR_SCAN_DUMP")
         .ok()
         .map(|value| value != "0")
@@ -60,12 +54,12 @@ fn main() {
 
     let config = ScanConfig {
         targets,
-        navigation_delay: Duration::from_millis(250),
-        panel_timeout: Duration::from_millis(3_000),
-        max_inventory_items: 4_000,
+        timings: hsr_scanner::scan_timing::ScanTimings {
+            panel_timeout_ms: 3_000,
+            ..Default::default()
+        },
         scan_item_limit: (scan_item_limit > 0).then_some(scan_item_limit),
         max_characters,
-        expected_characters,
         trailblazer: trailblazer(),
         dump_images,
         ..ScanConfig::default()

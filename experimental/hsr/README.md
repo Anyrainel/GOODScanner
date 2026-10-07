@@ -107,12 +107,35 @@ Character screenshot scans click the nine visible top-bar portraits, drag by
 nine portrait gaps, and resume at the first click position. The scanner resets
 the bar to its beginning first and deduplicates overlapping entries on the
 clamped final page. No virtual-controller driver is needed. Keep the mouse
-and keyboard idle during scanning. The legacy `nextCharacterKey` setting is
-retained only to read older config files.
+and keyboard idle during scanning. Completion is detected when the last
+visible portrait has been visited and two forward drags leave the bar at its
+end. No entered Character total is required; repeated identities alone do not
+prove completion.
 
 角色截图扫描会依次点击顶部九个头像，再拖动九个头像间距，从第一处点击位置继续。
 扫描前会先将角色栏移回开头，最后一页重叠的角色会自动去重，无需安装虚拟手柄驱动。
-扫描期间请勿操作鼠标或键盘。旧设置中的 `nextCharacterKey` 仅为兼容已有配置保留。
+扫描期间请勿操作鼠标或键盘。扫描完最后一个可见头像后，连续两次向前拖动仍停留在末端，
+即可确认角色扫描完整，无需填写角色总数。仅重复识别到同一角色不能证明扫描完整。
+
+The HSR scanner's **Timing Delays** section exposes total waits shared across
+navigation, detail panels, Character paging, screenshot comparisons and manager
+status toggles. These values have no hidden per-path additions. Older saved
+navigation delays migrate to equivalent total waits.
+
+**Advanced Options** contains the capture method, image dumps and separate scan
+caps for Characters, Light Cones, and Relics/Ornaments. `0` scans the whole
+category; stopping early produces unknown coverage. Inventory caps sample the
+backpack instead of rejecting a larger total. Manager scans always read the
+whole inventory. OCR uses automatic per-field routing, including v6 tiny for
+evaluated fields; model and pool overrides are not shown.
+
+星穹铁道扫描器的**延迟设置**提供界面操作、详情面板、角色栏翻页、截图对比和管理器标记切换
+共用的总等待时间，不再叠加各路径内隐藏的延迟。旧版保存的操作延迟会迁移为等效的总等待时间。
+
+**高级选项**包含截图方式、OCR 截图保存，以及角色、光锥、遗器与饰品各自的最大扫描数。
+`0` 表示扫描全部；提前达到上限时，覆盖率标记为未知。背包上限用于抽样，不会因为背包总数
+更大就拒绝扫描。管理器始终扫描全部库存。OCR 按字段自动选择模型，已验证的字段使用 v6 tiny；
+暂不提供模型或识别池的手动设置。
 
 Both shipped executables expose the same scan path as the GUI:
 

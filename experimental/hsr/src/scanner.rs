@@ -27,6 +27,7 @@ use crate::{
         MANAGED_ICON_CONFIDENCE_THRESHOLD,
     },
     reference::ReferenceCache,
+    scan_timing::ScanTimings,
     scanner_export::{path_name, trailblazer_gender, CaptureExportDetails},
     vision::{
         discover_inventory_grid, frame_fingerprint, frames_similar, glyphs_match, selected_card,
@@ -46,29 +47,26 @@ const CHARACTER_IDENTITY_REGION: NormRect = layout::CHARACTER_NAME;
 /// stay identical for two copies; the selection still moves when `d` works.
 const INVENTORY_GRID_REGION: NormRect = NormRect::new(0.015, 0.14, 0.70, 0.80);
 
-/// kel-z/HSR-Scanner menu timings, added on top of `navigation_delay`.
-const MENU_TRANSITION: Duration = Duration::from_millis(1_000);
-const INVENTORY_OPEN: Duration = Duration::from_millis(1_500);
-const TAB_SWITCH: Duration = Duration::from_millis(1_500);
-const DETAILS_OPEN: Duration = Duration::from_millis(500);
 /// One misread panel is skipped; several in a row mean the scan is not on a
 /// readable Character screen at all.
 const MAX_UNREADABLE_CHARACTERS: usize = 3;
 const MENU_OPEN_POLLS: usize = 8;
-const MENU_OPEN_POLL_INTERVAL: Duration = Duration::from_millis(300);
 /// Half a backpack row: a larger vertical jump of the selection frame is a
 /// row step, a smaller one is cross-fade jitter.
 const SELECTION_ROW_SHIFT: f64 = 0.08;
 /// Lowercase fragments of the top-left menu title (「背包」 / 「角色详情」).
 const INVENTORY_TITLE: &[&str] = &["背包", "inventory"];
 const CHARACTER_TITLE: &[&str] = &["角色", "character"];
-const TRACES_OPEN: Duration = Duration::from_millis(2_000);
 
 /// Shared by live traversal and the shipped executable's drag diagnostic.
-pub fn drag_character_page<D: HsrDevice>(device: &mut D, forward: bool) -> HsrResult<RgbImage> {
+pub fn drag_character_page<D: HsrDevice>(
+    device: &mut D,
+    forward: bool,
+    timings: &ScanTimings,
+) -> HsrResult<RgbImage> {
     let (from, to) = layout::character_page_drag(forward);
     device.input(InputCommand::Drag { from, to })?;
-    device.wait(Duration::from_millis(700))?;
+    device.wait(Duration::from_millis(timings.character_page_ms))?;
     device.capture_client()
 }
 
@@ -105,19 +103,22 @@ impl ScanTargets {
 pub struct ScanConfig {
     pub targets: ScanTargets,
     pub capture_method: CaptureMethod,
-    pub navigation_delay: Duration,
-    pub panel_timeout: Duration,
+    pub timings: ScanTimings,
     /// Baseline wheel detents for one full visible inventory page. The runtime
     /// scales this down for a clamped final-page row advance and verifies the
     /// resulting row displacement from screenshots before scanning continues.
+    #[cfg(test)]
     pub inventory_scroll_ticks_per_page: usize,
+    #[cfg(test)]
     pub scroll_tick_delay: Duration,
-    pub max_inventory_items: usize,
+    /// Optional scan caps. Zero scans the whole category; these never reject
+    /// a backpack merely because its total is larger than the requested cap.
+    pub max_light_cones: usize,
+    pub max_gear: usize,
     /// Stop after this many parsed inventory entries. `None` walks the OCR
     /// quantity. Used by dump sessions so a large backpack can still be sampled.
     pub scan_item_limit: Option<usize>,
     pub max_characters: usize,
-    pub expected_characters: Option<usize>,
     /// Without it the Trailblazer's header cannot be resolved and is omitted.
     pub trailblazer: Option<TrailblazerIdentity>,
     /// GOODScanner-style OCR dump. When true, crops and full frames are written
@@ -131,14 +132,15 @@ impl Default for ScanConfig {
         Self {
             targets: ScanTargets::all(),
             capture_method: CaptureMethod::default(),
-            navigation_delay: Duration::from_millis(250),
-            panel_timeout: Duration::from_millis(900),
+            timings: ScanTimings::default(),
+            #[cfg(test)]
             inventory_scroll_ticks_per_page: 25,
+            #[cfg(test)]
             scroll_tick_delay: Duration::from_millis(10),
-            max_inventory_items: 4_000,
+            max_light_cones: 0,
+            max_gear: 0,
             scan_item_limit: None,
-            max_characters: 200,
-            expected_characters: None,
+            max_characters: 0,
             trailblazer: None,
             dump_images: false,
         }
@@ -401,11 +403,20 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         let mut session = self.enter_inventory(kind)?;
         let quantity = session.cursor.quantity();
         let reads_agree = session.quantity_reads[0] == session.quantity_reads[1];
+        let category_cap = match kind {
+            InventoryKind::LightCone => self.config.max_light_cones,
+            InventoryKind::Gear => self.config.max_gear,
+        };
         let limit = self
             .config
             .scan_item_limit
             .unwrap_or(quantity)
-            .min(quantity);
+            .min(quantity)
+            .min(if category_cap == 0 {
+                quantity
+            } else {
+                category_cap
+            });
         let mut items = Vec::with_capacity(limit);
         let mut incomplete_reason = None;
         // The first slot is already selected. Later items use the inventory
@@ -467,7 +478,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         }
         if limit < quantity {
             incomplete_reason.get_or_insert_with(|| {
-                format!("scan_item_limit={limit} reached before quantity={quantity}")
+                format!("scan cap={limit} reached before quantity={quantity}")
             });
         }
 
@@ -538,7 +549,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         // tabs, is pressed only once the backpack is open.
         self.open_menu('b', INVENTORY_TITLE)?;
         self.issue_input(InputCommand::Key('1'))?;
-        self.wait_attended(Duration::from_millis(180))?;
+        self.wait_attended(Duration::from_millis(self.config.timings.input_settle_ms))?;
 
         let tab = match kind {
             InventoryKind::LightCone => layout::LIGHT_CONE_TAB,
@@ -550,7 +561,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 tab.x + offset,
                 tab.y,
             )))?;
-            self.wait_attended(self.config.navigation_delay + TAB_SWITCH)?;
+            self.wait_attended(Duration::from_millis(self.config.timings.inventory_tab_ms))?;
             let before = self.capture_stable()?;
             if let Err(error) = discover_inventory_grid(&before) {
                 last_error = Some(error);
@@ -584,7 +595,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                         annotator::finalize_error(None, &error.to_string());
                         return Err(error);
                     }
-                    self.wait_attended(Duration::from_millis(30))?;
+                    self.wait_attended(Duration::from_millis(
+                        self.config.timings.capture_interval_ms,
+                    ))?;
                     let confirmation_frame = self.device.capture_client()?;
                     annotator::add_image("confirmation", &confirmation_frame);
                     if !frames_similar(
@@ -651,7 +664,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         for _ in 0..2 {
             self.issue_input(InputCommand::Click(first))?;
             self.issue_input(InputCommand::Hover(layout::INVENTORY_POINTER_REST))?;
-            self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+            self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
             let frame = self.capture_stable()?;
             observed = selected_card(grid, &frame);
             if observed.is_some_and(|card| {
@@ -688,14 +701,11 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     }
 
     fn validate_inventory_quantity(&self, quantity: usize, read: &str) -> HsrResult<()> {
-        if quantity == 0 || quantity > self.config.max_inventory_items {
+        if !(1..=4_000).contains(&quantity) {
             return Err(HsrError::new(
                 "HSR-SCAN-QUANTITY",
                 hints::OCR_FAILED,
-                format!(
-                    "{read} inventory quantity={quantity}; allowed range=1..={}",
-                    self.config.max_inventory_items
-                ),
+                format!("{read} inventory quantity={quantity}; OCR plausible range=1..=4000"),
             ));
         }
         Ok(())
@@ -734,7 +744,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     fn settled_selection(&mut self, grid: &GridGeometry) -> HsrResult<Option<SelectedCard>> {
         let mut last = None;
         for _ in 0..6 {
-            self.wait_attended(Duration::from_millis(60))?;
+            self.wait_attended(Duration::from_millis(
+                self.config.timings.capture_interval_ms,
+            ))?;
             let frame = self.device.capture_client()?;
             let card = selected_card(grid, &frame);
             if card.is_some() && card.map(|c| c.column) == last.map(|c: SelectedCard| c.column) {
@@ -757,8 +769,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         let previous_grid = frame_fingerprint(previous, INVENTORY_GRID_REGION)?;
         for attempt in 0..3 {
             self.issue_input(InputCommand::Key(key))?;
-            self.wait_attended(Duration::from_millis(18))?;
-            let deadline_steps = (self.config.panel_timeout.as_millis() / 20).max(2) as usize;
+            self.wait_attended(Duration::from_millis(self.config.timings.key_settle_ms))?;
+            let deadline_steps = (u128::from(self.config.timings.panel_timeout_ms)
+                / u128::from(self.config.timings.poll_interval_ms.max(1)))
+            .max(2) as usize;
             let mut grid_moved_at: Option<Instant> = None;
             let mut covered = false;
             for _ in 0..deadline_steps {
@@ -779,10 +793,15 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     }
                 }
                 if panel_changed
-                    || grid_moved_at.is_some_and(|at| at.elapsed() >= Duration::from_millis(280))
+                    || grid_moved_at.is_some_and(|at| {
+                        at.elapsed()
+                            >= Duration::from_millis(self.config.timings.selection_settle_ms)
+                    })
                 {
                     if panel_changed {
-                        self.wait_attended(Duration::from_millis(80))?;
+                        self.wait_attended(Duration::from_millis(
+                            self.config.timings.capture_interval_ms,
+                        ))?;
                     }
                     let settled = self.device.capture_client()?;
                     // A modal replaces the backpack with an animating backdrop.
@@ -793,7 +812,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     covered = true;
                     break;
                 }
-                self.wait_attended(Duration::from_millis(20))?;
+                self.wait_attended(Duration::from_millis(
+                    self.config.timings.poll_interval_ms.max(1),
+                ))?;
             }
             if !covered && grid_moved_at.is_some() {
                 let frame = self.device.capture_client()?;
@@ -808,7 +829,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     "Inventory grid is covered by a dialog; dismissing it and continuing."
                 );
                 self.issue_input(InputCommand::Escape)?;
-                self.wait_attended(Duration::from_millis(450))?;
+                self.wait_attended(Duration::from_millis(self.config.timings.menu_close_ms))?;
                 let restored = self.device.capture_client()?;
                 if discover_inventory_grid(&restored).is_ok()
                     && frame_fingerprint(&restored, panel.immutable_panel())? != previous_panel
@@ -889,9 +910,11 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             )
         })?;
         self.issue_input(InputCommand::Click(point))?;
-        self.wait_attended(Duration::from_millis(18))?;
+        self.wait_attended(Duration::from_millis(self.config.timings.key_settle_ms))?;
 
-        let deadline_steps = (self.config.panel_timeout.as_millis() / 20).max(2) as usize;
+        let deadline_steps = (u128::from(self.config.timings.panel_timeout_ms)
+            / u128::from(self.config.timings.poll_interval_ms.max(1)))
+        .max(2) as usize;
         let mut selected_seen = false;
         for _ in 0..deadline_steps {
             self.ensure_attended()?;
@@ -901,13 +924,17 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 // Glow and the selection ring flicker, so identical panel
                 // crops never arrive. A hit that is still the same cell
                 // after a short settle is enough.
-                self.wait_attended(Duration::from_millis(80))?;
+                self.wait_attended(Duration::from_millis(
+                    self.config.timings.capture_interval_ms,
+                ))?;
                 let settled = self.device.capture_client()?;
                 if selected_cell(grid, &settled).map(|entry| entry.0) == Some(cell_index) {
                     return Ok(settled);
                 }
             }
-            self.wait_attended(Duration::from_millis(20))?;
+            self.wait_attended(Duration::from_millis(
+                self.config.timings.poll_interval_ms.max(1),
+            ))?;
         }
         Err(HsrError::new(
             "HSR-SCAN-SELECTION",
@@ -1060,7 +1087,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             )
         })?;
         self.issue_input(InputCommand::Click(point))?;
-        self.wait_attended(Duration::from_millis(18))?;
+        self.wait_attended(Duration::from_millis(self.config.timings.key_settle_ms))?;
         let after = self.capture_stable()?;
         let selected = selected_cell(&session.grid, &after).map(|entry| entry.0);
         session.frame = after;
@@ -1076,19 +1103,15 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         self.open_menu('c', CHARACTER_TITLE)?;
         // Leave controller UI once, then use only mouse traversal.
         self.issue_input(InputCommand::Key('1'))?;
-        self.wait_attended(Duration::from_millis(180))?;
+        self.wait_attended(Duration::from_millis(self.config.timings.input_settle_ms))?;
         self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-        self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+        self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
         self.reset_character_bar()?;
         self.issue_input(InputCommand::Click(layout::character_portrait(0)))?;
-        self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+        self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
         let mut slot = 0;
 
-        let limit = self
-            .config
-            .expected_characters
-            .unwrap_or(self.config.max_characters)
-            .min(self.config.max_characters);
+        let limit = self.config.max_characters;
         let mut items: Vec<ObservedCharacter> = Vec::new();
         let mut export_details = CaptureExportDetails {
             trailblazer: self
@@ -1102,12 +1125,14 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         let mut unreadable_streak = 0_usize;
         let mut terminal_proven = false;
         let mut coverage_degraded = false;
-        let mut visited = 0_usize;
-        for index in 0..limit + layout::CHARACTER_PAGE_SIZE {
-            visited = index + 1;
+        // Bound a malfunctioning traversal by the reference roster, allowing
+        // one overlapping final page. Completion comes from the controller's
+        // terminal evidence, never from this bound or an entered total.
+        let visit_bound = self.references.character_count() * 2 + layout::CHARACTER_PAGE_SIZE;
+        for index in 0..visit_bound {
             let (eidolon, eidolon_frame) = self.read_eidolon_count(index)?;
             self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-            self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+            self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
             // Parse the panel seen right after the eidolon screen, and check
             // both show one breadcrumb, so a delayed click cannot pair
             // one Character's eidolons with another's details.
@@ -1181,24 +1206,11 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             // Traces replace the details panel. Returning first keeps the
             // identity baseline on the same character; otherwise the traces
             // screen is read as the next roster entry and the scan stops.
-            if items.len() >= limit {
-                if self.config.expected_characters == Some(items.len())
-                    && slot + 1 == layout::CHARACTER_PAGE_SIZE
-                {
-                    self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-                    self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
-                    details = self.capture_stable()?;
-                    match self.advance_character(&details, &mut slot, index) {
-                        Err(error) if error.code() == "HSR-CHAR-END" => terminal_proven = true,
-                        Err(error) if error.code() == "HSR-CHAR-ADVANCE" => {},
-                        Err(error) => return Err(error),
-                        Ok(_) => {},
-                    }
-                }
+            if limit > 0 && items.len() >= limit {
                 break;
             }
             self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-            self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+            self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
             details = self.capture_stable()?;
             // The next iteration parses the panel captured after its eidolon
             // read, so the frame that proved the advance is not kept.
@@ -1221,22 +1233,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             };
         }
         self.leave_menu()?;
-        if let Some(expected) = self.config.expected_characters {
-            if items.len() != expected && !coverage_degraded {
-                return Err(HsrError::new(
-                    "HSR-CHAR-COUNT",
-                    hints::SCREEN_INVALID,
-                    format!(
-                        "expected {expected} character panels but visited {visited} and resolved {}",
-                        items.len(),
-                    ),
-                ));
-            }
-        }
-        let coverage = if terminal_proven
-            && !coverage_degraded
-            && self.config.expected_characters == Some(items.len())
-        {
+        let coverage = if terminal_proven && !coverage_degraded {
             CoverageLevel::Complete
         } else {
             CoverageLevel::Unknown
@@ -1257,14 +1254,20 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         self.issue_input(InputCommand::Hover(Point::new(0.85, 0.15)))?;
         let mut previous = self.capture_stable()?;
         for _ in 0..self
-            .config
-            .max_characters
+            .references
+            .character_count()
             .div_ceil(layout::CHARACTER_PAGE_SIZE)
             + 2
         {
-            let next = drag_character_page(&mut self.device, false)?;
+            let next = drag_character_page(&mut self.device, false, &self.config.timings)?;
             if character_bar_unchanged(&previous, &next)? {
-                return Ok(());
+                let confirmation =
+                    drag_character_page(&mut self.device, false, &self.config.timings)?;
+                if character_bar_unchanged(&next, &confirmation)? {
+                    return Ok(());
+                }
+                previous = confirmation;
+                continue;
             }
             previous = next;
         }
@@ -1282,14 +1285,26 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         ordinal: usize,
     ) -> HsrResult<RgbImage> {
         let previous_identity = CHARACTER_IDENTITY_REGION.crop(previous)?;
-        let paged = *slot + 1 == layout::CHARACTER_PAGE_SIZE;
+        let paged = *slot + 1 == layout::CHARACTER_PAGE_SIZE
+            || crate::vision::last_visible_character_selected(previous) == Some(true);
         let next_slot = if paged {
-            let after = drag_character_page(&mut self.device, true)?;
+            let after = drag_character_page(&mut self.device, true, &self.config.timings)?;
             if character_bar_unchanged(previous, &after)? {
+                // Verify with a second independent drag: a missed input must
+                // not by itself claim that every Character was scanned.
+                let confirmation =
+                    drag_character_page(&mut self.device, true, &self.config.timings)?;
+                if !character_bar_unchanged(&after, &confirmation)? {
+                    return Err(HsrError::new(
+                        "HSR-CHAR-ADVANCE",
+                        hints::SCREEN_INVALID,
+                        "terminal drag confirmation moved the roster; traversal is incomplete",
+                    ));
+                }
                 return Err(HsrError::new(
                     "HSR-CHAR-END",
                     hints::SCREEN_INVALID,
-                    "nine portraits visited; forward page drag stayed at the roster end",
+                    "last visible portrait visited; two forward drags stayed at the roster end",
                 ));
             }
             0
@@ -1303,7 +1318,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             match self.wait_until_identity_changes(
                 &previous_identity,
                 ordinal,
-                self.config.panel_timeout,
+                Duration::from_millis(self.config.timings.panel_timeout_ms),
             ) {
                 Ok(frame) => {
                     *slot = next_slot;
@@ -1330,8 +1345,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         ordinal: usize,
         timeout: Duration,
     ) -> HsrResult<RgbImage> {
-        self.wait_attended(Duration::from_millis(18))?;
-        let deadline_steps = (timeout.as_millis() / 20).max(2) as usize;
+        self.wait_attended(Duration::from_millis(self.config.timings.key_settle_ms))?;
+        let deadline_steps = (timeout.as_millis()
+            / u128::from(self.config.timings.poll_interval_ms.max(1)))
+        .max(2) as usize;
         let mut changed_frame: Option<RgbImage> = None;
         let mut changed_identity = None;
         for _ in 0..deadline_steps {
@@ -1348,7 +1365,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 changed_frame = Some(frame);
                 changed_identity = Some(identity);
             }
-            self.wait_attended(Duration::from_millis(20))?;
+            self.wait_attended(Duration::from_millis(
+                self.config.timings.poll_interval_ms.max(1),
+            ))?;
         }
         let detail = if changed_frame.is_some() {
             "identity region changed but did not stabilize"
@@ -1368,7 +1387,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         path: &str,
     ) -> HsrResult<Option<crate::scanner_export::CharacterDetails>> {
         self.issue_input(InputCommand::Click(layout::TRACES_BUTTON))?;
-        self.wait_attended(self.config.navigation_delay + TRACES_OPEN)?;
+        self.wait_attended(Duration::from_millis(self.config.timings.traces_open_ms))?;
         let frame = self.capture_stable()?;
         match dump_parsed_item("character_traces", index, &frame, || {
             self.parser.parse_character_traces(&frame, path)
@@ -1388,7 +1407,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
     fn read_eidolon_count(&mut self, index: usize) -> HsrResult<(u8, RgbImage)> {
         self.issue_input(InputCommand::Click(layout::EIDOLONS_BUTTON))?;
-        self.wait_attended(self.config.navigation_delay + DETAILS_OPEN)?;
+        self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
         let frame = self.capture_stable()?;
         if crate::annotator::is_enabled() {
             let path =
@@ -1410,7 +1429,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         // Menu transition waits already ran. Take two frames; HSR's 3D preview
         // and starfield never go fully still, so do not poll until timeout.
         let first = self.device.capture_client()?;
-        self.wait_attended(Duration::from_millis(80))?;
+        self.wait_attended(Duration::from_millis(
+            self.config.timings.capture_interval_ms,
+        ))?;
         self.ensure_attended()?;
         let second = self.device.capture_client()?;
         if chrome_settled(&first, &second) {
@@ -1436,10 +1457,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         for attempt in 0..3 {
             if attempt > 0 {
                 self.issue_input(InputCommand::Escape)?;
-                self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
+                self.wait_attended(Duration::from_millis(self.config.timings.menu_close_ms))?;
             }
             self.issue_input(InputCommand::Key(hotkey))?;
-            self.wait_attended(self.config.navigation_delay + INVENTORY_OPEN)?;
+            self.wait_attended(Duration::from_millis(self.config.timings.menu_open_ms))?;
             if self.wait_for_menu(title)? {
                 return Ok(());
             }
@@ -1456,7 +1477,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     fn wait_for_menu(&mut self, title: &[&str]) -> HsrResult<bool> {
         for poll in 0..MENU_OPEN_POLLS {
             if poll > 0 {
-                self.wait_attended(MENU_OPEN_POLL_INTERVAL)?;
+                self.wait_attended(Duration::from_millis(
+                    self.config.timings.menu_poll_interval_ms.max(1),
+                ))?;
             }
             if self.menu_open(title)? {
                 return Ok(true);
@@ -1474,14 +1497,14 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     /// Center clicks can confirm nearby interact prompts.
     fn prepare_menu_focus(&mut self) -> HsrResult<()> {
         self.issue_input(InputCommand::Click(crate::vision::Point::new(0.12, 0.82)))?;
-        self.wait_attended(Duration::from_millis(120))
+        self.wait_attended(Duration::from_millis(self.config.timings.input_settle_ms))
     }
 
     fn leave_menu(&mut self) -> HsrResult<()> {
         self.issue_input(InputCommand::Escape)?;
-        self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)?;
+        self.wait_attended(Duration::from_millis(self.config.timings.menu_close_ms))?;
         self.issue_input(InputCommand::Escape)?;
-        self.wait_attended(self.config.navigation_delay + MENU_TRANSITION)
+        self.wait_attended(Duration::from_millis(self.config.timings.menu_close_ms))
     }
 
     fn ensure_attended(&self) -> HsrResult<()> {
@@ -1702,7 +1725,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         // rechecks cancellation, foreground ownership, and client geometry
         // immediately before issuing the button event.
         self.issue_input(InputCommand::Click(button.center()))?;
-        self.wait_attended(self.config.navigation_delay)?;
+        self.wait_attended(Duration::from_millis(self.config.timings.status_toggle_ms))?;
         let post_frame = self.capture_stable()?;
         let post = self
             .parser
@@ -2534,7 +2557,7 @@ mod tests {
         frames: Vec<RgbImage>,
         mut config: ScanConfig,
     ) -> HsrScanner<ReplayDevice, ScriptedOcrReader> {
-        config.panel_timeout = Duration::from_millis(40);
+        config.timings.panel_timeout_ms = 40;
         let snapshot: ReferenceSnapshot =
             serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json")).unwrap();
         let references = ReferenceCache::from_snapshot(snapshot).unwrap();
@@ -2547,11 +2570,12 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_bounded_and_use_shared_bitblt_capture() {
+    fn defaults_scan_all_and_use_shared_bitblt_capture() {
         let config = ScanConfig::default();
         assert_eq!(config.capture_method, CaptureMethod::BitBlt);
-        assert!(config.max_inventory_items <= 4_000);
-        assert!(config.max_characters <= 200);
+        assert_eq!(config.max_light_cones, 0);
+        assert_eq!(config.max_gear, 0);
+        assert_eq!(config.max_characters, 0);
         assert!(config.inventory_scroll_ticks_per_page > 0);
         assert!(!config.scroll_tick_delay.is_zero());
         assert!(!config.dump_images);
@@ -2762,7 +2786,10 @@ mod tests {
                 changed.clone(),
             ],
             ScanConfig {
-                panel_timeout: Duration::from_millis(40),
+                timings: ScanTimings {
+                    panel_timeout_ms: 40,
+                    ..ScanTimings::default()
+                },
                 ..ScanConfig::default()
             },
         );
@@ -2790,7 +2817,10 @@ mod tests {
         let mut scanner = scanner_with_frames(
             vec![paged.clone(); 5],
             ScanConfig {
-                panel_timeout: Duration::from_millis(40),
+                timings: ScanTimings {
+                    panel_timeout_ms: 40,
+                    ..ScanTimings::default()
+                },
                 ..ScanConfig::default()
             },
         );
@@ -2805,7 +2835,7 @@ mod tests {
     #[test]
     fn stationary_final_page_stops_without_clicking_the_first_slot_again() {
         let previous = character_frame(Rgb([90, 120, 170]));
-        let mut scanner = scanner_with_frames(vec![previous.clone()], ScanConfig::default());
+        let mut scanner = scanner_with_frames(vec![previous.clone(); 2], ScanConfig::default());
         let mut slot = 8;
         assert_eq!(
             scanner
@@ -2817,7 +2847,10 @@ mod tests {
         let (from, to) = layout::character_page_drag(true);
         assert_eq!(
             scanner.device().commands(),
-            &[InputCommand::Drag { from, to }]
+            &[
+                InputCommand::Drag { from, to },
+                InputCommand::Drag { from, to }
+            ]
         );
         assert_eq!(slot, 8);
     }
@@ -2898,7 +2931,6 @@ mod tests {
     fn run_character_simulation(
         frames: Vec<RgbImage>,
         names: &[&str],
-        expected: Option<usize>,
         maximum: usize,
     ) -> CharacterScan {
         let frames = with_character_menu_open(frames);
@@ -2910,9 +2942,11 @@ mod tests {
                 std::iter::repeat_n("等级 80/80", names.len()),
             );
         let config = ScanConfig {
-            panel_timeout: Duration::from_millis(40),
+            timings: ScanTimings {
+                panel_timeout_ms: 40,
+                ..ScanTimings::default()
+            },
             max_characters: maximum,
-            expected_characters: expected,
             ..ScanConfig::default()
         };
         let mut scanner = HsrScanner::new(
@@ -2930,28 +2964,172 @@ mod tests {
         let visually_changed_same_id = character_frame(Rgb([170, 90, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(11));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(12));
             frames.extend(std::iter::repeat_with(|| visually_changed_same_id.clone()).take(40));
             frames
         };
-        let scan = run_character_simulation(frames, &["三月七", "三月七"], None, 3);
+        let scan = run_character_simulation(frames, &["三月七", "三月七"], 3);
         assert_eq!(scan.items.len(), 1);
         assert_eq!(scan.coverage, CoverageLevel::Unknown);
     }
 
     #[test]
-    fn expected_character_undercount_with_one_more_stable_panel_remains_unknown() {
+    fn stationary_roster_end_proves_completion_without_an_entered_total() {
+        let first = character_frame(Rgb([90, 120, 170]));
+        let second = character_frame(Rgb([170, 90, 120]));
+        let mut frames = vec![first.clone(); 12];
+        frames.extend(vec![second.clone(); 10]);
+        // Model overlap: every visible position is visited, but identities
+        // already seen on a clamped page are exported only once.
+        for slot in 2..9 {
+            frames.extend(vec![
+                if slot % 2 == 0 {
+                    first.clone()
+                } else {
+                    second.clone()
+                };
+                8
+            ]);
+        }
+        frames.extend(vec![first; 2]);
+        let scan = run_character_simulation(
+            frames,
+            &[
+                "三月七",
+                "希儿",
+                "三月七",
+                "希儿",
+                "三月七",
+                "希儿",
+                "三月七",
+                "希儿",
+                "三月七",
+            ],
+            0,
+        );
+        assert_eq!(scan.items.len(), 2);
+        assert_eq!(scan.coverage, CoverageLevel::Complete);
+    }
+
+    #[test]
+    fn short_roster_finishes_at_its_last_visible_portrait() {
+        let mut frame = character_frame(Rgb([90, 120, 170]));
+        paint_rect(
+            &mut frame,
+            layout::character_portrait(0),
+            0.065,
+            0.07,
+            Rgb([230, 190, 80]),
+        );
+        assert_eq!(
+            crate::vision::last_visible_character_selected(&frame),
+            Some(true)
+        );
+        let scan = run_character_simulation(vec![frame; 14], &["三月七"], 0);
+        assert_eq!(scan.items.len(), 1);
+        assert_eq!(scan.coverage, CoverageLevel::Complete);
+    }
+
+    #[test]
+    fn moving_terminal_confirmation_does_not_claim_roster_end() {
+        let before = character_frame(Rgb([90, 120, 170]));
+        let mut moved = before.clone();
+        paint_character_portraits(&mut moved);
+        let mut scanner = scanner_with_frames(vec![before.clone(), moved], ScanConfig::default());
+        let mut slot = 8;
+        let error = scanner
+            .advance_character(&before, &mut slot, 8)
+            .unwrap_err();
+        assert_eq!(error.code(), "HSR-CHAR-ADVANCE");
+    }
+
+    #[test]
+    fn reset_retries_when_a_missed_drag_is_followed_by_a_moving_confirmation() {
+        let before = character_frame(Rgb([90, 120, 170]));
+        let mut moved = before.clone();
+        paint_character_portraits(&mut moved);
+        let mut scanner = scanner_with_frames(
+            vec![
+                before.clone(),
+                before.clone(),
+                before,
+                moved.clone(),
+                moved.clone(),
+                moved,
+            ],
+            ScanConfig::default(),
+        );
+        scanner.reset_character_bar().unwrap();
+        assert_eq!(scanner.device().remaining_frames(), 0);
+        let (from, to) = layout::character_page_drag(false);
+        assert_eq!(
+            scanner.device().commands(),
+            &[
+                InputCommand::Hover(Point::new(0.85, 0.15)),
+                InputCommand::Drag { from, to },
+                InputCommand::Drag { from, to },
+                InputCommand::Drag { from, to },
+                InputCommand::Drag { from, to },
+            ]
+        );
+    }
+
+    #[test]
+    fn inventory_caps_sample_each_category_without_rejecting_its_total() {
+        for kind in [InventoryKind::LightCone, InventoryKind::Gear] {
+            let grid = backpack_grid(kind);
+            let frame = page_frame(&grid, 0, 3_000, Some(0));
+            let snapshot: ReferenceSnapshot =
+                serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json"))
+                    .unwrap();
+            let name_field = match kind {
+                InventoryKind::LightCone => OcrField::LightConeName,
+                InventoryKind::Gear => OcrField::GearName,
+            };
+            let title = match kind {
+                InventoryKind::LightCone => "制胜的瞬间",
+                InventoryKind::Gear => "过客的逢春木簪",
+            };
+            let reader = ScriptedOcrReader::default()
+                .with(OcrField::MenuTitle, ["背包"])
+                .with(name_field, [title])
+                .with(OcrField::InventoryQuantity, ["3000/3000", "3000/3000"]);
+            let config = ScanConfig {
+                max_light_cones: usize::from(kind == InventoryKind::LightCone),
+                max_gear: usize::from(kind == InventoryKind::Gear),
+                ..ScanConfig::default()
+            };
+            let mut scanner = HsrScanner::new(
+                ReplayDevice::new(1280, 720, vec![frame; 7]),
+                reader,
+                ReferenceCache::from_snapshot(snapshot).unwrap(),
+                config,
+            );
+            let scan = scanner
+                .scan_inventory(kind, |_, _, _, _, ordinal| Ok(ordinal))
+                .unwrap();
+            assert_eq!(scan.items, [0]);
+            assert_eq!(scan.coverage, CoverageLevel::Unknown);
+            assert!(!scanner
+                .device()
+                .commands()
+                .contains(&InputCommand::Key('d')));
+        }
+    }
+
+    #[test]
+    fn character_cap_before_another_stable_panel_remains_unknown() {
         let first = character_frame(Rgb([90, 120, 170]));
         let second = character_frame(Rgb([170, 90, 120]));
         let extra = character_frame(Rgb([90, 170, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(11));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(12));
             frames.extend(std::iter::repeat_with(|| second.clone()).take(10));
             frames.extend(std::iter::repeat_with(|| extra.clone()).take(2));
             frames
         };
-        let scan = run_character_simulation(frames, &["三月七", "希儿"], Some(2), 3);
+        let scan = run_character_simulation(frames, &["三月七", "希儿"], 2);
         assert_eq!(scan.items.len(), 2);
         assert_eq!(scan.coverage, CoverageLevel::Unknown);
     }
@@ -2962,12 +3140,12 @@ mod tests {
         let second = character_frame(Rgb([170, 90, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(11));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(12));
             frames.extend(std::iter::repeat_with(|| second.clone()).take(10));
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(2));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(40));
             frames
         };
-        let scan = run_character_simulation(frames, &["三月七", "希儿"], Some(2), 3);
+        let scan = run_character_simulation(frames, &["三月七", "希儿", "三月七"], 0);
         assert_eq!(scan.items.len(), 2);
         assert_eq!(scan.coverage, CoverageLevel::Unknown);
     }
@@ -3202,7 +3380,10 @@ mod tests {
             serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json")).unwrap();
         let references = ReferenceCache::from_snapshot(snapshot).unwrap();
         let config = ScanConfig {
-            panel_timeout: Duration::from_millis(40),
+            timings: ScanTimings {
+                panel_timeout_ms: 40,
+                ..ScanTimings::default()
+            },
             inventory_scroll_ticks_per_page: 5,
             scroll_tick_delay: Duration::from_millis(1),
             ..ScanConfig::default()
@@ -3254,7 +3435,10 @@ mod tests {
             serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json")).unwrap();
         let references = ReferenceCache::from_snapshot(snapshot).unwrap();
         let config = ScanConfig {
-            panel_timeout: Duration::from_millis(40),
+            timings: ScanTimings {
+                panel_timeout_ms: 40,
+                ..ScanTimings::default()
+            },
             inventory_scroll_ticks_per_page: 5,
             scroll_tick_delay: Duration::from_millis(1),
             ..ScanConfig::default()
@@ -3299,8 +3483,11 @@ mod tests {
         snapshot.characters.push(variant);
         let references = ReferenceCache::from_snapshot(snapshot).unwrap();
         let config = ScanConfig {
-            panel_timeout: Duration::from_millis(40),
-            expected_characters: Some(1),
+            timings: ScanTimings {
+                panel_timeout_ms: 40,
+                ..ScanTimings::default()
+            },
+            max_characters: 1,
             ..ScanConfig::default()
         };
         let mut scanner = HsrScanner::new(

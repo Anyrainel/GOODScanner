@@ -3,7 +3,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use hsr_scanner::{
@@ -107,12 +106,10 @@ fn scanner_config(
     Ok(ScanConfig {
         targets,
         capture_method: settings.capture_method.to_yas(),
-        navigation_delay: Duration::from_millis(settings.navigation_delay_ms),
-        panel_timeout: Duration::from_millis(settings.panel_timeout_ms),
-        max_inventory_items: settings.max_inventory_items,
+        timings: settings.timings.clone(),
+        max_light_cones: settings.max_light_cones,
+        max_gear: settings.max_gear,
         max_characters: settings.max_characters,
-        expected_characters: (settings.expected_characters > 0)
-            .then_some(settings.expected_characters),
         trailblazer,
         dump_images: settings.dump_images,
         ..ScanConfig::default()
@@ -461,14 +458,18 @@ fn publish_manager_preview(slot: &Mutex<Option<ManagerPreview>>, preview: Manage
 }
 
 fn manager_scan_config(settings: &StarRailSettings) -> Result<ScanConfig, UiError> {
-    scanner_config(
+    let mut config = scanner_config(
         settings,
         ScanTargets {
             characters: false,
             light_cones: false,
             gear: true,
         },
-    )
+    )?;
+    // Sample caps belong to export scans. Manager matching needs the complete
+    // inventory and must not inherit a user's diagnostic sample preference.
+    config.max_gear = 0;
+    Ok(config)
 }
 
 pub fn spawn_manager_preview(

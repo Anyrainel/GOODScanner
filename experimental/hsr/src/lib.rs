@@ -18,6 +18,7 @@ pub mod packet_capture;
 pub mod pipeline;
 mod privacy;
 pub mod reference;
+pub mod scan_timing;
 pub mod scanner;
 pub mod scanner_export;
 pub mod vision;
