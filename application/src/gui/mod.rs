@@ -320,7 +320,7 @@ impl eframe::App for GuiApp {
                     egui::RichText::new(l.t("管理器", "Manager")).size(20.0),
                 );
 
-                // Right-aligned: GGArtifact link, credits tab, language toggle
+                // Right-aligned: companion site link, credits tab, language toggle
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = match l {
                         Lang::Zh => "EN",
@@ -339,16 +339,23 @@ impl eframe::App for GuiApp {
                         ToolTab::Credits,
                         egui::RichText::new(l.t("致谢", "Credits")).size(20.0),
                     );
-                    if self.app_config.config.navigation.active_game == Game::Genshin {
-                        let ggartifact_label = l.t("打开GGArtifact", "Open GGArtifact");
-                        if ui
-                            .button(egui::RichText::new(format!("{ggartifact_label} ↗")).size(16.0))
-                            .on_hover_text("https://ggartifact.com")
-                            .clicked()
-                        {
-                            ui.ctx()
-                                .open_url(egui::OpenUrl::new_tab("https://ggartifact.com"));
-                        }
+                    let (site_label, site_url) = match self.app_config.config.navigation.active_game
+                    {
+                        Game::Genshin => (
+                            l.t("打开GGArtifact", "Open GGArtifact"),
+                            "https://ggartifact.com",
+                        ),
+                        Game::StarRail => (
+                            l.t("打开GGStarRail", "Open GGStarRail"),
+                            "https://hsr.ggartifact.com",
+                        ),
+                    };
+                    if ui
+                        .button(egui::RichText::new(format!("{site_label} ↗")).size(16.0))
+                        .on_hover_text(site_url)
+                        .clicked()
+                    {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(site_url));
                     }
                 });
             });
