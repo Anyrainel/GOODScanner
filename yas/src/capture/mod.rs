@@ -5,6 +5,7 @@ pub use stream_capturer::StreamingCapturer;
 
 mod capture_method;
 mod capturer;
+pub mod constants;
 mod generic_capturer;
 mod stream_capturer;
 

@@ -103,17 +103,19 @@ impl GameNavigation {
 #[serde(rename_all = "camelCase")]
 pub enum StarRailCaptureMethod {
     #[default]
+    Auto,
     BitBlt,
     Wgc,
     PrintWindow,
 }
 
 impl StarRailCaptureMethod {
-    pub fn to_yas(self) -> yas::capture::CaptureMethod {
+    pub fn to_yas(self) -> Option<yas::capture::CaptureMethod> {
         match self {
-            Self::Wgc => yas::capture::CaptureMethod::Wgc,
-            Self::BitBlt => yas::capture::CaptureMethod::BitBlt,
-            Self::PrintWindow => yas::capture::CaptureMethod::PrintWindow,
+            Self::Auto => None,
+            Self::Wgc => Some(yas::capture::CaptureMethod::Wgc),
+            Self::BitBlt => Some(yas::capture::CaptureMethod::BitBlt),
+            Self::PrintWindow => Some(yas::capture::CaptureMethod::PrintWindow),
         }
     }
 }
@@ -142,6 +144,8 @@ pub struct StarRailSettings {
     pub max_gear: usize,
     #[serde(default)]
     pub capture_method: StarRailCaptureMethod,
+    #[serde(default)]
+    pub hdr_mode: bool,
     #[serde(default)]
     pub timings: ScanTimings,
     /// The Trailblazer's in-game nickname. Required for Character scans.
@@ -180,6 +184,7 @@ impl Default for StarRailSettings {
             max_light_cones: 0,
             max_gear: 0,
             capture_method: StarRailCaptureMethod::default(),
+            hdr_mode: false,
             timings: ScanTimings::default(),
             trailblazer_name: String::new(),
             trailblazer_gender: None,
@@ -197,6 +202,13 @@ impl Default for StarRailSettings {
 }
 
 impl StarRailSettings {
+    /// The normal HDR control restores the recommended capture policy.
+    /// Advanced overrides can be selected afterward for troubleshooting.
+    pub fn set_hdr_mode(&mut self, enabled: bool) {
+        self.hdr_mode = enabled;
+        self.capture_method = StarRailCaptureMethod::Auto;
+    }
+
     /// `None` until both the nickname and the gender are filled in.
     pub fn trailblazer(&self) -> Option<TrailblazerIdentity> {
         let nickname = self.trailblazer_name.trim();
@@ -374,6 +386,11 @@ impl ApplicationConfigStore {
         // path. v1/v2 had starRail.offlineImportPath: the JSON converter's input
         // path. Serde discards those obsolete string keys while retaining all
         // scan, capture, manager, navigation and output settings.
+        // v1/v2 and earlier local v3 files stored a concrete captureMethod
+        // (default bitBlt) and no HDR
+        // setting. Preserve explicit choices as advanced overrides; an omitted
+        // method now uses Auto, which still selects BitBlt with HDR disabled.
+        // Merge into the existing unpublished v3 migration from origin's v2.
         if matches!(config.schema_version, 1 | 2) {
             config.schema_version = APPLICATION_CONFIG_SCHEMA_VERSION;
         }

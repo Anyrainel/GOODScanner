@@ -30,8 +30,11 @@ enum Command {
     Scan(ScanArgs),
     /// Verify live screenshot dimensions without navigating / 验证实机截图尺寸
     Check {
-        #[arg(long, value_enum, default_value = "bitblt")]
-        capture_method: Capture,
+        #[arg(long, value_enum)]
+        capture_method: Option<Capture>,
+        /// Enable HDR capture / 启用 HDR 截图
+        #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
+        hdr_mode: Option<bool>,
         /// Test the scanner's top-bar drag / 测试角色栏拖动
         #[arg(long)]
         drag_character_bar: bool,
@@ -43,6 +46,7 @@ enum Command {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Capture {
+    Auto,
     Bitblt,
     Wgc,
     Printwindow,
@@ -51,6 +55,7 @@ enum Capture {
 impl Capture {
     fn setting(self) -> StarRailCaptureMethod {
         match self {
+            Self::Auto => StarRailCaptureMethod::Auto,
             Self::Bitblt => StarRailCaptureMethod::BitBlt,
             Self::Wgc => StarRailCaptureMethod::Wgc,
             Self::Printwindow => StarRailCaptureMethod::PrintWindow,
@@ -69,6 +74,9 @@ struct ScanArgs {
     relics: bool,
     #[arg(long, value_enum)]
     capture_method: Option<Capture>,
+    /// Enable HDR capture; pass false to override saved HDR / 启用 HDR 截图
+    #[arg(long, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
+    hdr_mode: Option<bool>,
     /// Maximum Characters (0 = all) / 最大角色扫描数（0 = 全部）
     #[arg(long, value_parser = clap::value_parser!(u32).range(0..=500))]
     max_characters: Option<u32>,
@@ -87,6 +95,9 @@ impl ScanArgs {
             settings.scan_characters = self.characters;
             settings.scan_light_cones = self.light_cones;
             settings.scan_relics_and_ornaments = self.relics;
+        }
+        if let Some(hdr_mode) = self.hdr_mode {
+            settings.set_hdr_mode(hdr_mode);
         }
         if let Some(method) = self.capture_method {
             settings.capture_method = method.setting();
@@ -165,6 +176,7 @@ pub fn run() -> i32 {
                 },
                 Command::Check {
                     capture_method,
+                    hdr_mode,
                     drag_character_bar,
                     save_frame,
                 } => {
@@ -173,11 +185,21 @@ pub fn run() -> i32 {
                     if let Some(error) = warning {
                         return Err(error);
                     }
-                    let mut device = WindowsHsrDevice::locate(capture_method.setting().to_yas())?;
+                    let mut settings = store.config.star_rail;
+                    if let Some(hdr_mode) = hdr_mode {
+                        settings.set_hdr_mode(hdr_mode);
+                    }
+                    if let Some(method) = capture_method {
+                        settings.capture_method = method.setting();
+                    }
+                    let method = settings.capture_method.to_yas().unwrap_or_else(|| {
+                        yas::capture::CaptureMethod::for_hdr_mode(settings.hdr_mode)
+                    });
+                    let mut device = WindowsHsrDevice::locate(method, settings.hdr_mode)?;
                     log::info!("Selected HSR window: {:?}", device.identity());
                     device.focus_and_verify()?;
                     device.wait(std::time::Duration::from_millis(
-                        store.config.star_rail.timings.input_settle_ms,
+                        settings.timings.input_settle_ms,
                     ))?;
                     let mut frame = device.capture_client()?;
                     if drag_character_bar {
@@ -187,7 +209,7 @@ pub fn run() -> i32 {
                         frame = hsr_scanner::scanner::drag_character_page(
                             &mut device,
                             true,
-                            &store.config.star_rail.timings,
+                            &settings.timings,
                         )?;
                     }
                     if let Some(path) = save_frame {
@@ -219,6 +241,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cli_hdr_and_automatic_capture_can_override_saved_settings() {
+        for (value, expected) in [("true", true), ("false", false)] {
+            let cli = Cli::try_parse_from([
+                "star-rail",
+                "scan",
+                "--hdr-mode",
+                value,
+                "--capture-method",
+                "auto",
+            ])
+            .unwrap();
+            let Command::Scan(args) = cli.command else {
+                panic!("expected scan")
+            };
+            let mut settings = StarRailSettings {
+                hdr_mode: !expected,
+                capture_method: StarRailCaptureMethod::PrintWindow,
+                ..Default::default()
+            };
+            args.apply(&mut settings);
+            assert_eq!(settings.hdr_mode, expected);
+            assert_eq!(settings.capture_method, StarRailCaptureMethod::Auto);
+        }
+        let cli = Cli::try_parse_from(["star-rail", "check", "--hdr-mode"]).unwrap();
+        let Command::Check {
+            hdr_mode,
+            capture_method,
+            ..
+        } = cli.command
+        else {
+            panic!("expected check")
+        };
+        assert_eq!(hdr_mode, Some(true));
+        assert!(capture_method.is_none());
+        let cli = Cli::try_parse_from(["star-rail", "scan", "--hdr-mode"]).unwrap();
+        let Command::Scan(args) = cli.command else {
+            panic!("expected scan")
+        };
+        let mut settings = StarRailSettings {
+            capture_method: StarRailCaptureMethod::BitBlt,
+            ..Default::default()
+        };
+        args.apply(&mut settings);
+        assert!(settings.hdr_mode);
+        assert_eq!(settings.capture_method, StarRailCaptureMethod::Auto);
+    }
+
+    #[test]
     fn explicit_inventory_target_disables_character_dependency() {
         let cli = Cli::try_parse_from([
             "star-rail",
@@ -243,9 +313,8 @@ mod tests {
     }
 
     #[test]
-    fn cli_rejects_zero_sample_and_character_limits() {
-        for flag in ["--sample-items", "--max-characters"] {
-            assert!(Cli::try_parse_from(["star-rail", "scan", flag, "0"]).is_err());
-        }
+    fn cli_rejects_zero_sample_but_allows_unlimited_characters() {
+        assert!(Cli::try_parse_from(["star-rail", "scan", "--sample-items", "0"]).is_err());
+        assert!(Cli::try_parse_from(["star-rail", "scan", "--max-characters", "0"]).is_ok());
     }
 }

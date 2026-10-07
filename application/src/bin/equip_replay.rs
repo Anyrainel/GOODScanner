@@ -18,7 +18,7 @@ use yas::cancel::CancelToken;
 use yas::game_info::GameInfoBuilder;
 use yas::utils;
 
-use genshin_scanner::cli::{capture_method_for_hdr_mode, load_config_or_default};
+use genshin_scanner::cli::load_config_or_default;
 use genshin_scanner::manager::models::EquipRequest;
 use genshin_scanner::manager::orchestrator::ArtifactManager;
 use genshin_scanner::manager::ui_actions::{self, ManagerDelays};
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
         game_info.window.height
     );
 
-    let capture_method = capture_method_for_hdr_mode(user_config.hdr_mode);
+    let capture_method = yas::capture::CaptureMethod::for_hdr_mode(user_config.hdr_mode);
     let mut ctrl = GenshinGameController::new(game_info, capture_method)?;
     ui_actions::set_manager_delays(ManagerDelays {
         transition: user_config.mgr_transition_delay,

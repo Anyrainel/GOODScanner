@@ -106,6 +106,7 @@ fn scanner_config(
     Ok(ScanConfig {
         targets,
         capture_method: settings.capture_method.to_yas(),
+        hdr_mode: settings.hdr_mode,
         timings: settings.timings.clone(),
         max_light_cones: settings.max_light_cones,
         max_gear: settings.max_gear,

@@ -65,14 +65,15 @@ pub struct WindowsHsrDevice {
 }
 
 impl WindowsHsrDevice {
-    pub fn locate(capture_method: CaptureMethod) -> HsrResult<Self> {
-        Self::locate_with_cancel(capture_method, CancelToken::new())
+    pub fn locate(capture_method: CaptureMethod, hdr_mode: bool) -> HsrResult<Self> {
+        Self::locate_with_cancel(capture_method, hdr_mode, CancelToken::new())
     }
 
     /// Locate the HSR client and bind the supplied per-run cancellation token
     /// to every wait and input operation performed by the device.
     pub fn locate_with_cancel(
         capture_method: CaptureMethod,
+        hdr_mode: bool,
         cancel: CancelToken,
     ) -> HsrResult<Self> {
         if cancel.is_cancelled() {
@@ -91,7 +92,12 @@ impl WindowsHsrDevice {
                     Rc::new(yas::capture::PrintWindowCapturer::new(hwnd).map_err(device_error)?)
                 },
                 CaptureMethod::Wgc => Rc::new(
-                    yas::capture::WgcCapturer::new(hwnd, false, 203.0).map_err(device_error)?,
+                    yas::capture::WgcCapturer::new(
+                        hwnd,
+                        hdr_mode,
+                        yas::capture::constants::DEFAULT_HDR_WHITE_POINT,
+                    )
+                    .map_err(device_error)?,
                 ),
             };
             Ok(Self {
@@ -110,7 +116,7 @@ impl WindowsHsrDevice {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (capture_method, cancel);
+            let _ = (capture_method, hdr_mode, cancel);
             Err(HsrError::new(
                 "HSR-DEVICE-PLATFORM",
                 hints::DEVICE_UNAVAILABLE,
@@ -775,7 +781,7 @@ mod tests {
         let cancel = CancelToken::new();
         cancel.cancel(StopReason::UserAbort);
 
-        let error = WindowsHsrDevice::locate_with_cancel(CaptureMethod::Wgc, cancel)
+        let error = WindowsHsrDevice::locate_with_cancel(CaptureMethod::Wgc, true, cancel)
             .err()
             .expect("a pre-cancelled live device must not touch the game window");
 

@@ -147,6 +147,15 @@ pub fn show(
                                 "Scanning clicks and drags the top Character bar. Keep the mouse and keyboard idle during scanning.",
                             ));
                         }
+                        if ui.checkbox(
+                            &mut settings.hdr_mode,
+                            lang.t("我的星穹铁道在使用HDR", "HDR mode"),
+                        ).on_hover_text(lang.t(
+                            "切换此选项会恢复自动截图：普通模式使用 BitBlt，HDR 模式使用 Windows 图形捕获。",
+                            "Changing this option restores Automatic capture: BitBlt normally, Windows Graphics Capture for HDR.",
+                        )).changed() {
+                            settings.set_hdr_mode(settings.hdr_mode);
+                        }
                         if !settings.scan_characters
                             && !settings.scan_light_cones
                             && !settings.scan_relics_and_ornaments
@@ -199,13 +208,18 @@ pub fn show(
                             .num_columns(2)
                             .spacing([12.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label(lang.t("截图方式", "Capture method"));
+                                ui.label(lang.t("截图方式覆盖", "Capture override"));
                                 egui::ComboBox::from_id_salt("star_rail_capture_method")
                                     .selected_text(capture_method_label(
                                         lang,
                                         settings.capture_method,
                                     ))
                                     .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut settings.capture_method,
+                                            StarRailCaptureMethod::Auto,
+                                            capture_method_label(lang, StarRailCaptureMethod::Auto),
+                                        );
                                         ui.selectable_value(
                                             &mut settings.capture_method,
                                             StarRailCaptureMethod::BitBlt,
@@ -244,6 +258,12 @@ pub fn show(
                                 }
 
                             });
+                        if settings.capture_method != StarRailCaptureMethod::Auto {
+                            ui.label(lang.t(
+                                "手动截图方式会覆盖自动选择。HDR 色调映射仅适用于 Windows 图形捕获；选择“自动”可恢复推荐设置。",
+                                "A capture override replaces automatic selection. HDR tone mapping applies to WGC only; choose Automatic to restore the recommended setting.",
+                            ));
+                        }
                         ui.label(lang.t(
                             "最大扫描数：0 = 全部。达到上限时仅导出已扫描条目。",
                             "Max scan count: 0 = all. Reaching a cap saves partial results.",
@@ -306,8 +326,9 @@ fn trailblazer_gender_label(lang: Lang, gender: TrailblazerGender) -> &'static s
 
 fn capture_method_label(lang: Lang, method: StarRailCaptureMethod) -> &'static str {
     match method {
+        StarRailCaptureMethod::Auto => lang.t("自动（推荐）", "Automatic (recommended)"),
         StarRailCaptureMethod::Wgc => lang.t("Windows 图形捕获", "Windows Graphics Capture"),
-        StarRailCaptureMethod::BitBlt => lang.t("BitBlt（推荐）", "BitBlt (recommended)"),
+        StarRailCaptureMethod::BitBlt => "BitBlt",
         StarRailCaptureMethod::PrintWindow => "PrintWindow",
     }
 }

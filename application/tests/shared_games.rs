@@ -146,27 +146,27 @@ fn default_star_rail_settings_use_automatic_hosted_reference_without_a_folder() 
 
 #[test]
 fn star_rail_capture_defaults_match_genshin_sdr_at_the_config_boundary() {
-    let expected = genshin_scanner::cli::capture_method_for_hdr_mode(false);
+    let expected = yas::capture::CaptureMethod::for_hdr_mode(false);
     assert_eq!(expected, yas::capture::CaptureMethod::BitBlt);
     assert_eq!(
-        hsr_scanner::scanner::ScanConfig::default().capture_method,
+        hsr_scanner::scanner::ScanConfig::default().effective_capture_method(),
         expected
     );
     assert_eq!(
         good_tools_app::config::StarRailSettings::default()
             .capture_method
             .to_yas(),
-        expected
+        None
     );
 
     let root = temp_root("shared-capture-default");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("config.json");
-    // Existing v2 files may omit captureMethod. Its wire shape is unchanged;
-    // explicit saved choices still round-trip rather than being forced to a default.
+    // Existing v2 files may omit captureMethod. Explicit choices still
+    // round-trip as overrides rather than being forced to Automatic.
     fs::write(&path, r#"{"schemaVersion":2,"starRail":{}}"#).unwrap();
     let store = ApplicationConfigStore::load(&path).unwrap();
-    assert_eq!(store.config.star_rail.capture_method.to_yas(), expected);
+    assert_eq!(store.config.star_rail.capture_method.to_yas(), None);
 
     for (saved, method) in [
         ("wgc", yas::capture::CaptureMethod::Wgc),
@@ -179,11 +179,97 @@ fn star_rail_capture_defaults_match_genshin_sdr_at_the_config_boundary() {
         )
         .unwrap();
         let mut store = ApplicationConfigStore::load(&path).unwrap();
-        assert_eq!(store.config.star_rail.capture_method.to_yas(), method);
+        assert_eq!(store.config.star_rail.capture_method.to_yas(), Some(method));
         store.persist_now().unwrap();
         let reloaded = ApplicationConfigStore::load(&path).unwrap();
-        assert_eq!(reloaded.config.star_rail.capture_method.to_yas(), method);
+        assert_eq!(
+            reloaded.config.star_rail.capture_method.to_yas(),
+            Some(method)
+        );
     }
+    remove_test_tree(&root);
+}
+
+#[test]
+fn capture_settings_migrate_and_hdr_round_trips_through_public_config_load() {
+    use good_tools_app::config::{StarRailCaptureMethod, StarRailSettings};
+    use hsr_scanner::scanner::ScanConfig;
+    use yas::capture::CaptureMethod;
+
+    let root = temp_root("capture-hdr-migration");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    for version in [1, 2, 3] {
+        for method in [None, Some("bitBlt"), Some("wgc"), Some("printWindow")] {
+            let mut saved = serde_json::json!({
+                "schemaVersion": version,
+                "navigation": {"activeGame":"starRail", "starRailTab":"manager", "genshinTab":"scanner"},
+                "starRail": {
+                    "outputDir":"D:\\exports", "scanCharacters":false,
+                    "maxCharacters":5, "maxGear":12, "dumpImages":true,
+                    "timings":{"panelSwitchMs":1100, "characterPageMs":900},
+                    "captureIncludeRelics":false, "managerJournalPath":"D:\\manager.jsonl"
+                }
+            });
+            if let Some(method) = method {
+                saved["starRail"]["captureMethod"] = method.into();
+            }
+            fs::write(&path, serde_json::to_string(&saved).unwrap()).unwrap();
+            let mut store = ApplicationConfigStore::load(&path).unwrap();
+            assert_eq!(
+                store.config.schema_version,
+                APPLICATION_CONFIG_SCHEMA_VERSION
+            );
+            assert!(!store.config.star_rail.hdr_mode);
+            let expected_override = match method {
+                None => None,
+                Some("bitBlt") => Some(CaptureMethod::BitBlt),
+                Some("wgc") => Some(CaptureMethod::Wgc),
+                Some("printWindow") => Some(CaptureMethod::PrintWindow),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                store.config.star_rail.capture_method.to_yas(),
+                expected_override
+            );
+            assert_eq!(store.config.navigation.active_game, Game::StarRail);
+            assert_eq!(store.config.navigation.star_rail_tab, ToolTab::Manager);
+            assert_eq!(store.config.star_rail.output_dir, r"D:\exports");
+            assert!(!store.config.star_rail.scan_characters);
+            assert_eq!(store.config.star_rail.max_characters, 5);
+            assert_eq!(store.config.star_rail.max_gear, 12);
+            assert!(store.config.star_rail.dump_images);
+            assert!(!store.config.star_rail.capture_include_relics);
+            assert_eq!(store.config.star_rail.timings.panel_switch_ms, 1100);
+            assert_eq!(store.config.star_rail.timings.character_page_ms, 900);
+            assert_eq!(
+                store.config.star_rail.manager_journal_path,
+                r"D:\manager.jsonl"
+            );
+            store.persist_now().unwrap();
+            assert_eq!(
+                ApplicationConfigStore::load(&path).unwrap().config,
+                store.config
+            );
+
+            // Restore Automatic and enable HDR as a player would in the GUI.
+            store.config.star_rail.set_hdr_mode(true);
+            store.persist_now().unwrap();
+            let restored = ApplicationConfigStore::load(&path).unwrap();
+            let settings = restored.config.star_rail;
+            assert!(settings.hdr_mode);
+            let scan = ScanConfig {
+                capture_method: settings.capture_method.to_yas(),
+                hdr_mode: settings.hdr_mode,
+                ..Default::default()
+            };
+            assert_eq!(scan.effective_capture_method(), CaptureMethod::Wgc);
+        }
+    }
+    assert_eq!(
+        StarRailSettings::default().capture_method,
+        StarRailCaptureMethod::Auto
+    );
     remove_test_tree(&root);
 }
 
@@ -294,6 +380,7 @@ fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() 
             });
             saved["starRail"]["maxLightCones"] = 0.into();
             saved["starRail"]["maxGear"] = 0.into();
+            saved["starRail"]["hdrMode"] = false.into();
             assert_eq!(persisted, saved);
             let reloaded = ApplicationConfigStore::load(&path).unwrap();
             assert_eq!(reloaded.config, store.config);

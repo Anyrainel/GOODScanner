@@ -7,6 +7,7 @@ use clap::{command, ArgMatches, Args, FromArgMatches};
 use serde::{Deserialize, Serialize};
 use yas::{log_debug, log_error, log_info, log_warn};
 
+use yas::capture::constants::DEFAULT_HDR_WHITE_POINT;
 use yas::capture::CaptureMethod;
 use yas::game_info::{GameInfo, GameInfoBuilder};
 
@@ -431,20 +432,11 @@ fn default_mgr_scroll() -> u64 {
 fn default_true() -> bool {
     true
 }
-pub const DEFAULT_HDR_WHITE_POINT: f32 = 4.0;
 fn default_hdr_white_point() -> f32 {
     DEFAULT_HDR_WHITE_POINT
 }
 fn default_server_port() -> u16 {
     8765
-}
-
-pub fn capture_method_for_hdr_mode(hdr_mode: bool) -> CaptureMethod {
-    if hdr_mode {
-        CaptureMethod::Wgc
-    } else {
-        CaptureMethod::BitBlt
-    }
 }
 
 /// Deserialize a u64 that may arrive as a number, a numeric string, or an
@@ -1398,7 +1390,7 @@ impl GoodScannerApplication {
             dump_images: config.dump_images || config.debug_ach_scroll,
             hdr_mode: config.hdr_mode || user_config.hdr_mode,
             hdr_white_point: DEFAULT_HDR_WHITE_POINT,
-            capture_method: capture_method_for_hdr_mode(config.hdr_mode || user_config.hdr_mode),
+            capture_method: CaptureMethod::for_hdr_mode(config.hdr_mode || user_config.hdr_mode),
             output_dir: config.output_dir.clone(),
             ocr: config.ocr.clone(),
             char_max_count: config.char_max_count,
@@ -1642,7 +1634,7 @@ pub fn run_scan_core(
     );
 
     report("初始化屏幕截图 / Initializing screen capture...");
-    let capture_method = capture_method_for_hdr_mode(config.hdr_mode);
+    let capture_method = CaptureMethod::for_hdr_mode(config.hdr_mode);
     let mut ctrl = GenshinGameController::new(game_info, capture_method)
         .context("屏幕截图初始化失败 / Screen capture initialization failed")?;
     let token = cancel_token.unwrap_or_else(yas::cancel::CancelToken::new);
@@ -1778,7 +1770,7 @@ pub fn run_server_core(
         scan_artifacts: true,
         dump_images,
         hdr_mode: user_config.hdr_mode,
-        capture_method: capture_method_for_hdr_mode(user_config.hdr_mode),
+        capture_method: CaptureMethod::for_hdr_mode(user_config.hdr_mode),
         ocr: ocr.clone(),
         ..ScanCoreConfig::default()
     };
@@ -1792,7 +1784,7 @@ pub fn run_server_core(
         log_info!("查找游戏窗口...", "Finding game window...");
         let game_info = GoodScannerApplication::get_game_info()?;
         log_info!("初始化屏幕截图...", "Initializing screen capture...");
-        let capture_method = capture_method_for_hdr_mode(exec_user_config.hdr_mode);
+        let capture_method = CaptureMethod::for_hdr_mode(exec_user_config.hdr_mode);
         let ctrl = GenshinGameController::new(game_info, capture_method)?;
         log_info!("加载OCR模型...", "Loading OCR models...");
         let pool_config = exec_user_config.resolve_ocr_pool_config();
@@ -1866,7 +1858,7 @@ pub fn run_manage_json(
     let mappings = Arc::new(MappingManager::new(&overrides)?);
 
     let game_info = GoodScannerApplication::get_game_info()?;
-    let capture_method = capture_method_for_hdr_mode(user_config.hdr_mode);
+    let capture_method = CaptureMethod::for_hdr_mode(user_config.hdr_mode);
     let mut ctrl = GenshinGameController::new(game_info, capture_method)?;
     let token = cancel_token.unwrap_or_else(yas::cancel::CancelToken::new);
 

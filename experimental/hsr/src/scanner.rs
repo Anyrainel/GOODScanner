@@ -102,7 +102,9 @@ impl ScanTargets {
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
     pub targets: ScanTargets,
-    pub capture_method: CaptureMethod,
+    /// None selects BitBlt for SDR and WGC for HDR.
+    pub capture_method: Option<CaptureMethod>,
+    pub hdr_mode: bool,
     pub timings: ScanTimings,
     /// Baseline wheel detents for one full visible inventory page. The runtime
     /// scales this down for a clamped final-page row advance and verifies the
@@ -131,7 +133,8 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             targets: ScanTargets::all(),
-            capture_method: CaptureMethod::default(),
+            capture_method: None,
+            hdr_mode: false,
             timings: ScanTimings::default(),
             #[cfg(test)]
             inventory_scroll_ticks_per_page: 25,
@@ -144,6 +147,13 @@ impl Default for ScanConfig {
             trailblazer: None,
             dump_images: false,
         }
+    }
+}
+
+impl ScanConfig {
+    pub fn effective_capture_method(&self) -> CaptureMethod {
+        self.capture_method
+            .unwrap_or_else(|| CaptureMethod::for_hdr_mode(self.hdr_mode))
     }
 }
 
@@ -189,7 +199,11 @@ impl HsrScanner<WindowsHsrDevice, PaddleOcrReader> {
         config: ScanConfig,
         cancel: CancelToken,
     ) -> HsrResult<Self> {
-        let device = WindowsHsrDevice::locate_with_cancel(config.capture_method, cancel)?;
+        let device = WindowsHsrDevice::locate_with_cancel(
+            config.effective_capture_method(),
+            config.hdr_mode,
+            cancel,
+        )?;
         let reader = PaddleOcrReader::new()?;
         Ok(Self::new(device, reader, references, config))
     }
@@ -2570,9 +2584,30 @@ mod tests {
     }
 
     #[test]
+    fn hdr_automatic_capture_and_explicit_overrides_use_the_selected_backend() {
+        let mut config = ScanConfig {
+            hdr_mode: true,
+            ..Default::default()
+        };
+        assert_eq!(config.effective_capture_method(), CaptureMethod::Wgc);
+        for method in [
+            CaptureMethod::BitBlt,
+            CaptureMethod::Wgc,
+            CaptureMethod::PrintWindow,
+        ] {
+            config.capture_method = Some(method);
+            assert_eq!(config.effective_capture_method(), method);
+        }
+        config.capture_method = None;
+        config.hdr_mode = false;
+        assert_eq!(config.effective_capture_method(), CaptureMethod::BitBlt);
+    }
+
+    #[test]
     fn defaults_scan_all_and_use_shared_bitblt_capture() {
         let config = ScanConfig::default();
-        assert_eq!(config.capture_method, CaptureMethod::BitBlt);
+        assert_eq!(config.capture_method, None);
+        assert_eq!(config.effective_capture_method(), CaptureMethod::BitBlt);
         assert_eq!(config.max_light_cones, 0);
         assert_eq!(config.max_gear, 0);
         assert_eq!(config.max_characters, 0);

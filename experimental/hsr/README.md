@@ -122,7 +122,13 @@ navigation, detail panels, Character paging, screenshot comparisons and manager
 status toggles. These values have no hidden per-path additions. Older saved
 navigation delays migrate to equivalent total waits.
 
-**Advanced Options** contains the capture method, image dumps and separate scan
+Capture defaults to **Automatic**: BitBlt for SDR and WGC with FP16 capture and
+tone mapping when **HDR mode** is enabled beside the scan targets. Existing saved
+backend choices remain overrides. Select Automatic to restore the recommended
+behavior. Changing HDR mode also restores Automatic capture. PrintWindow remains
+a troubleshooting override.
+
+**Advanced Options** contains the capture override, image dumps and separate scan
 caps for Characters, Light Cones, and Relics/Ornaments. `0` scans the whole
 category; stopping early produces unknown coverage. Inventory caps sample the
 backpack instead of rejecting a larger total. Manager scans always read the
@@ -132,7 +138,11 @@ evaluated fields; model and pool overrides are not shown.
 星穹铁道扫描器的**延迟设置**提供界面操作、详情面板、角色栏翻页、截图对比和管理器标记切换
 共用的总等待时间，不再叠加各路径内隐藏的延迟。旧版保存的操作延迟会迁移为等效的总等待时间。
 
-**高级选项**包含截图方式、OCR 截图保存，以及角色、光锥、遗器与饰品各自的最大扫描数。
+截图方式默认为**自动**：普通模式使用 BitBlt；在扫描目标旁勾选 **HDR** 后，使用 WGC
+以 FP16 截图并进行色调映射。旧版保存的截图方式保留为手动覆盖，选择“自动”可恢复推荐设置。
+切换 HDR 选项也会恢复自动截图。PrintWindow 保留用于排查截图问题。
+
+**高级选项**包含截图方式覆盖、OCR 截图保存，以及角色、光锥、遗器与饰品各自的最大扫描数。
 `0` 表示扫描全部；提前达到上限时，覆盖率标记为未知。背包上限用于抽样，不会因为背包总数
 更大就拒绝扫描。管理器始终扫描全部库存。OCR 按字段自动选择模型，已验证的字段使用 v6 tiny；
 暂不提供模型或识别池的手动设置。
@@ -141,6 +151,7 @@ Both shipped executables expose the same scan path as the GUI:
 
 ```powershell
 .\GOODCapture.exe star-rail check --capture-method wgc --log-file wgc-check.log
+.\GOODCapture.exe star-rail check --capture-method auto --hdr-mode --save-frame hdr.png
 .\GOODCapture.exe star-rail check --capture-method bitblt --drag-character-bar --save-frame drag.png --log-file drag.log
 .\GOODCapture.exe star-rail scan --characters --max-characters 2 --dump-images --log-file characters.log
 .\GOODCapture.exe star-rail scan --light-cones --relics --sample-items 3 --capture-method bitblt --dump-images --log-file inventory.log

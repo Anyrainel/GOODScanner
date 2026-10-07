@@ -2,15 +2,10 @@ use serde::{Deserialize, Serialize};
 
 /// Which Win32 API to use for screen capture.
 ///
-/// BitBlt   — GDI, works everywhere, but reads from the SDR compositor layer.
-///            HDR games (Genshin with Windows HDR enabled) come out clipped-white.
-/// PrintWindow — asks the window to render its DirectX content into a GDI DC.
-///               Client-area only, no title bar in the output. Handles HDR via
-///               the compositor's tone-mapping. Simplest HDR fix; blocked by some
-///               anti-cheat configs.
-/// Wgc      — Windows.Graphics.Capture (Win10 1803+). Requests
-///            B8G8R8A8UIntNormalized: Windows auto-tonemaps HDR→8-bit SDR.
-///            Best quality, always works with DX games.
+/// BitBlt copies desktop pixels on demand; intended for visible SDR windows.
+/// PrintWindow requests a client-area render from the target window and may block.
+/// Wgc captures window frames (our HWND path needs Windows 10 1903+).
+/// HDR needs FP16 capture and explicit tone mapping in WgcCapturer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMethod {
@@ -18,4 +13,14 @@ pub enum CaptureMethod {
     BitBlt,
     PrintWindow,
     Wgc,
+}
+
+impl CaptureMethod {
+    pub fn for_hdr_mode(hdr_mode: bool) -> Self {
+        if hdr_mode {
+            Self::Wgc
+        } else {
+            Self::BitBlt
+        }
+    }
 }

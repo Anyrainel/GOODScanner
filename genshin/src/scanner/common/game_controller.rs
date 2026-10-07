@@ -93,8 +93,8 @@ impl GenshinGameController {
                 "Capture method: BitBlt (non-HDR mode; using low-overhead GDI capture)"
             ),
             (CaptureMethod::Wgc, true) => log_info!(
-                "截图方式: WGC（HDR模式，使用Windows色调映射后的截图）",
-                "Capture method: WGC (HDR mode; using Windows tone-mapped capture)"
+                "截图方式: WGC（HDR模式，使用色调映射后的截图）",
+                "Capture method: WGC (HDR mode; using tone-mapped capture)"
             ),
             (method, true) => log_info!(
                 "截图方式: {:?}（HDR模式，显式使用该截图方式）",
@@ -213,11 +213,7 @@ impl GenshinGameController {
     }
 
     #[cfg(target_os = "windows")]
-    fn focus_hwnd(
-        &mut self,
-        hwnd: windows_sys::Win32::Foundation::HWND,
-        settle_ms: u32,
-    ) -> bool {
+    fn focus_hwnd(&mut self, hwnd: windows_sys::Win32::Foundation::HWND, settle_ms: u32) -> bool {
         if !utils::is_window_handle_valid(hwnd) {
             return false;
         }
@@ -460,9 +456,7 @@ impl GenshinGameController {
     pub fn mouse_scroll_wheel_delta(&mut self, delta: i32) {
         #[cfg(target_os = "windows")]
         self.post_wheel_to_game(delta);
-        self.system_control
-            .mouse_scroll_wheel_delta(delta)
-            .unwrap();
+        self.system_control.mouse_scroll_wheel_delta(delta).unwrap();
     }
 
     /// Genshin's UI often ignores injected `SendInput` wheel. `WM_MOUSEWHEEL`
@@ -470,7 +464,9 @@ impl GenshinGameController {
     #[cfg(target_os = "windows")]
     fn post_wheel_to_game(&self, delta: i32) {
         use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
-        use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, PostMessageW, WM_MOUSEWHEEL};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetCursorPos, PostMessageW, WM_MOUSEWHEEL,
+        };
 
         let hwnd = self.game_info.hwnd as HWND;
         if hwnd.is_null() {

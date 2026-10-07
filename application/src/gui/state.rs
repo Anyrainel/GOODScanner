@@ -747,9 +747,8 @@ impl AppState {
         self.user_config.continue_on_failure = self.continue_on_failure;
         self.user_config.dump_images = self.dump_images;
         self.user_config.hdr_mode = self.hdr_mode;
-        self.user_config.hdr_white_point = genshin_scanner::cli::DEFAULT_HDR_WHITE_POINT;
-        self.user_config.capture_method =
-            genshin_scanner::cli::capture_method_for_hdr_mode(self.hdr_mode);
+        self.user_config.hdr_white_point = yas::capture::constants::DEFAULT_HDR_WHITE_POINT;
+        self.user_config.capture_method = yas::capture::CaptureMethod::for_hdr_mode(self.hdr_mode);
         self.user_config.dump_job_data = self.dump_job_data;
         self.user_config.save_on_cancel = self.save_on_cancel;
         self.user_config.only_keep_latest_export = self.only_keep_latest_export;
@@ -800,8 +799,8 @@ impl AppState {
             log_progress: true,
             dump_images: self.dump_images,
             hdr_mode: self.hdr_mode,
-            hdr_white_point: genshin_scanner::cli::DEFAULT_HDR_WHITE_POINT,
-            capture_method: genshin_scanner::cli::capture_method_for_hdr_mode(self.hdr_mode),
+            hdr_white_point: yas::capture::constants::DEFAULT_HDR_WHITE_POINT,
+            capture_method: yas::capture::CaptureMethod::for_hdr_mode(self.hdr_mode),
             save_on_cancel: self.save_on_cancel,
             output_dir: self.output_dir.clone(),
             ocr: OcrEngineArgs::default(),
