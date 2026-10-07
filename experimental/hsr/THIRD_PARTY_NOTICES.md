@@ -57,7 +57,7 @@ All application flows use the bundled reference automatically. The library's
 manifest-verified file provider remains available to offline tooling and tests;
 it is not a setting that app users need to configure.
 
-## Optional legacy offline import interoperability
+## Interchange format references
 
 - [Reliquary Archiver](https://github.com/IceDynamix/reliquary-archiver/tree/cb109f17a4a15b7604cfe9d078a8735e7735cd25),
   revision `cb109f17a4a15b7604cfe9d078a8735e7735cd25` (v0.18.0), MIT.
@@ -66,9 +66,8 @@ it is not a setting that app users need to configure.
 - [Fribbels Star Rail Optimizer](https://github.com/fribbels/hsr-optimizer/tree/df630a0488a64eeb740e4e0c14f265d96b9f6f8f),
   revision `df630a0488a64eeb740e4e0c14f265d96b9f6f8f`, MIT.
 
-The library can normalize an existing Reliquary/Fribbels v4 JSON document.
-This optional legacy import code is not part of the normal native
-capture flow. GOODScanner and GOODCapture do not download, require, or invoke a
+These projects provide the interchange export and protocol references described
+below. GOODScanner and GOODCapture do not download, require, or invoke a
 Reliquary Archiver helper.
 
 ## GPL-licensed research-only references

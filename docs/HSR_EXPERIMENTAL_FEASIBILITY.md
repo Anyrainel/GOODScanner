@@ -22,9 +22,9 @@ Honkai: Star Rail is integrated into the existing Windows products. Users do not
 - 现有《原神》命令行行为、`data/good_config.json`、GOOD v3 输出及可选 GOOD 成就扩展保持兼容。
 - 跨游戏导航与《星穹铁道》设置使用独立且带版本的 `data/good_app_config.json`。
 
-Star Rail retains screenshot/OCR scanning for Characters, Light Cones, Cavern Relics, and Planar Ornaments; deterministic export; offline Reliquary/Fribbels v4 import; and attended Manager preview/apply for reversible Relic lock and discard-mark changes. Manager apply remains digest-bound, journaled, re-read before each action, and stops on drift or uncertain evidence. It does not salvage, delete, consume, enhance, equip, mutate Light Cones, or inject packets.
+Star Rail retains screenshot/OCR scanning for Characters, Light Cones, Cavern Relics, and Planar Ornaments; deterministic export; and attended Manager preview/apply for reversible Relic lock and discard-mark changes. Manager apply remains digest-bound, journaled, re-read before each action, and stops on drift or uncertain evidence. It does not salvage, delete, consume, enhance, equip, mutate Light Cones, or inject packets.
 
-《星穹铁道》保留以下能力：通过截图与 OCR 扫描角色、光锥、隧洞遗器和位面饰品；确定性导出；离线导入 Reliquary/Fribbels v4；以及有人值守的管理预览/应用，用于可逆的遗器锁定和弃置标记操作。管理应用仍绑定预览摘要、记录持久日志、每次动作前重新读取，并在状态漂移或证据不确定时停止。它不会分解、删除、消耗、强化、装备、修改光锥或注入数据包。
+《星穹铁道》保留以下能力：通过截图与 OCR 扫描角色、光锥、隧洞遗器和位面饰品；确定性导出；以及有人值守的管理预览/应用，用于可逆的遗器锁定和弃置标记操作。管理应用仍绑定预览摘要、记录持久日志、每次动作前重新读取，并在状态漂移或证据不确定时停止。它不会分解、删除、消耗、强化、装备、修改光锥或注入数据包。
 
 ## Completed-achievement capture / 已完成成就抓包
 
@@ -103,7 +103,7 @@ The achievement object is strict: its only source kind is `packetCapture`, its o
 
 ## GIlore reference contract / GIlore 参考数据契约
 
-Both shared binaries embed a compact, checksummed snapshot of the complete public GIlore `1.2.0` reference. It is the default for Scanner, offline import, Manager, and achievement capture/export, so a normal installation requires only the existing executable. The embedded loader verifies its bytes and metadata before constructing the same strict `ReferenceCache` used for external bundles; failure stops the requested flow.
+Both shared binaries embed a compact, checksummed snapshot of the complete public GIlore `1.2.0` reference. It is the default for Scanner, Manager, and achievement capture/export, so a normal installation requires only the existing executable. The embedded loader verifies its bytes and metadata before constructing the same strict `ReferenceCache` used for external bundles; failure stops the requested flow.
 
 The snapshot was derived from clean GIlore commit `7ef3650a63622c204b89234406c99dc221e01d85`, public source revision `8cdb905dc2f8e6fffa9be4eb07af3e34435d6091`, and source-manifest SHA-256 `9899cc8fdde578cdbd744ec9f8b2705cd2f11d43670232e871f489fc3d549b5f`. Its deterministic normalized JSON is 331,391 bytes with SHA-256 `46fdddc9252046580154823d596315fb09d88dab570ffa958787286c99d76782`; it contains public reference metadata only, with no icon binaries, account/session/capture data, or raw packets.
 
@@ -112,7 +112,7 @@ Advanced users may explicitly select an external GIlore reference folder. A nonb
 - `achievement_categories.json`, with `collection: "achievement_categories"`
 - `achievements.json`, with `collection: "achievements"`
 
-两个共用程序都内置一份紧凑且带校验和的完整公开 GIlore `1.2.0` 参考快照。扫描、离线导入、管理以及成就抓包/导出默认都使用这份数据，因此正常安装只需要既有可执行文件。内置加载器会先验证数据字节与元数据，再构造与外部数据包相同的严格 `ReferenceCache`；验证失败会停止当前流程。
+两个共用程序都内置一份紧凑且带校验和的完整公开 GIlore `1.2.0` 参考快照。扫描、管理以及成就抓包/导出默认都使用这份数据，因此正常安装只需要既有可执行文件。内置加载器会先验证数据字节与元数据，再构造与外部数据包相同的严格 `ReferenceCache`；验证失败会停止当前流程。
 
 该快照来自干净的 GIlore 提交 `7ef3650a63622c204b89234406c99dc221e01d85`、公开源修订 `8cdb905dc2f8e6fffa9be4eb07af3e34435d6091`，源清单 SHA-256 为 `9899cc8fdde578cdbd744ec9f8b2705cd2f11d43670232e871f489fc3d549b5f`。确定性规范化 JSON 共 331,391 字节，SHA-256 为 `46fdddc9252046580154823d596315fb09d88dab570ffa958787286c99d76782`；其中仅含公开参考元数据，不含图标二进制、账号/会话/抓包数据或原始数据包。
 

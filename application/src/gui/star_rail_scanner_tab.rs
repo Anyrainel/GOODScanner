@@ -262,43 +262,6 @@ pub fn show(
                         );
                     });
                 });
-
-            egui::CollapsingHeader::new(lang.t("导入已有存档", "Import Existing Archive"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!is_running && !game_busy, |ui| {
-                        path_row(
-                            ui,
-                            lang.t("存档 JSON", "Archive JSON"),
-                            &mut settings.offline_import_path,
-                            lang.t("选择文件...", "Choose file..."),
-                            false,
-                        );
-                        ui.label(
-                            egui::RichText::new(lang.t(
-                                "离线导入 Reliquary / Fribbels v4 JSON；不会读取账号、会话或原始数据包。",
-                                "Import an existing Reliquary / Fribbels v4 JSON offline; account, session, and raw-packet data are never retained.",
-                            ))
-                            .small()
-                            .color(egui::Color32::from_rgb(120, 120, 120)),
-                        );
-                        if ui
-                            .add_enabled(
-                                !game_busy && !settings.offline_import_path.trim().is_empty(),
-                                egui::Button::new(lang.t(
-                                    "导入并导出 HSR-Scanner v4 JSON",
-                                    "Import and Export HSR-Scanner v4 JSON",
-                                )),
-                            )
-                            .clicked()
-                        {
-                            state.scan_handle = Some(star_rail_worker::spawn_offline_import(
-                                settings,
-                                state.scan_status.clone(),
-                            ));
-                        }
-                    });
-                });
         });
 }
 

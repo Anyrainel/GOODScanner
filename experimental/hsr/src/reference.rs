@@ -845,9 +845,9 @@ impl ReferenceCache {
     }
 
     /// Require a production-sized, property-complete reference cache before a
-    /// live scan, live helper capture, or manager action. Offline archive import
-    /// and fixture export intentionally remain separate so the small deterministic
-    /// test bundle can still prove normalization without becoming account-safe.
+    /// live scan, packet capture, or manager action. Fixture export intentionally
+    /// remains separate so the small deterministic test bundle can still prove
+    /// normalization without becoming account-safe.
     pub fn validate_live_complete_profile(&self) -> HsrResult<()> {
         if self.provider != "gilore.ggstarrail-reference" || self.schema_version != 1 {
             return live_profile_error(
@@ -967,8 +967,8 @@ impl ReferenceCache {
         exactly_one(self.gear_candidates_by_set_slot_rarity(set_key, slot, rarity))
     }
 
-    /// Resolve a Fribbels/Reliquary relic using all public evidence that format
-    /// provides. A main-affix property can distinguish most duplicate
+    /// Resolve a relic using its set, slot, rarity, main stat and level.
+    /// A main-affix property can distinguish most duplicate
     /// set/slot/rarity buckets. If two definitions expose the same property and
     /// progression, the narrow visible-equivalence rule is applied; otherwise
     /// ambiguity fails closed.

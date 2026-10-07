@@ -2,7 +2,6 @@
 //! reversible status manager used by the shared GOODScanner applications.
 
 pub mod annotator;
-pub mod capture;
 pub mod device;
 mod embedded_reference;
 pub mod error;

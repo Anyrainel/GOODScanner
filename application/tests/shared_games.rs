@@ -5,7 +5,10 @@ use std::{
 };
 
 use good_tools_app::{
-    config::{ApplicationConfigStore, Game, GameNavigation, ToolTab, APPLICATION_CONFIG_FILE_REL},
+    config::{
+        ApplicationConfigStore, Game, GameNavigation, ToolTab, APPLICATION_CONFIG_FILE_REL,
+        APPLICATION_CONFIG_SCHEMA_VERSION,
+    },
     gui::{game_switcher, state::Lang},
 };
 use hsr_scanner::manager::{
@@ -195,7 +198,10 @@ fn obsolete_custom_reference_path_is_ignored_when_loading_old_settings() {
         r#"{"schemaVersion":1,"starRail":{"referenceBundle":"C:\\missing-data","scanCharacters":false,"outputDir":"D:\\exports"}}"#
     ).unwrap();
     let store = ApplicationConfigStore::load(&path).unwrap();
-    assert_eq!(store.config.schema_version, 2);
+    assert_eq!(
+        store.config.schema_version,
+        APPLICATION_CONFIG_SCHEMA_VERSION
+    );
     let settings = &store.config.star_rail;
     assert!(!settings.scan_characters);
     assert!(settings.capture_include_characters);
@@ -206,6 +212,74 @@ fn obsolete_custom_reference_path_is_ignored_when_loading_old_settings() {
     assert!(!serde_json::to_string(&settings)
         .unwrap()
         .contains("referenceBundle"));
+    remove_test_tree(&root);
+}
+
+#[test]
+fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() {
+    let root = temp_root("archive-import-removal");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    for version in [1, 2] {
+        for import_path in [None, Some(""), Some(r"D:\archives\star-rail.json")] {
+            // Pre-removal persisted config, including scan, capture, manager,
+            // output and per-game navigation choices that must all survive.
+            let mut saved = serde_json::json!({
+                "schemaVersion": version,
+                "navigation": {
+                    "activeGame": "starRail",
+                    "genshinTab": "manager",
+                    "starRailTab": "scanner"
+                },
+                "starRail": {
+                    "outputDir": r"D:\exports",
+                    "scanCharacters": false,
+                    "scanLightCones": false,
+                    "scanRelicsAndOrnaments": true,
+                    "expectedCharacters": 42,
+                    "maxCharacters": 85,
+                    "maxInventoryItems": 789,
+                    "captureMethod": "printWindow",
+                    "navigationDelayMs": 600,
+                    "panelTimeoutMs": 2500,
+                    "nextCharacterKey": "q",
+                    "trailblazerName": "Trailblazer",
+                    "trailblazerGender": "Stelle",
+                    "dumpImages": true,
+                    "managerInstructionsPath": r"D:\manager\instructions.json",
+                    "managerJournalPath": r"D:\manager\journal.jsonl",
+                    "captureIncludeAchievements": false,
+                    "captureIncludeCharacters": false,
+                    "captureIncludeLightCones": true,
+                    "captureIncludeRelics": false,
+                    "captureDumpPackets": true,
+                    "captureOnlyKeepLatestExport": true
+                }
+            });
+            if let Some(import_path) = import_path {
+                saved["starRail"]["offlineImportPath"] = import_path.into();
+            }
+            fs::write(&path, serde_json::to_string_pretty(&saved).unwrap()).unwrap();
+
+            let mut store = ApplicationConfigStore::load(&path).unwrap();
+            assert_eq!(
+                store.config.schema_version,
+                APPLICATION_CONFIG_SCHEMA_VERSION
+            );
+            store.persist_now().unwrap();
+
+            saved["schemaVersion"] = APPLICATION_CONFIG_SCHEMA_VERSION.into();
+            saved["starRail"]
+                .as_object_mut()
+                .unwrap()
+                .remove("offlineImportPath");
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(persisted, saved);
+            let reloaded = ApplicationConfigStore::load(&path).unwrap();
+            assert_eq!(reloaded.config, store.config);
+        }
+    }
     remove_test_tree(&root);
 }
 

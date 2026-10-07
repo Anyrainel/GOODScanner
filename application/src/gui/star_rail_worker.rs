@@ -7,7 +7,6 @@ use std::{
 };
 
 use hsr_scanner::{
-    capture::import_reliquary_archive_file,
     data_cache::load_data_cache,
     export_observations,
     manager::{
@@ -209,30 +208,17 @@ fn v4_inventory_counts(export: &serde_json::Value) -> (usize, usize, usize, usiz
     (characters, light_cones, cavern, planar)
 }
 
-fn v4_export_message(imported: bool, counts: (usize, usize, usize, usize), path: &Path) -> UiText {
-    if imported {
-        UiText::new(
-            format!(
-                "导入并导出完成：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品。输出：{}",
-                counts.0, counts.1, counts.2, counts.3, path.display()
-            ),
-            format!(
-                "Import and export complete: {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments. Output: {}",
-                counts.0, counts.1, counts.2, counts.3, path.display()
-            ),
-        )
-    } else {
-        UiText::new(
-            format!(
-                "已导出：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品。输出：{}",
-                counts.0, counts.1, counts.2, counts.3, path.display()
-            ),
-            format!(
-                "Exported {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments. Output: {}",
-                counts.0, counts.1, counts.2, counts.3, path.display()
-            ),
-        )
-    }
+fn v4_export_message(counts: (usize, usize, usize, usize), path: &Path) -> UiText {
+    UiText::new(
+        format!(
+            "已导出：{} 个角色、{} 个光锥、{} 件隧洞遗器、{} 件位面饰品。输出：{}",
+            counts.0, counts.1, counts.2, counts.3, path.display()
+        ),
+        format!(
+            "Exported {} Characters, {} Light Cones, {} Cavern Relics, and {} Planar Ornaments. Output: {}",
+            counts.0, counts.1, counts.2, counts.3, path.display()
+        ),
+    )
 }
 
 /// Preserve a fully reconciled journal under a unique completed name so the
@@ -362,74 +348,7 @@ pub(crate) fn run_scan(
         &output_dir,
         &result.export_details,
     )?;
-    Ok(v4_export_message(false, export.counts, &export.path))
-}
-
-pub fn spawn_offline_import(
-    settings: &StarRailSettings,
-    status: Arc<Mutex<TaskStatus>>,
-) -> TaskHandle {
-    let settings = settings.clone();
-    worker::spawn_cancellable_task(
-        TaskKind::Scanner,
-        LogSource::Scanner,
-        status,
-        UiText::new(
-            "正在导入星穹铁道存档...",
-            "Importing the Star Rail archive...",
-        ),
-        UiText::new("正在停止导入...", "Stopping import..."),
-        move |cancel| {
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let output_dir = ensure_output_dir(&settings)?;
-            if settings.offline_import_path.trim().is_empty() {
-                return Err(UiError::from_message(
-                    UiText::new(
-                        "请选择要导入的 Reliquary 或 Fribbels v4 JSON 文件。",
-                        "Choose a Reliquary or Fribbels v4 JSON file to import.",
-                    ),
-                    "starRail.offlineImportPath is empty",
-                ));
-            }
-            let references = load_references().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
-                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let imported = import_reliquary_archive_file(
-                Path::new(settings.offline_import_path.trim()),
-                &references,
-            )
-            .map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法导入这份星穹铁道存档。文件内容未通过安全校验。",
-                        "This Star Rail archive could not be imported because it did not pass validation.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Scanner));
-            }
-            let export = write_v4_export(
-                &imported.into_observations(),
-                &references,
-                &output_dir,
-                &CaptureExportDetails::default(),
-            )?;
-            Ok(v4_export_message(true, export.counts, &export.path))
-        },
-    )
+    Ok(v4_export_message(export.counts, &export.path))
 }
 
 fn load_manager_instructions(path: &Path) -> Result<ManagerInstructionsEnvelope, UiError> {

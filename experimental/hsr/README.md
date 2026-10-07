@@ -31,21 +31,13 @@ Genshin Impact and Star Rail.
 - 扫描与抓包都导出 [HSR-Scanner v4](../../docs/HSR_EXPORT.md)，供 Fribbels / Reliquary 客户端使用，
   并可附带成就 ID 与开拓者性别/当前命途。
 
-The older Reliquary/Fribbels v4 JSON importer remains available as an optional
-offline normalization boundary for existing user files. It is not used by the
-normal live-capture flow, and the shared binaries never require or invoke
-Reliquary Archiver.
-
-Scanner, import, Manager, and achievement-capture flows use the complete,
+Scanner, Manager, and achievement-capture flows use the complete,
 SHA-256-verified GIlore 1.2.0 public reference snapshot embedded in both shared
 binaries. No reference-data folder is required. The GUI reference-folder field
 is an advanced explicit override; when nonempty, the selected bundle must pass
 the same strict completeness checks and an invalid override fails closed.
 
-旧版 Reliquary/Fribbels v4 JSON 导入器仍可用于离线转换已有文件，但正式实时抓包流程不会使用它，
-共用程序也不会要求或调用 Reliquary Archiver。
-
-扫描、导入、管理及成就抓包流程均默认使用内置在两个共用程序中的完整 GIlore 1.2.0 公开参考快照，
+扫描、管理及成就抓包流程均默认使用内置在两个共用程序中的完整 GIlore 1.2.0 公开参考快照，
 并会校验其 SHA-256；无需准备参考数据目录。界面中的参考目录是高级自定义覆盖；一旦填写，所选数据包
 必须通过同样严格的完整性校验，无效覆盖会安全拒绝。
 

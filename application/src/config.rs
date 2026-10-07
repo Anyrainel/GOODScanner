@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use hsr_scanner::{TrailblazerGender, TrailblazerIdentity};
 use serde::{Deserialize, Serialize};
 
-pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 2;
+pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 3;
 pub const APPLICATION_CONFIG_FILE_REL: &str = "data/good_app_config.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,8 +177,6 @@ pub struct StarRailSettings {
     #[serde(default)]
     pub dump_images: bool,
     #[serde(default)]
-    pub offline_import_path: String,
-    #[serde(default)]
     pub manager_instructions_path: String,
     #[serde(default)]
     pub manager_journal_path: String,
@@ -213,7 +211,6 @@ impl Default for StarRailSettings {
             trailblazer_name: String::new(),
             trailblazer_gender: None,
             dump_images: false,
-            offline_import_path: String::new(),
             manager_instructions_path: String::new(),
             manager_journal_path: String::new(),
             capture_include_achievements: true,
@@ -340,9 +337,10 @@ impl ApplicationConfigStore {
             ApplicationUiConfig::default()
         };
         // v1 had starRail.referenceBundle: an optional developer-owned folder
-        // path. App flows now load hosted data with a local cache. Serde discards that
-        // obsolete key while retaining all scan, navigation and output settings.
-        if config.schema_version == 1 {
+        // path. v1/v2 had starRail.offlineImportPath: the JSON converter's input
+        // path. Serde discards those obsolete string keys while retaining all
+        // scan, capture, manager, navigation and output settings.
+        if matches!(config.schema_version, 1 | 2) {
             config.schema_version = APPLICATION_CONFIG_SCHEMA_VERSION;
         }
         config.validate_version()?;

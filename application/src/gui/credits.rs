@@ -11,7 +11,7 @@ pub enum CreditSet {
     Capture,
     /// GOODCapture: scanner + capture attributions.
     Full,
-    /// Honkai: Star Rail scanner, import, capture, and manager references.
+    /// Honkai: Star Rail scanner, capture, and manager references.
     StarRail,
 }
 
@@ -111,12 +111,12 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
             entry(
                 ui,
                 l,
-                "Reliquary",
+                "Reliquary Archiver",
                 "IceDynamix contributors",
-                "https://github.com/IceDynamix/reliquary",
+                "https://github.com/IceDynamix/reliquary-archiver",
                 l.t(
-                    "离线存档导入格式的互操作参考 (MIT)",
-                    "Interoperability reference for offline archive imports (MIT)",
+                    "星穹铁道导出格式与技能映射参考 (MIT)",
+                    "Reference for Star Rail export formats and skill mappings (MIT)",
                 ),
             );
             entry(
@@ -126,8 +126,8 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
                 "Fribbels contributors",
                 "https://github.com/fribbels/hsr-optimizer",
                 l.t(
-                    "星穹铁道导入格式的互操作参考 (MIT)",
-                    "Interoperability reference for Star Rail import formats (MIT)",
+                    "星穹铁道导出格式的互操作参考 (MIT)",
+                    "Interoperability reference for Star Rail export formats (MIT)",
                 ),
             );
             entry(
