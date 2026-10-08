@@ -63,7 +63,6 @@ fn expanded_settings_fit_narrow_forms_in_both_languages() {
         config::StarRailSettings,
         gui::{
             manager_tab, scanner_tab, star_rail_scanner_tab,
-            star_rail_state::StarRailState,
             state::{AppState, Lang},
         },
     };
@@ -72,7 +71,6 @@ fn expanded_settings_fit_narrow_forms_in_both_languages() {
     ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
     let mut genshin = AppState::new();
     let mut settings = StarRailSettings::default();
-    let mut hsr = StarRailState::new(String::new());
     for lang in [Lang::Zh, Lang::En] {
         genshin.lang = lang;
         for width in [250.0, 360.0] {
@@ -94,7 +92,6 @@ fn expanded_settings_fit_narrow_forms_in_both_languages() {
                                         ui,
                                         lang,
                                         &mut settings,
-                                        &mut hsr,
                                         false,
                                     ),
                                 }
@@ -262,17 +259,12 @@ fn overflowing_pane_content_keeps_its_own_clip_rect() {
 }
 
 #[test]
-fn titlebar_stays_fixed_and_language_and_window_buttons_remain_clickable() {
+fn titlebar_stays_fixed_and_window_buttons_remain_clickable() {
     use good_tools_app::{
         config::Game,
         gui::{shell, state::Lang},
     };
-    for (x, expected) in [
-        (564.0, "language"),
-        (638.0, "minimize"),
-        (684.0, "maximize"),
-        (730.0, "close"),
-    ] {
+    for (x, expected) in [(638.0, "minimize"), (684.0, "maximize"), (730.0, "close")] {
         let ctx = egui::Context::default();
         theme::setup(&ctx);
         let logos = shell::Logos::load(&ctx);
@@ -314,7 +306,6 @@ fn titlebar_stays_fixed_and_language_and_window_buttons_remain_clickable() {
         drop(draw);
         let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
         match expected {
-            "language" => assert_eq!(lang, Lang::En),
             "close" => assert!(commands
                 .iter()
                 .any(|c| matches!(c, egui::ViewportCommand::Close))),
@@ -325,6 +316,198 @@ fn titlebar_stays_fixed_and_language_and_window_buttons_remain_clickable() {
                 .iter()
                 .any(|c| matches!(c, egui::ViewportCommand::Minimized(true)))),
             _ => unreachable!(),
+        }
+    }
+}
+
+fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Pos2)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.job.text.clone(),
+                text.pos + text.galley.size() / 2.0,
+            )),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+            _ => {},
+        }
+    }
+    let mut texts = Vec::new();
+    for shape in shapes {
+        collect(&shape.shape, &mut texts);
+    }
+    texts
+}
+
+#[test]
+fn sidebar_language_button_names_the_target_language_and_toggles_it() {
+    use good_tools_app::{
+        config::GameNavigation,
+        gui::{shell, state::Lang},
+    };
+    for initial in [Lang::Zh, Lang::En] {
+        let ctx = egui::Context::default();
+        theme::setup(&ctx);
+        let mut lang = initial;
+        let mut navigation = GameNavigation::default();
+        let mut draw = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(150.0, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| shell::sidebar(ui, &mut lang, &mut navigation));
+                },
+            )
+        };
+        draw(vec![]);
+        let frame = draw(vec![]);
+        let label = initial.t("EN", "中");
+        let point = painted_text(&frame.shapes)
+            .into_iter()
+            .find(|(text, _)| text == label)
+            .unwrap()
+            .1;
+        draw(vec![
+            Event::PointerMoved(point),
+            Event::PointerButton {
+                pos: point,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        let output = draw(vec![Event::PointerButton {
+            pos: point,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        drop(draw);
+        assert_eq!(
+            lang,
+            if initial == Lang::Zh {
+                Lang::En
+            } else {
+                Lang::Zh
+            }
+        );
+        assert_eq!(
+            output.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+    }
+}
+
+#[test]
+fn quiet_buttons_have_a_visible_hover_border_and_hand_cursor() {
+    let ctx = egui::Context::default();
+    theme::setup(&ctx);
+    let draw = |events| {
+        ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    theme::text_button(ui, "About", egui::vec2(120.0, 30.0), false);
+                });
+            },
+        )
+    };
+    let initial = draw(vec![]);
+    let point = painted_text(&initial.shapes)
+        .into_iter()
+        .find(|(text, _)| text == "About")
+        .unwrap()
+        .1;
+    let hover = draw(vec![Event::PointerMoved(point)]);
+    assert_eq!(
+        hover.platform_output.cursor_icon,
+        egui::CursorIcon::PointingHand
+    );
+    assert!(hover.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(rect) if rect.stroke.color == theme::ACCENT && rect.stroke.width > 0.0)));
+}
+
+#[test]
+fn about_retains_all_credits_and_card_edges_inside_the_scroll_clip() {
+    use good_tools_app::gui::{
+        credits::{self, CreditSet},
+        state::Lang,
+    };
+    for lang in [Lang::En, Lang::Zh] {
+        for width in [380.0, 860.0] {
+            let ctx = egui::Context::default();
+            theme::setup(&ctx);
+            let mut frame = None;
+            for _ in 0..2 {
+                frame = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 2000.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default()
+                            .show(ctx, |ui| credits::show(ui, lang, CreditSet::Full));
+                    },
+                ));
+            }
+            let frame = frame.unwrap();
+            let texts = painted_text(&frame.shapes);
+            for name in [
+                "yas",
+                "Irminsul",
+                "auto-artifactarium",
+                "Inventory Kamera",
+                "Reliquary Archiver",
+                "Fribbels Star Rail Optimizer",
+                "YAS Star Rail",
+                "wormtql",
+                "1803233552",
+                "Andrewthe13th",
+            ] {
+                assert!(
+                    texts.iter().any(|(text, _)| text == name),
+                    "missing credit: {name}"
+                );
+            }
+            if width >= 640.0 {
+                let genshin = texts
+                    .iter()
+                    .find(|(text, _)| text == lang.t("原神", "Genshin"))
+                    .unwrap()
+                    .1;
+                let hsr = texts
+                    .iter()
+                    .find(|(text, _)| text == lang.t("星穹铁道", "Star Rail"))
+                    .unwrap()
+                    .1;
+                assert!(hsr.x > genshin.x + 200.0);
+                assert!((hsr.y - genshin.y).abs() < 1.0);
+            }
+            for clipped in &frame.shapes {
+                if let egui::Shape::Rect(rect) = &clipped.shape {
+                    if rect.stroke.color == theme::BORDER && rect.stroke.width > 0.0 {
+                        assert!(
+                            clipped
+                                .clip_rect
+                                .contains_rect(rect.rect.expand(rect.stroke.width / 2.0)),
+                            "credit border was clipped at {width}: {:?} vs {:?}",
+                            rect.rect,
+                            clipped.clip_rect
+                        );
+                    }
+                }
+            }
         }
     }
 }

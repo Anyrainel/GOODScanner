@@ -1,6 +1,7 @@
 #[cfg(feature = "capture")]
 pub mod capture_tab;
 pub mod credits;
+pub mod data_refresh;
 pub mod game_switcher;
 pub mod hsr_manager_progress;
 pub mod layout;
@@ -222,6 +223,7 @@ struct GuiApp {
     save_settings: bool,
     splits: layout::Splits,
     logos: shell::Logos,
+    data_refresh: data_refresh::DataRefresh,
     restart_started: bool,
     state: AppState,
     app_config: ApplicationConfigStore,
@@ -243,6 +245,7 @@ impl GuiApp {
             save_settings: true,
             splits: layout::Splits::default(),
             logos: shell::Logos::load(ctx),
+            data_refresh: data_refresh::DataRefresh::default(),
             restart_started: false,
             state,
             app_config,
@@ -303,7 +306,9 @@ impl eframe::App for GuiApp {
         let star_rail_capture_busy = false;
         let star_rail_busy =
             star_rail_scan_running || star_rail_manager_running || star_rail_capture_busy;
-        let game_task_busy = genshin_busy || star_rail_busy;
+        self.data_refresh.poll();
+        let data_refreshing = self.data_refresh.is_running();
+        let game_task_busy = genshin_busy || star_rail_busy || data_refreshing;
 
         shell::window_resize(ctx);
         shell::titlebar(
@@ -315,7 +320,6 @@ impl eframe::App for GuiApp {
         );
         self.state.user_config.lang = self.state.lang.to_str().to_owned();
         yas::lang::set_lang(self.state.lang.to_str());
-        let l = self.state.lang;
 
         // Update banner (between tabs and content)
         update_banner::show(
@@ -388,8 +392,15 @@ impl eframe::App for GuiApp {
                     ui,
                     sidebar.shrink2(egui::vec2(12.0, 0.0)),
                     "sidebar",
-                    |ui| shell::sidebar(ui, l, &mut self.app_config.config.navigation),
+                    |ui| {
+                        shell::sidebar(
+                            ui,
+                            &mut self.state.lang,
+                            &mut self.app_config.config.navigation,
+                        )
+                    },
                 );
+                let l = self.state.lang;
                 let active_game = self.app_config.config.navigation.active_game;
                 let active_tab = self.app_config.config.navigation.active_tab();
                 let [workspace, logs] = layout::split(
@@ -412,12 +423,15 @@ impl eframe::App for GuiApp {
                     workspace.shrink2(egui::vec2(12.0, 16.0)),
                     "workspace",
                     |ui| {
-                        ui.heading(match active_tab {
-                            ToolTab::Scanner => l.t("扫描器", "Scanner"),
-                            ToolTab::Capture => l.t("抓包器", "Capture"),
-                            ToolTab::Manager => l.t("管理器", "Manager"),
-                            ToolTab::Credits => l.t("关于", "About"),
-                        });
+                        self.data_refresh.heading(
+                            ui,
+                            l,
+                            active_game,
+                            active_tab,
+                            !game_task_busy && !update_in_progress && !restart_required,
+                        );
+                        let data_refreshing = self.data_refresh.is_running();
+                        let game_task_busy = genshin_busy || star_rail_busy || data_refreshing;
                         ui.add_space(10.0);
                         if active_tab == ToolTab::Credits {
                             credits::show(
@@ -454,7 +468,9 @@ impl eframe::App for GuiApp {
                                 } else {
                                     ToolTab::Capture
                                 };
-                                let reason = if update_in_progress {
+                                let reason = if data_refreshing {
+                                    l.t("正在更新游戏数据", "Updating game data")
+                                } else if update_in_progress {
                                     l.t("正在更新程序", "Updating the app")
                                 } else {
                                     match running_tab {
@@ -467,6 +483,7 @@ impl eframe::App for GuiApp {
                                 };
                                 theme::blocked_status(ui, l, reason);
                                 if !update_in_progress
+                                    && !data_refreshing
                                     && ui.button(l.t("查看任务", "View task")).clicked()
                                 {
                                     self.app_config.config.navigation.select_tab(running_tab);
@@ -547,7 +564,6 @@ impl eframe::App for GuiApp {
                                                 ui,
                                                 l,
                                                 &mut self.app_config.config.star_rail,
-                                                &mut self.star_rail,
                                                 star_rail_scan_running,
                                             )
                                         },
@@ -689,10 +705,13 @@ impl eframe::App for GuiApp {
             || is_server_running
             || is_capture_busy
             || star_rail_busy
+            || self.data_refresh.is_pending()
             || update_busy
             || config_save_pending;
         if any_running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_secs(60));
         }
     }
 

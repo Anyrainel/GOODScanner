@@ -132,7 +132,6 @@ pub struct CaptureTabState {
     // Advanced
     pub dump_packets: bool,
     pub only_keep_latest_dump: bool,
-    pub data_cache_refresh: state::RefreshState,
 }
 
 impl CaptureTabState {
@@ -160,7 +159,6 @@ impl CaptureTabState {
             output_dir,
             dump_packets: false,
             only_keep_latest_dump: true,
-            data_cache_refresh: state::RefreshState::Idle,
         }
     }
 
@@ -417,18 +415,6 @@ pub fn show_settings(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, is_b
             &mut tab.dump_packets,
             l.t("保存解密数据包", "Save decoded packets"),
         );
-
-        tab.data_cache_refresh.poll();
-        widgets::game_data_refresh_control(
-                        ui,
-                        l,
-                        &mut tab.data_cache_refresh,
-                        UiText::new(
-                            "无法刷新抓包器使用的游戏数据。请检查网络连接，然后重试。",
-                            "Capture's game data could not be refreshed. Check the network connection, then retry.",
-                        ),
-                        genshin_scanner::capture::data_cache::force_refresh,
-                    );
     });
 
     // === Help / FAQ ===

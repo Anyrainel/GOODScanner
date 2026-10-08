@@ -22,6 +22,7 @@ pub fn setup(ctx: &egui::Context) {
     style.visuals.selection.bg_fill = Color32::from_rgb(38, 61, 53);
     style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     style.visuals.hyperlink_color = ACCENT;
+    style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     style.visuals.error_fg_color = ERROR;
     style.visuals.warn_fg_color = WARNING;
     for widget in [
@@ -34,6 +35,8 @@ pub fn setup(ctx: &egui::Context) {
         widget.rounding = egui::Rounding::same(7.0);
     }
     style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(42, 51, 61);
+    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(42, 51, 61);
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
     style.visuals.widgets.hovered.rounding = egui::Rounding::same(7.0);
     style.visuals.widgets.active.rounding = egui::Rounding::same(7.0);
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
@@ -63,16 +66,41 @@ pub fn primary_action(ui: &mut egui::Ui, enabled: bool, text: &str) -> egui::Res
         egui::vec2(available, 44.0),
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
+            ui.visuals_mut().widgets.inactive.weak_bg_fill = ACCENT;
+            ui.visuals_mut().widgets.noninteractive.weak_bg_fill = ACCENT;
+            ui.visuals_mut().widgets.hovered.weak_bg_fill = Color32::from_rgb(155, 234, 211);
+            ui.visuals_mut().widgets.active.weak_bg_fill = Color32::from_rgb(108, 203, 177);
             ui.add_enabled(
                 enabled,
                 egui::Button::new(RichText::new(text).color(Color32::from_rgb(16, 41, 31)))
-                    .fill(ACCENT)
                     .stroke(Stroke::NONE)
                     .rounding(8.0)
                     .min_size(egui::vec2(width, 42.0)),
             )
         },
     )
+    .inner
+}
+
+/// A quiet native button with a visible hover fill, border, and brighter text.
+pub fn text_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: egui::Vec2,
+    selected: bool,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let visuals = ui.visuals_mut();
+        visuals.override_text_color = None;
+        visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+        visuals.widgets.inactive.fg_stroke.color = if selected { ACCENT } else { MUTED };
+        visuals.widgets.hovered.fg_stroke.color = ACCENT;
+        visuals.widgets.hovered.expansion = 0.0;
+        visuals.widgets.active.fg_stroke.color = ACCENT;
+        visuals.widgets.active.expansion = 0.0;
+        ui.add_sized(size, egui::Button::new(text))
+    })
     .inner
 }
 

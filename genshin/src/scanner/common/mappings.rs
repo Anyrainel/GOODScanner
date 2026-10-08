@@ -10,6 +10,7 @@ use yas::{log_debug, log_info, log_warn};
 const MAPPINGS_URL: &str = "https://ggartifact.com/good/mappings.json";
 const MAPPINGS_CACHE_PATH: &str = "data/mappings.json";
 const MAPPINGS_META_PATH: &str = "data/mappings_meta.json";
+
 const MAPPINGS_TTL_SECS: u64 = 24 * 3600; // 1 day
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -67,6 +68,15 @@ fn save_meta(meta: &MappingsMeta) -> Result<()> {
     fs::write(MAPPINGS_META_PATH, json).with_context(|| {
         format!("game-data cache metadata could not be written: {MAPPINGS_META_PATH}")
     })
+}
+
+/// Last successful cache fetch, without downloading or modifying game data.
+pub fn cache_updated_at() -> Option<u64> {
+    if !Path::new(MAPPINGS_CACHE_PATH).is_file() {
+        return None;
+    }
+    let fetched = load_meta().last_fetch_time;
+    (fetched > 0).then_some(fetched)
 }
 
 /// Delete cached files and re-download immediately.

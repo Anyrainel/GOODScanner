@@ -127,7 +127,6 @@ pub fn show_settings(
             &mut settings.dump_images,
             lang.t("保存识别截图", "Save OCR screenshots"),
         );
-        widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
     });
 }
 

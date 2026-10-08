@@ -137,6 +137,20 @@ fn fixing_required_input_clears_the_old_blocking_status() {
 }
 
 #[test]
+fn cache_age_uses_compact_bilingual_units_without_wrapping_future_times() {
+    use good_tools_app::gui::data_refresh::age_text;
+    let now = 1_000_000;
+    assert_eq!(age_text(Lang::Zh, Some(now - 5 * 3600), now), "5小时前");
+    assert_eq!(age_text(Lang::En, Some(now - 5 * 3600), now), "5h ago");
+    assert_eq!(age_text(Lang::Zh, Some(now - 3 * 86400), now), "3天前");
+    assert_eq!(age_text(Lang::En, Some(now - 3 * 86400), now), "3d ago");
+    assert_eq!(age_text(Lang::En, Some(now - 59), now), "Just now");
+    assert_eq!(age_text(Lang::En, Some(now - 60), now), "1m ago");
+    assert_eq!(age_text(Lang::En, Some(now + 60), now), "Clock mismatch");
+    assert_eq!(age_text(Lang::En, None, now), "Age unknown");
+}
+
+#[test]
 fn required_star_rail_inputs_replace_ready_until_they_are_supplied() {
     let mut settings = good_tools_app::config::StarRailSettings::default();
     let mut state = StarRailState::new(String::new());

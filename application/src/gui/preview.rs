@@ -42,6 +42,7 @@ pub fn run(
             config.config.navigation.select_tab(tab);
             let mut app = GuiApp::new(state, config, &cc.egui_ctx);
             app.save_settings = false;
+            app.data_refresh.preview_age(5 * 3600);
             if completed {
                 app.app_config.config.star_rail.trailblazer_name =
                     lang.t("开拓者", "Trailblazer").into();

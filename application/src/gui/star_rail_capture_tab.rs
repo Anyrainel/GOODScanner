@@ -149,7 +149,6 @@ pub struct StarRailCaptureState {
     phase: CapturePhase,
     output_dir: String,
     only_keep_latest_export: bool,
-    data_cache_refresh: super::state::RefreshState,
 }
 
 impl StarRailCaptureState {
@@ -173,7 +172,6 @@ impl StarRailCaptureState {
             phase: CapturePhase::Idle,
             output_dir,
             only_keep_latest_export: false,
-            data_cache_refresh: super::state::RefreshState::Idle,
         }
     }
 
@@ -320,7 +318,6 @@ pub fn show_settings(
                 &mut settings.capture_dump_packets,
                 lang.t("保存解密数据包", "Save decoded packets"),
             );
-            widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
         });
     });
 

@@ -19,6 +19,7 @@ const DATA_CACHE_URL: &str = "https://ggartifact.com/good/data_cache.json";
 const ARTIFACT_CATALOG_FALLBACK_URL: &str = "https://raw.githubusercontent.com/Anyrainel/GenshinTools/a2a851f0cde65494a9699c86a5d6eeca8eb516ea/public/good/data_cache.json";
 const DATA_CACHE_PATH: &str = "data/data_cache.json";
 const DATA_CACHE_META_PATH: &str = "data/data_cache_meta.json";
+
 const DATA_CACHE_TTL_SECS: u64 = 2 * 3600;
 const MIN_VALID_ARTIFACT_ENTRIES: usize = 100;
 
@@ -75,6 +76,14 @@ fn write_meta(meta: &CacheMeta) -> Result<()> {
     fs::write(DATA_CACHE_META_PATH, json).with_context(|| {
         format!("capture cache metadata could not be written: {DATA_CACHE_META_PATH}")
     })
+}
+
+pub fn cache_updated_at() -> Option<u64> {
+    if !Path::new(DATA_CACHE_PATH).is_file() {
+        return None;
+    }
+    let fetched = load_meta().last_fetch_time;
+    (fetched > 0).then_some(fetched)
 }
 
 /// Delete cached files and re-download immediately.

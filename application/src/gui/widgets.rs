@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use super::state::{AppState, Lang, RefreshState, UiError, UiText};
+use super::state::{AppState, Lang, UiError};
 
 /// Native egui frames provide the same spacing and hierarchy for every form.
 pub fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
@@ -132,61 +132,6 @@ pub fn output_folder(ui: &mut egui::Ui, l: Lang, path: &mut String) {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
             *path = folder.display().to_string();
         }
-    }
-}
-
-/// Shared game-data refresh control used by scanner, manager, and capture.
-/// The operation supplies its own localized hint while the original error
-/// chain is retained verbatim in `UiError`.
-pub fn game_data_refresh_control<F>(
-    ui: &mut egui::Ui,
-    l: Lang,
-    state: &mut RefreshState,
-    error_hint: UiText,
-    refresh: F,
-) where
-    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
-{
-    state.poll();
-    ui.horizontal(|ui| {
-        let busy = state.is_running();
-        if ui
-            .add_enabled(
-                !busy,
-                egui::Button::new(l.t("刷新游戏数据", "Refresh game data")),
-            )
-            .clicked()
-        {
-            let thread_start_hint = error_hint.clone();
-            *state = match std::thread::Builder::new()
-                .name("game-data-refresh".to_owned())
-                .spawn(move || {
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(refresh)) {
-                        Ok(result) => {
-                            result.map_err(|error| UiError::from_anyhow(error_hint, &error))
-                        },
-                        Err(panic_info) => {
-                            Err(UiError::from_panic(error_hint, panic_info.as_ref()))
-                        },
-                    }
-                }) {
-                Ok(handle) => RefreshState::Running(handle),
-                Err(error) => RefreshState::Failed(UiError::from_error(thread_start_hint, error)),
-            };
-        }
-        match state {
-            RefreshState::Ok => {
-                ui.colored_label(egui::Color32::GREEN, "OK");
-            },
-            RefreshState::Running(_) => {
-                ui.spinner();
-            },
-            RefreshState::Idle | RefreshState::Failed(_) => {},
-        }
-    });
-
-    if let RefreshState::Failed(error) = state {
-        error_card(ui, l, error);
     }
 }
 
@@ -332,22 +277,6 @@ pub fn inventory_delays(ui: &mut egui::Ui, state: &mut AppState, l: Lang) {
     ]);
 }
 
-pub fn star_rail_game_data_refresh_control(
-    ui: &mut egui::Ui,
-    lang: Lang,
-    state: &mut RefreshState,
-) {
-    game_data_refresh_control(
-        ui,
-        lang,
-        state,
-        super::state::UiText::new(
-            "无法刷新星穹铁道游戏数据。请检查网络连接，然后重试。",
-            "Star Rail game data could not be refreshed. Check your connection, then retry.",
-        ),
-        || hsr_scanner::data_cache::force_refresh().map_err(anyhow::Error::new),
-    );
-}
 /// Keep path fields and their picker buttons within one bounded row, including
 /// long Windows paths inside a horizontally scrollable settings pane.
 pub(super) fn path_control(ui: &mut egui::Ui, value: &mut String, button: &str) -> egui::Response {

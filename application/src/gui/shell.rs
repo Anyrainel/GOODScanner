@@ -91,64 +91,38 @@ pub fn titlebar(
                     game_switcher::show(ui, *lang, game, enabled, Some(logos));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new("×")
-                                .min_size(egui::vec2(36.0, 32.0))
-                                .frame(false),
-                        )
+                    if theme::text_button(ui, "×", egui::vec2(36.0, 32.0), false)
                         .on_hover_text(lang.t("关闭", "Close"))
                         .clicked()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    if ui
-                        .add(
-                            egui::Button::new(if maximized { "❐" } else { "□" })
-                                .min_size(egui::vec2(36.0, 32.0))
-                                .frame(false),
-                        )
-                        .on_hover_text(lang.t("最大化 / 还原", "Maximize / Restore"))
-                        .clicked()
+                    if theme::text_button(
+                        ui,
+                        if maximized { "❐" } else { "□" },
+                        egui::vec2(36.0, 32.0),
+                        false,
+                    )
+                    .on_hover_text(lang.t("最大化 / 还原", "Maximize / Restore"))
+                    .clicked()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                     }
-                    if ui
-                        .add(
-                            egui::Button::new("−")
-                                .min_size(egui::vec2(36.0, 32.0))
-                                .frame(false),
-                        )
+                    if theme::text_button(ui, "−", egui::vec2(36.0, 32.0), false)
                         .on_hover_text(lang.t("最小化", "Minimize"))
                         .clicked()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                    }
-                    ui.add_space(8.0);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(lang.t("中", "EN")).color(theme::ACCENT),
-                            )
-                            .min_size(egui::vec2(48.0, 32.0)),
-                        )
-                        .on_hover_text(lang.t("Switch to English", "切换到中文"))
-                        .clicked()
-                    {
-                        *lang = match lang {
-                            Lang::Zh => Lang::En,
-                            Lang::En => Lang::Zh,
-                        };
                     }
                 });
             });
         });
 }
 
-pub fn sidebar(ui: &mut egui::Ui, lang: Lang, navigation: &mut GameNavigation) {
+pub fn sidebar(ui: &mut egui::Ui, lang: &mut Lang, navigation: &mut GameNavigation) {
     let rect = ui.available_rect_before_wrap();
     let footer = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), (rect.bottom() - 88.0).max(rect.top())),
+        egui::pos2(rect.left(), (rect.bottom() - 124.0).max(rect.top())),
         rect.max,
     );
     let tabs = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), footer.top() - 12.0));
@@ -182,7 +156,11 @@ pub fn sidebar(ui: &mut egui::Ui, lang: Lang, navigation: &mut GameNavigation) {
                             theme::MUTED
                         }),
                     );
-                    if ui.add_sized([width, 42.0], button).clicked() {
+                    if ui
+                        .add_sized([width, 42.0], button)
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
                         tab = value;
                     }
                 }
@@ -194,23 +172,32 @@ pub fn sidebar(ui: &mut egui::Ui, lang: Lang, navigation: &mut GameNavigation) {
     super::layout::region(ui, footer, "sidebar-footer", |ui| {
         ui.set_width(footer.width() - 4.0);
         ui.spacing_mut().item_spacing.y = 4.0;
-        let about = egui::Button::new(egui::RichText::new(lang.t("关于", "About")).color(
-            if navigation.active_tab() == ToolTab::Credits {
-                theme::ACCENT
-            } else {
-                theme::MUTED
-            },
-        ))
-        .frame(false);
-        if ui.add_sized([ui.available_width(), 30.0], about).clicked() {
+        if theme::text_button(
+            ui,
+            lang.t("EN", "中"),
+            egui::vec2(ui.available_width(), 30.0),
+            false,
+        )
+        .on_hover_text(lang.t("Switch to English", "切换到中文"))
+        .clicked()
+        {
+            *lang = match lang {
+                Lang::Zh => Lang::En,
+                Lang::En => Lang::Zh,
+            };
+        }
+        if theme::text_button(
+            ui,
+            lang.t("关于", "About"),
+            egui::vec2(ui.available_width(), 30.0),
+            navigation.active_tab() == ToolTab::Credits,
+        )
+        .clicked()
+        {
             navigation.select_tab(ToolTab::Credits);
         }
         let (label, url) = site(navigation.active_game);
-        if ui
-            .add_sized(
-                [ui.available_width(), 30.0],
-                egui::Button::new(egui::RichText::new(label).color(theme::MUTED)).frame(false),
-            )
+        if theme::text_button(ui, label, egui::vec2(ui.available_width(), 30.0), false)
             .on_hover_text(url)
             .clicked()
         {

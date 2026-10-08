@@ -71,24 +71,18 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_server_running:
     // === Advanced Options (shared with scanner tab) ===
     widgets::fold(ui, l.t("高级选项", "Advanced"), |ui| {
         ui.add_enabled_ui(!is_server_running, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.checkbox(&mut state.verbose, l.t("详细信息", "Verbose"));
-                            ui.checkbox(&mut state.dump_images, l.t("保存 OCR 截图", "Save OCR screenshots"));
-                            ui.checkbox(&mut state.dump_job_data, l.t("保存请求数据", "Dump request data"));
-                        });
-
-                        ui.add_space(4.0);
-                        widgets::game_data_refresh_control(
-                            ui,
-                            l,
-                            &mut state.mappings_refresh,
-                            UiText::new(
-                                "无法刷新管理器使用的游戏数据。请检查网络连接，然后重试。",
-                                "The manager's game data could not be refreshed. Check the network connection, then retry.",
-                            ),
-                            genshin_scanner::scanner::common::mappings::force_refresh,
-                        );
-                    });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut state.verbose, l.t("详细信息", "Verbose"));
+                ui.checkbox(
+                    &mut state.dump_images,
+                    l.t("保存 OCR 截图", "Save OCR screenshots"),
+                );
+                ui.checkbox(
+                    &mut state.dump_job_data,
+                    l.t("保存请求数据", "Dump request data"),
+                );
+            });
+        });
     });
 }
 

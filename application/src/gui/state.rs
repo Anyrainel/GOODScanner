@@ -686,9 +686,6 @@ pub struct AppState {
     // --- Per-tab log buffers ---
     pub scanner_log_lines: Arc<LogStore>,
     pub manager_log_lines: Arc<LogStore>,
-
-    // --- Data refresh ---
-    pub mappings_refresh: RefreshState,
 }
 
 impl Default for AppState {
@@ -740,7 +737,6 @@ impl AppState {
             )),
             scanner_log_lines: Arc::new(LogStore::new(2000)),
             manager_log_lines: Arc::new(LogStore::new(2000)),
-            mappings_refresh: RefreshState::Idle,
         }
     }
 

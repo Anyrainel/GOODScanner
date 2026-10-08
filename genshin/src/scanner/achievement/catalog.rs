@@ -20,6 +20,7 @@ use crate::scanner::common::fuzzy_match::fuzzy_match_map;
 const CATALOG_URL: &str = "https://ggartifact.com/good/mapping_achievements.json";
 const CATALOG_CACHE_PATH: &str = "data/mapping_achievements.json";
 const CATALOG_META_PATH: &str = "data/mapping_achievements_meta.json";
+
 const CATALOG_TTL_SECS: u64 = 24 * 3600;
 
 /// Punctuation stripped before matching, same set as cocogoat `filter`.
@@ -157,6 +158,14 @@ pub struct AchievementCatalog {
 }
 
 impl AchievementCatalog {
+    pub fn cache_updated_at() -> Option<u64> {
+        if !Path::new(CATALOG_CACHE_PATH).is_file() {
+            return None;
+        }
+        let fetched = load_meta().last_fetch_time;
+        (fetched > 0).then_some(fetched)
+    }
+
     pub fn new() -> Result<Self> {
         fetch_if_needed()?;
         Self::load_from_cache()

@@ -105,7 +105,6 @@ pub fn show_settings(
     ui: &mut egui::Ui,
     lang: Lang,
     settings: &mut StarRailSettings,
-    state: &mut StarRailState,
     is_running: bool,
 ) {
     let game_busy = false;
@@ -214,7 +213,7 @@ pub fn show_settings(
                             &mut settings.dump_images,
                             lang.t("保存 OCR 截图", "Save OCR screenshots"),
                         );
-                        widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
+
                     });
     });
 }

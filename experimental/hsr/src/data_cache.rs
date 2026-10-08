@@ -97,6 +97,18 @@ pub fn force_refresh() -> HsrResult<()> {
     load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, true).map(|_| ())
 }
 
+/// Metadata for the UI. Reading it does not load or refresh the reference data.
+pub fn cache_updated_at() -> Option<u64> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Metadata {
+        fetched_at: u64,
+    }
+    let file = fs::File::open(Path::new(DATA_CACHE_DIRECTORY).join("hsr_data_cache.json")).ok()?;
+    let metadata: Metadata = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
+    (metadata.fetched_at > 0).then_some(metadata.fetched_at)
+}
+
 /// Also used by the offline HTTP integration harness. App callers always use the fixed HSR host.
 pub fn load_from_url(root: &Path, url: &str, force: bool) -> HsrResult<ReferenceCache> {
     let _guard = CACHE_LOCK

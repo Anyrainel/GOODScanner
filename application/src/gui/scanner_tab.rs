@@ -75,8 +75,14 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_scanning: bool)
     widgets::fold(ui, l.t("高级选项", "Advanced"), |ui| {
         ui.add_enabled_ui(!is_scanning, |ui| {
             ui.checkbox(&mut state.verbose, l.t("详细日志", "Detailed logs"));
-            ui.checkbox(&mut state.continue_on_failure, l.t("识别失败时继续", "Continue on OCR errors"));
-            ui.checkbox(&mut state.dump_images, l.t("保存 OCR 截图", "Save OCR screenshots"));
+            ui.checkbox(
+                &mut state.continue_on_failure,
+                l.t("识别失败时继续", "Continue on OCR errors"),
+            );
+            ui.checkbox(
+                &mut state.dump_images,
+                l.t("保存 OCR 截图", "Save OCR screenshots"),
+            );
             ui.separator();
             ui.strong(l.t("扫描上限", "Scan limits"));
             widgets::hint(ui, l.t("0 = 全部", "0 = all"));
@@ -84,31 +90,31 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_scanning: bool)
                 (l.t("角色", "Characters"), &mut state.char_max_count),
                 (l.t("武器", "Weapons"), &mut state.weapon_max_count),
                 (l.t("圣遗物", "Artifacts"), &mut state.artifact_max_count),
-                (l.t("成就", "Achievements"), &mut state.achievement_max_count),
+                (
+                    l.t("成就", "Achievements"),
+                    &mut state.achievement_max_count,
+                ),
             ] {
-                widgets::field_row(ui, label, |ui| { max_count_field(ui, value); });
+                widgets::field_row(ui, label, |ui| {
+                    max_count_field(ui, value);
+                });
             }
             ui.separator();
             ui.strong(l.t("OCR 并发", "OCR workers"));
-            widgets::hint(ui, l.t("0 = 按内存自动分配，下次扫描生效", "0 = automatic. Applies on next scan."));
-            widgets::field_row(ui, "v5", |ui| { pool_size_field(ui, &mut state.user_config.ocr_pool_v5_override); });
-            widgets::field_row(ui, "v4", |ui| { pool_size_field(ui, &mut state.user_config.ocr_pool_v4_override); });
-            ui.separator();
-                    widgets::game_data_refresh_control(
-                        ui,
-                        l,
-                        &mut state.mappings_refresh,
-                        UiText::new(
-                            "无法刷新扫描器使用的游戏数据。请检查网络连接，然后重试。",
-                            "The scanner's game data could not be refreshed. Check the network connection, then retry.",
-                        ),
-                        || {
-                            genshin_scanner::scanner::common::mappings::force_refresh()?;
-                            genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()?;
-                            Ok(())
-                        },
-                    );
-                });
+            widgets::hint(
+                ui,
+                l.t(
+                    "0 = 按内存自动分配，下次扫描生效",
+                    "0 = automatic. Applies on next scan.",
+                ),
+            );
+            widgets::field_row(ui, "v5", |ui| {
+                pool_size_field(ui, &mut state.user_config.ocr_pool_v5_override);
+            });
+            widgets::field_row(ui, "v4", |ui| {
+                pool_size_field(ui, &mut state.user_config.ocr_pool_v4_override);
+            });
+        });
     });
 }
 
