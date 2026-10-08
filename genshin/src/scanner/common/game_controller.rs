@@ -6,8 +6,6 @@ use image::RgbImage;
 use yas::{log_debug, log_info, log_warn};
 
 use yas::cancel::CancelToken;
-#[cfg(target_os = "windows")]
-use yas::capture::PrintWindowCapturer;
 #[cfg(all(target_os = "windows", feature = "capturer_wgc"))]
 use yas::capture::WgcCapturer;
 use yas::capture::{CaptureMethod, Capturer, GenericCapturer};
@@ -130,7 +128,6 @@ impl GenshinGameController {
             let hwnd = game_info.hwnd;
             return match method {
                 CaptureMethod::BitBlt => Ok(Rc::new(GenericCapturer::new()?)),
-                CaptureMethod::PrintWindow => Ok(Rc::new(PrintWindowCapturer::new(hwnd)?)),
                 CaptureMethod::Wgc => {
                     #[cfg(feature = "capturer_wgc")]
                     {

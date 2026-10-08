@@ -342,6 +342,9 @@ pub struct ScanProgress {
 /// Exactly one of the two is `Some` while the job is running.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobState {
+    /// Native UI metadata never changes the HTTP response or persisted data.
+    #[serde(skip)]
+    pub ui: JobUiState,
     pub state: JobPhase,
     #[serde(rename = "jobId", skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
@@ -353,9 +356,24 @@ pub struct JobState {
     pub result: Option<ManageResult>,
 }
 
+#[derive(Debug, Clone)]
+pub enum JobKind {
+    Manage { lock: usize, unlock: usize },
+    Equip,
+    Scan,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct JobUiState {
+    pub kind: Option<JobKind>,
+    pub progress: Option<JobProgress>,
+    pub scan_progress: Option<ScanProgress>,
+}
+
 impl JobState {
     pub fn idle() -> Self {
         Self {
+            ui: JobUiState::default(),
             state: JobPhase::Idle,
             job_id: None,
             progress: None,
@@ -367,6 +385,7 @@ impl JobState {
     /// Running state for manage/equip — linear progress.
     pub fn running(job_id: String, total: usize) -> Self {
         Self {
+            ui: JobUiState::default(),
             state: JobPhase::Running,
             job_id: Some(job_id),
             progress: Some(JobProgress {
@@ -412,6 +431,10 @@ impl JobState {
             },
         };
         Self {
+            ui: JobUiState {
+                kind: Some(JobKind::Scan),
+                ..Default::default()
+            },
             state: JobPhase::Running,
             job_id: Some(job_id),
             progress: None,
@@ -422,12 +445,38 @@ impl JobState {
 
     pub fn completed(job_id: String, result: ManageResult) -> Self {
         Self {
+            ui: JobUiState::default(),
             state: JobPhase::Completed,
             job_id: Some(job_id),
             progress: None,
             scan_progress: None,
             result: Some(result),
         }
+    }
+
+    pub fn finished(&self, job_id: String, result: ManageResult) -> Self {
+        let mut next = Self::completed(job_id, result);
+        next.ui = JobUiState {
+            kind: self.ui.kind.clone(),
+            progress: self.progress.clone(),
+            scan_progress: self.scan_progress.clone(),
+        };
+        if let Some(scan) = &mut next.ui.scan_progress {
+            for phase in [
+                &mut scan.characters,
+                &mut scan.weapons,
+                &mut scan.artifacts,
+                &mut scan.achievements,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if matches!(phase.state, PhaseState::Running | PhaseState::Pending) {
+                    phase.state = PhaseState::Aborted;
+                }
+            }
+        }
+        next
     }
 
     /// Lightweight JSON for polling — excludes the full result payload.
@@ -503,6 +552,39 @@ fn escape_json_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_completion_retains_category_results_without_changing_status_protocol() {
+        let mut state = JobState::running_scan("job".into(), true, false, true, false);
+        let scan = state.scan_progress.as_mut().unwrap();
+        scan.characters.as_mut().unwrap().state = PhaseState::Complete;
+        scan.characters.as_mut().unwrap().completed = 5;
+        scan.artifacts.as_mut().unwrap().state = PhaseState::Running;
+        let results = vec![InstructionResult::outcome(
+            "characters",
+            InstructionStatus::Success,
+        )];
+        let summary = ManageSummary::from_results(&results);
+        let finished = state.finished("job".into(), ManageResult { results, summary });
+        let native = finished.ui.scan_progress.as_ref().unwrap();
+        assert_eq!(native.characters.as_ref().unwrap().completed, 5);
+        assert_eq!(
+            native.characters.as_ref().unwrap().state,
+            PhaseState::Complete
+        );
+        assert_eq!(
+            native.artifacts.as_ref().unwrap().state,
+            PhaseState::Aborted
+        );
+        assert!(matches!(finished.ui.kind, Some(JobKind::Scan)));
+        let serialized = serde_json::to_value(&finished).unwrap();
+        assert!(serialized.get("ui").is_none());
+        assert!(serialized.get("scanProgress").is_none());
+        let polling: serde_json::Value = serde_json::from_str(&finished.status_json()).unwrap();
+        assert_eq!(polling["state"], "completed");
+        assert_eq!(polling["summary"]["success"], 1);
+        assert!(polling.get("ui").is_none());
+    }
 
     #[test]
     fn test_lock_manage_request_deser() {

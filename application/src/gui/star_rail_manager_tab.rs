@@ -9,11 +9,11 @@ use super::{
     star_rail_scanner_tab::path_row,
     star_rail_state::{ManagerPreview, StarRailState},
     star_rail_worker,
-    state::{Lang, TaskStatus},
+    state::Lang,
     widgets, worker,
 };
 
-pub fn show(
+pub fn show_status(
     ui: &mut egui::Ui,
     lang: Lang,
     settings: &mut StarRailSettings,
@@ -21,118 +21,88 @@ pub fn show(
     game_busy: bool,
     restart_required: bool,
 ) {
-    invalidate_changed_preview(settings, state);
     let is_running = state.manager_running();
-    let native_failure = state
-        .manager_handle
-        .as_ref()
-        .and_then(super::worker::TaskHandle::native_failure);
-
-    ui.add_space(4.0);
     if restart_required {
-        if let Some(error) = native_failure {
-            widgets::error_card(ui, lang, &error);
-        } else {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 90, 90),
-                lang.t(
-                    "另一个任务发生了底层崩溃。请复制完整错误，然后重启程序。",
-                    "Another task had a low-level crash. Copy the full error, then restart the application.",
-                ),
-            );
-        }
-        ui.add_enabled(
-            false,
-            egui::Button::new(lang.t("需重启程序", "Restart required")),
+        super::theme::restart_required(
+            ui,
+            lang,
+            state
+                .manager_handle
+                .as_ref()
+                .and_then(super::worker::TaskHandle::native_failure)
+                .as_ref(),
         );
         return;
     }
-
+    let status = worker::try_task_status(&state.manager_status);
+    super::theme::task_status(
+        ui,
+        lang,
+        status.as_ref(),
+        lang.t("等待指令文件", "Waiting for an instruction file"),
+    );
+    if !is_running {
+        if let Some(preview) = preview_snapshot(state) {
+            let mut progress = state.manager_progress.lock().unwrap();
+            if !progress.steps.iter().any(|s| s.key != "gear") {
+                super::hsr_manager_progress::plan_steps(&mut progress, &preview.plan);
+            }
+        }
+    }
+    if let Ok(progress) = state.manager_progress.try_lock() {
+        let mut display = progress.clone();
+        if matches!(status, Some(super::state::TaskStatus::Failed(_)))
+            || (!is_running && preview_snapshot(state).is_none())
+        {
+            display.interrupt_unfinished();
+        }
+        super::task_progress::show(ui, lang, &display);
+    }
     ui.horizontal(|ui| {
         if is_running {
             let stopping = state
                 .manager_handle
                 .as_ref()
                 .is_some_and(super::worker::TaskHandle::is_stopping);
-            if ui
-                .add_enabled(!stopping, egui::Button::new(lang.t("■ 停止", "■ Stop")))
-                .clicked()
-            {
+            if super::theme::primary_action(ui, !stopping, lang.t("停止", "Stop")).clicked() {
                 if let Some(handle) = &state.manager_handle {
                     handle.stop();
                 }
             }
-        } else if ui
-            .add_enabled(
-                !game_busy
-                    && !settings.manager_instructions_path.trim().is_empty()
-                    && !settings.manager_journal_path.trim().is_empty(),
-                egui::Button::new(lang.t("▶ 完整重扫并生成预览", "▶ Full Rescan and Preview")),
-            )
-            .clicked()
+        } else if super::theme::primary_action(
+            ui,
+            !game_busy
+                && !settings.manager_instructions_path.trim().is_empty()
+                && !settings.manager_journal_path.trim().is_empty(),
+            lang.t("重扫并生成预览", "Rescan and preview"),
+        )
+        .clicked()
         {
             state.invalidate_manager_preview();
             state.manager_handle = Some(star_rail_worker::spawn_manager_preview(
                 settings,
                 state.manager_status.clone(),
                 state.manager_preview.clone(),
+                state.manager_progress.clone(),
             ));
         }
-
-        if let Some(status) = worker::try_task_status(&state.manager_status) {
-            match status {
-                TaskStatus::Running(message) => {
-                    ui.spinner();
-                    ui.label(message.text(lang));
-                },
-                TaskStatus::Completed(message) => {
-                    ui.colored_label(egui::Color32::from_rgb(100, 200, 100), message.text(lang));
-                },
-                TaskStatus::Idle | TaskStatus::Failed(_) => {},
-            }
-        }
     });
-
-    if game_busy && !is_running {
-        ui.colored_label(
-            egui::Color32::from_rgb(255, 200, 50),
-            lang.t(
-                "另一个游戏数据任务正在运行，请等待完成。",
-                "Another game-data task is running. Wait for it to finish.",
-            ),
-        );
+    if let Some(preview) = preview_snapshot(state) {
+        exact_preview(ui, lang, settings, state, preview, is_running, game_busy);
     }
-    if let Some(TaskStatus::Failed(error)) = worker::try_task_status(&state.manager_status) {
-        widgets::error_card(ui, lang, &error);
-    }
-    ui.label(
-        egui::RichText::new(lang.t(
-            "先完整重扫并审核精确预览，再以预览摘要和逐类授权应用锁定或弃置标记。不会分解、删除或装备遗器。",
-            "First rescan and review the exact preview. Lock or discard-mark changes can run only with that preview digest and per-scope authorization. Relics are never salvaged, deleted, or equipped.",
-        ))
-        .color(egui::Color32::from_rgb(120, 120, 120)),
-    );
-    ui.add_enabled_ui(!is_running && !game_busy, |ui| {
-        widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
-        ui.checkbox(
-            &mut settings.dump_images,
-            lang.t(
-                "保存OCR截图 → debug_images/",
-                "Dump OCR images → debug_images/",
-            ),
-        );
-    });
-    ui.add_space(4.0);
-    ui.separator();
+}
 
-    let preview = preview_snapshot(state);
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            egui::CollapsingHeader::new(lang.t("管理器文件", "Manager Files"))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!is_running && !game_busy, |ui| {
+pub fn show_settings(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    settings: &mut StarRailSettings,
+    state: &mut StarRailState,
+    is_running: bool,
+) {
+    invalidate_changed_preview(settings, state);
+    let game_busy = false;
+    widgets::section(ui, lang.t("管理器文件", "Manager files"), |ui| {
+        ui.add_enabled_ui(!is_running && !game_busy, |ui| {
                         path_row(
                             ui,
                             lang.t("GGStarRail 指令", "GGStarRail instructions"),
@@ -141,30 +111,24 @@ pub fn show(
                             false,
                         );
                         journal_path_row(ui, lang, &mut settings.manager_journal_path);
-                        ui.label(
+                        ui.add(egui::Label::new(
                             egui::RichText::new(lang.t(
                                 "恢复日志是追加写入的安全记录。若操作中断，请保留它并在下一次应用时使用同一路径。",
                                 "The recovery journal is an append-only safety record. If an operation is interrupted, keep it and use the same path on the next apply.",
                             ))
                             .small()
-                            .color(egui::Color32::from_rgb(120, 120, 120)),
-                        );
+                            .color(super::theme::MUTED),
+                        ).wrap());
                     });
-                });
+    });
 
-            if let Some(preview) = preview {
-                exact_preview(ui, lang, settings, state, preview, is_running, game_busy);
-            } else if !is_running {
-                ui.add_space(8.0);
-                ui.colored_label(
-                    egui::Color32::from_rgb(120, 120, 120),
-                    lang.t(
-                        "尚无可审核的预览。点击“完整重扫并生成预览”不会更改游戏。",
-                        "There is no reviewable preview yet. Full Rescan and Preview never changes the game.",
-                    ),
-                );
-            }
-        });
+    widgets::fold(ui, lang.t("高级设置", "Advanced settings"), |ui| {
+        ui.checkbox(
+            &mut settings.dump_images,
+            lang.t("保存识别截图", "Save OCR screenshots"),
+        );
+        widgets::star_rail_game_data_refresh_control(ui, lang, &mut state.data_cache_refresh);
+    });
 }
 
 fn invalidate_changed_preview(settings: &StarRailSettings, state: &mut StarRailState) {
@@ -289,25 +253,23 @@ fn exact_preview(
 
     let authorized = selected_scopes(state);
     let all_required = required.is_subset(&authorized);
-    if ui
-        .add_enabled(
-            !is_running
-                && !game_busy
-                && state.manager_reviewed
-                && all_required
-                && !settings.manager_journal_path.trim().is_empty(),
-            egui::Button::new(lang.t(
-                "应用这份预览中的已授权变更",
-                "Apply Authorized Changes from This Preview",
-            )),
-        )
-        .clicked()
+    if super::theme::primary_action(
+        ui,
+        !is_running
+            && !game_busy
+            && state.manager_reviewed
+            && all_required
+            && !settings.manager_journal_path.trim().is_empty(),
+        lang.t("应用已授权变更", "Apply approved changes"),
+    )
+    .clicked()
     {
         state.manager_handle = Some(star_rail_worker::spawn_manager_apply(
             settings,
             state.manager_status.clone(),
             state.manager_preview.clone(),
             authorized,
+            state.manager_progress.clone(),
         ));
     }
     if !all_required {
@@ -339,20 +301,14 @@ fn selected_scopes(state: &StarRailState) -> BTreeSet<MutationScope> {
 }
 
 fn journal_path_row(ui: &mut egui::Ui, lang: Lang, value: &mut String) {
-    ui.horizontal(|ui| {
-        ui.label(format!("{}:", lang.t("恢复日志", "Recovery journal")));
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .desired_width((ui.available_width() - 120.0).max(120.0)),
-        );
-        if ui.button(lang.t("选择路径...", "Choose path...")).clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON Lines", &["jsonl"])
-                .set_file_name("hsr_manager_journal.jsonl")
-                .save_file()
-            {
-                *value = path.display().to_string();
-            }
+    ui.label(lang.t("恢复日志", "Recovery journal"));
+    if widgets::path_control(ui, value, lang.t("选择路径...", "Choose path...")).clicked() {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON Lines", &["jsonl"])
+            .set_file_name("hsr_manager_journal.jsonl")
+            .save_file()
+        {
+            *value = path.display().to_string();
         }
-    });
+    }
 }

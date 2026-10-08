@@ -166,6 +166,16 @@ pub trait ManageExecutor {
         progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
         cancel_token: yas::cancel::CancelToken,
     ) -> anyhow::Result<ScanResult>;
+
+    fn execute_scan_observed(
+        &mut self,
+        request: &ScanRequest,
+        progress_fn: Option<&ProgressFn<'_>>,
+        cancel_token: yas::cancel::CancelToken,
+        _phase_fn: Option<&crate::scanner::common::progress::ScanPhaseFn<'_>>,
+    ) -> anyhow::Result<ScanResult> {
+        self.execute_scan(request, progress_fn, cancel_token)
+    }
 }
 
 /// Real executor: wraps a game controller and artifact manager.
@@ -203,6 +213,16 @@ impl ManageExecutor for GameExecutor {
         progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
         cancel_token: yas::cancel::CancelToken,
     ) -> anyhow::Result<ScanResult> {
+        self.execute_scan_observed(request, progress_fn, cancel_token, None)
+    }
+
+    fn execute_scan_observed(
+        &mut self,
+        request: &ScanRequest,
+        progress_fn: Option<&ProgressFn<'_>>,
+        cancel_token: yas::cancel::CancelToken,
+        phase_fn: Option<&crate::scanner::common::progress::ScanPhaseFn<'_>>,
+    ) -> anyhow::Result<ScanResult> {
         let mut config = self.scan_defaults.clone();
         config.scan_characters = request.characters;
         config.scan_weapons = request.weapons;
@@ -224,6 +244,7 @@ impl ManageExecutor for GameExecutor {
             &config,
             progress_fn,
             None,
+            phase_fn,
             cancel_token,
             ScanRunOptions {
                 save_on_cancel: false,
@@ -673,9 +694,37 @@ pub fn run_server<F>(
 where
     F: FnMut() -> anyhow::Result<Box<dyn ManageExecutor>>,
 {
+    run_server_observed(
+        port,
+        init_executor,
+        enabled,
+        shutdown,
+        dump_job_data,
+        status_fn,
+        None,
+    )
+}
+
+pub fn run_server_observed<F>(
+    port: u16,
+    init_executor: F,
+    enabled: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    dump_job_data: bool,
+    status_fn: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    native_job: Option<Arc<Mutex<JobState>>>,
+) -> Result<()>
+where
+    F: FnMut() -> anyhow::Result<Box<dyn ManageExecutor>>,
+{
     let addr = format!("127.0.0.1:{}", port);
     let server = Server::http(&addr).map_err(|e| contextualize_server_bind_error(port, e))?;
     let server = Arc::new(server);
+    if let Some(f) = &status_fn {
+        f(&format!(
+            "等待网页请求 · 端口 {port} / Waiting for a web request · port {port}"
+        ));
+    }
 
     log_info!(
         "HTTP服务器已启动：http://{}",
@@ -684,7 +733,8 @@ where
     );
 
     // Shared state for async job tracking
-    let job_state: Arc<Mutex<JobState>> = Arc::new(Mutex::new(JobState::idle()));
+    let job_state = native_job.unwrap_or_else(|| Arc::new(Mutex::new(JobState::idle())));
+    *job_state.lock().unwrap() = JobState::idle();
 
     // Per-type data caches (populated by scan/manage jobs).
     let character_cache: Arc<Mutex<ScanDataCache<GoodCharacter>>> =
@@ -1018,7 +1068,7 @@ where
                         results: err_results,
                         summary,
                     };
-                    *state = JobState::completed(job_id.clone(), result);
+                    *state = state.finished(job_id.clone(), result);
                     if let Some(ref f) = status_fn {
                         f(&format!(
                             "服务器运行中，端口 {} / Server running on port {}",
@@ -1119,6 +1169,31 @@ where
             }
         };
 
+        let phases_state = job_state.clone();
+        let scan_phase_fn = move |key: &str, event| {
+            use crate::scanner::common::progress::ScanPhaseEvent;
+            if let Ok(mut state) = phases_state.lock() {
+                if let Some(scan) = &mut state.scan_progress {
+                    let slot = match key {
+                        "characters" => &mut scan.characters,
+                        "weapons" => &mut scan.weapons,
+                        "artifacts" => &mut scan.artifacts,
+                        "achievements" => &mut scan.achievements,
+                        _ => return,
+                    };
+                    if let Some(phase) = slot {
+                        phase.state = match event {
+                            ScanPhaseEvent::Started => PhaseState::Running,
+                            ScanPhaseEvent::Complete(count) => {
+                                phase.completed = count;
+                                PhaseState::Complete
+                            },
+                            ScanPhaseEvent::Interrupted => PhaseState::Aborted,
+                        };
+                    }
+                }
+            }
+        };
         let cancel_token = yas::cancel::CancelToken::new();
 
         // Dispatch: manage/equip use ManageResult; scan builds its own ManageResult summary.
@@ -1152,10 +1227,11 @@ where
                         invalidates_cache: true,
                     }
                 },
-                JobRequest::Scan(scan_req) => JobOutcome::Scan(exec.execute_scan(
+                JobRequest::Scan(scan_req) => JobOutcome::Scan(exec.execute_scan_observed(
                     &scan_req,
                     Some(&scan_progress_fn),
                     cancel_token,
+                    Some(&scan_phase_fn),
                 )),
             },
         )) {
@@ -1184,7 +1260,8 @@ where
                     )];
                 let summary = ManageSummary::from_results(&results);
                 let result = ManageResult { results, summary };
-                *job_state.lock().unwrap() = JobState::completed(job_id.clone(), result);
+                let mut state = job_state.lock().unwrap();
+                *state = state.finished(job_id.clone(), result);
                 continue;
             },
         };
@@ -1232,7 +1309,7 @@ where
                     },
                 }
                 let mut state = job_state.lock().unwrap();
-                *state = JobState::completed(job_id.clone(), result);
+                *state = state.finished(job_id.clone(), result);
             },
             JobOutcome::Scan(scan_result) => {
                 match scan_result {
@@ -1310,7 +1387,7 @@ where
                         let summary = ManageSummary::from_results(&results);
                         let result = ManageResult { results, summary };
                         let mut state = job_state.lock().unwrap();
-                        *state = JobState::completed(job_id.clone(), result);
+                        *state = state.finished(job_id.clone(), result);
                     },
                     Err(e) => {
                         log_error!(
@@ -1329,7 +1406,7 @@ where
                         let summary = ManageSummary::from_results(&results);
                         let result = ManageResult { results, summary };
                         let mut state = job_state.lock().unwrap();
-                        *state = JobState::completed(job_id.clone(), result);
+                        *state = state.finished(job_id.clone(), result);
                     },
                 }
             },
@@ -1686,6 +1763,10 @@ fn handle_manage(
     {
         let mut s = state.lock().unwrap();
         *s = JobState::running(job_id.clone(), total);
+        s.ui.kind = Some(crate::manager::models::JobKind::Manage {
+            lock: manage_request.lock.len(),
+            unlock: manage_request.unlock.len(),
+        });
     }
 
     // Send to execution thread
@@ -1846,6 +1927,7 @@ fn handle_equip(
     {
         let mut s = state.lock().unwrap();
         *s = JobState::running(job_id.clone(), total);
+        s.ui.kind = Some(crate::manager::models::JobKind::Equip);
     }
 
     if let Err(e) = job_tx.send((job_id.clone(), JobRequest::Equip(equip_request))) {

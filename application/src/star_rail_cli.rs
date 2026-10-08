@@ -49,7 +49,6 @@ enum Capture {
     Auto,
     Bitblt,
     Wgc,
-    Printwindow,
 }
 
 impl Capture {
@@ -58,7 +57,6 @@ impl Capture {
             Self::Auto => StarRailCaptureMethod::Auto,
             Self::Bitblt => StarRailCaptureMethod::BitBlt,
             Self::Wgc => StarRailCaptureMethod::Wgc,
-            Self::Printwindow => StarRailCaptureMethod::PrintWindow,
         }
     }
 }
@@ -257,7 +255,7 @@ mod tests {
             };
             let mut settings = StarRailSettings {
                 hdr_mode: !expected,
-                capture_method: StarRailCaptureMethod::PrintWindow,
+                capture_method: StarRailCaptureMethod::BitBlt,
                 ..Default::default()
             };
             args.apply(&mut settings);
@@ -286,6 +284,16 @@ mod tests {
         args.apply(&mut settings);
         assert!(settings.hdr_mode);
         assert_eq!(settings.capture_method, StarRailCaptureMethod::Auto);
+    }
+
+    #[test]
+    fn retired_capture_backend_is_not_offered_by_the_cli() {
+        for command in ["scan", "check"] {
+            assert!(
+                Cli::try_parse_from(["star-rail", command, "--capture-method", "printwindow"])
+                    .is_err()
+            );
+        }
     }
 
     #[test]

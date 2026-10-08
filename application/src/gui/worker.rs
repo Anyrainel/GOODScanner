@@ -654,6 +654,10 @@ impl TaskHandle {
     /// or by RMB). Lets the UI distinguish "running" from "stopping".
     pub fn is_stopping(&self) -> bool {
         self.cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
+            || self
+                .shutdown
+                .as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Signal the task to shut down gracefully.
@@ -703,13 +707,13 @@ pub(super) fn set_task_failure(status: &Arc<Mutex<TaskStatus>>, error: UiError) 
 /// Shared cancellable worker boundary used by game-specific GUI adapters.
 /// The game adapter owns domain setup and result wording; this function owns
 /// panic/native-crash containment and the common stop handle.
-pub(super) fn spawn_cancellable_task(
+pub(super) fn spawn_cancellable_task<R: Into<TaskStatus> + Send + 'static>(
     task: TaskKind,
     log_source: LogSource,
     status: Arc<Mutex<TaskStatus>>,
     initial_msg: UiText,
     stopping_msg: UiText,
-    run: impl FnOnce(yas::cancel::CancelToken) -> Result<UiText, UiError> + Send + 'static,
+    run: impl FnOnce(yas::cancel::CancelToken) -> Result<R, UiError> + Send + 'static,
 ) -> TaskHandle {
     let cancel_token = yas::cancel::CancelToken::new();
     let worker_cancel = cancel_token.clone();
@@ -721,8 +725,16 @@ pub(super) fn spawn_cancellable_task(
         log_source,
         status.clone(),
         native_crash.clone(),
-        move |status| match run(worker_cancel) {
-            Ok(message) => *lock_status_recover(&status) = TaskStatus::Completed(message),
+        move |status| match run(worker_cancel.clone()) {
+            Ok(message) => {
+                let outcome = message.into();
+                *lock_status_recover(&status) = match outcome {
+                    TaskStatus::Completed(message) if worker_cancel.is_cancelled() => {
+                        TaskStatus::Stopped(message)
+                    },
+                    other => other,
+                };
+            },
             Err(error) => set_task_failure(&status, error),
         },
     ) {
@@ -779,6 +791,27 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Spawn a scan operation on a background thread.
 pub fn spawn_scan(state: &AppState) -> TaskHandle {
     let status = state.scan_status.clone();
+    let progress = state.scan_progress.clone();
+    {
+        use super::task_progress::{Step, TaskProgress};
+        let mut steps = Vec::new();
+        for (selected, key, zh, en) in [
+            (state.scan_characters, "characters", "角色", "Characters"),
+            (state.scan_weapons, "weapons", "武器", "Weapons"),
+            (state.scan_artifacts, "artifacts", "圣遗物", "Artifacts"),
+            (
+                state.scan_achievements,
+                "achievements",
+                "成就",
+                "Achievements",
+            ),
+        ] {
+            if selected {
+                steps.push(Step::new(key, zh, en));
+            }
+        }
+        *progress.lock().unwrap() = TaskProgress { steps };
+    }
     let user_config = state.user_config.clone();
     let scan_config = state.to_scan_config();
     let token = yas::cancel::CancelToken::new();
@@ -855,57 +888,65 @@ pub fn spawn_scan(state: &AppState) -> TaskHandle {
                     return;
                 }
                 let phase = UiText::from_bilingual(msg);
-                let display = UiText::new(
-                    format!("{}  (鼠标右键终止)", phase.text(super::state::Lang::Zh)),
-                    format!(
-                        "{}  (Right-click to abort)",
-                        phase.text(super::state::Lang::En)
-                    ),
-                );
-                *status_for_cb.lock().unwrap() = TaskStatus::Running(display);
+                *status_for_cb.lock().unwrap() = TaskStatus::Running(phase);
             };
 
-            let result = genshin_scanner::cli::run_scan_core(
+            let counts = |completed, total, _id: &str, key: &str| {
+                use super::task_progress::StepState;
+                if let Some(step) = progress
+                    .lock()
+                    .unwrap()
+                    .steps
+                    .iter_mut()
+                    .find(|s| s.key == key)
+                {
+                    step.completed = completed;
+                    step.total = if key != "characters" && total > 0 {
+                        Some(total)
+                    } else {
+                        None
+                    };
+                    step.state = StepState::Running;
+                }
+            };
+            let phases = |key: &str, event| {
+                use super::task_progress::StepState;
+                use genshin_scanner::scanner::common::progress::ScanPhaseEvent;
+                if let Some(step) = progress
+                    .lock()
+                    .unwrap()
+                    .steps
+                    .iter_mut()
+                    .find(|s| s.key == key)
+                {
+                    step.state = match event {
+                        ScanPhaseEvent::Started => StepState::Running,
+                        ScanPhaseEvent::Complete(count) => {
+                            step.completed = count;
+                            StepState::Complete
+                        },
+                        ScanPhaseEvent::Interrupted => StepState::Interrupted,
+                    };
+                }
+            };
+            let result = genshin_scanner::cli::run_scan_core_observed(
                 &user_config,
                 &scan_config,
                 Some(&status_fn),
                 Some(token),
+                Some(&counts),
+                Some(&phases),
             );
-            match result {
-                Ok(path) => {
-                    let msg = if cancel_for_result.is_cancelled() {
-                        UiText::new(
-                            format!("已停止，部分数据已导出至 {}", path),
-                            format!("Stopped; partial data exported to {}", path),
-                        )
-                    } else {
-                        UiText::new(
-                            format!("已导出至 {}", path),
-                            format!("Exported to {}", path),
-                        )
-                    };
-                    *status.lock().unwrap() = TaskStatus::Completed(msg);
-                },
-                Err(e) => {
-                    if cancel_for_result.is_cancelled() {
-                        // Pre-scan setup (admin check, mappings load, etc.) may
-                        // fail immediately after a cancel before any data is
-                        // gathered — still surface as a clean stop, not an error.
-                        *status.lock().unwrap() =
-                            TaskStatus::Completed(UiText::new("已停止", "Stopped"));
-                    } else {
-                        set_task_failure(
-                            &status,
-                            UiError::from_anyhow(
-                                UiText::new(
-                                    "扫描未能完成。下方完整错误包含失败步骤和底层原因，可复制后搜索或寻求帮助。",
-                                    "The scan could not finish. The full error below includes the failed step and underlying cause and can be copied for searching or support.",
-                                ),
-                                &e,
-                            ),
-                        );
-                    }
-                },
+            progress.lock().unwrap().interrupt_unfinished();
+            let outcome = scan_result_status(
+                result,
+                &progress.lock().unwrap(),
+                cancel_for_result.is_cancelled(),
+            );
+            if let TaskStatus::Failed(error) = outcome {
+                set_task_failure(&status, error);
+            } else {
+                *status.lock().unwrap() = outcome;
             }
         },
     ) {
@@ -928,9 +969,91 @@ pub fn spawn_scan(state: &AppState) -> TaskHandle {
     }
 }
 
+fn scan_result_status(
+    result: anyhow::Result<String>,
+    progress: &super::task_progress::TaskProgress,
+    cancelled: bool,
+) -> TaskStatus {
+    match result {
+        Ok(path) => TaskStatus::Exported {
+            message: UiText::new("扫描已完成", "Scan completed"),
+            path,
+            partial: cancelled
+                || progress.steps.iter().any(|step| {
+                    step.state != super::task_progress::StepState::Complete
+                        || step.total.is_some_and(|total| step.completed < total)
+                }),
+        },
+        Err(error) if error.is::<genshin_scanner::scanner::common::progress::ScanCancelled>() => {
+            TaskStatus::Stopped(UiText::new(
+                "扫描已停止 · 未导出",
+                "Scan stopped · no export",
+            ))
+        },
+        Err(error) => TaskStatus::Failed(UiError::from_anyhow(
+            UiText::new("扫描未能完成。", "The scan could not finish."),
+            &error,
+        )),
+    }
+}
+
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+    use crate::gui::task_progress::{Step, StepState, TaskProgress};
+
+    #[test]
+    fn cancellation_does_not_hide_an_export_write_failure() {
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "cannot write partial export: access denied",
+        ));
+        let status = scan_result_status(Err(error), &TaskProgress::default(), true);
+        let TaskStatus::Failed(error) = status else {
+            panic!("write failure was hidden")
+        };
+        assert!(error.copy_text(Lang::En).contains("access denied"));
+    }
+
+    #[test]
+    fn a_clean_stop_and_a_saved_partial_export_have_distinct_outcomes() {
+        let stopped = scan_result_status(
+            Err(genshin_scanner::scanner::common::progress::ScanCancelled.into()),
+            &TaskProgress::default(),
+            true,
+        );
+        assert!(matches!(stopped, TaskStatus::Stopped(_)));
+        let path = "C:/exports/partial.json".to_owned();
+        let saved = scan_result_status(Ok(path.clone()), &TaskProgress::default(), true);
+        assert!(
+            matches!(saved, TaskStatus::Exported { path: saved_path, partial: true, .. } if saved_path == path)
+        );
+    }
+
+    #[test]
+    fn incomplete_category_counts_cannot_claim_a_full_export() {
+        let mut step = Step::new("weapons", "武器", "Weapons");
+        step.state = StepState::Complete;
+        step.completed = 9;
+        step.total = Some(10);
+        let mut progress = TaskProgress { steps: vec![step] };
+        assert!(matches!(
+            scan_result_status(Ok("export.json".into()), &progress, false),
+            TaskStatus::Exported { partial: true, .. }
+        ));
+        progress.steps[0].completed = 10;
+        assert!(matches!(
+            scan_result_status(Ok("export.json".into()), &progress, false),
+            TaskStatus::Exported { partial: false, .. }
+        ));
+    }
+}
+
 /// Spawn the HTTP server on a background thread.
 pub fn spawn_server(state: &AppState) -> TaskHandle {
     let status = state.server_status.clone();
+    let job = state.server_job.clone();
+    *job.lock().unwrap() = genshin_scanner::manager::models::JobState::idle();
     let user_config = state.user_config.clone();
     let port = state.server_port;
     let enabled = state.server_enabled.clone();
@@ -942,8 +1065,8 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
     let shutdown_clone = shutdown.clone();
 
     let msg = UiText::new(
-        format!("服务器运行中，端口 {}", port),
-        format!("Server running on port {}", port),
+        format!("正在启动连接 · 端口 {}", port),
+        format!("Starting connection · port {}", port),
     );
     *status.lock().unwrap() = TaskStatus::Running(msg);
 
@@ -993,11 +1116,18 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
             }
 
             let status_clone = status.clone();
+            let shutdown_for_status = shutdown_clone.clone();
             let status_fn = Arc::new(move |msg: &str| {
-                *status_clone.lock().unwrap() = TaskStatus::Running(UiText::from_bilingual(msg));
+                *status_clone.lock().unwrap() = TaskStatus::Running(
+                    if shutdown_for_status.load(std::sync::atomic::Ordering::Relaxed) {
+                        UiText::new("正在停止连接", "Stopping connection")
+                    } else {
+                        UiText::from_bilingual(msg)
+                    },
+                );
             });
 
-            match genshin_scanner::cli::run_server_core(
+            match genshin_scanner::cli::run_server_core_observed(
                 &user_config,
                 port,
                 &genshin_scanner::cli::OcrEngineArgs::default(),
@@ -1008,6 +1138,7 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
                 dump_images,
                 dump_job_data,
                 Some(status_fn),
+                Some(job),
             ) {
                 Ok(()) => {
                     *status.lock().unwrap() =

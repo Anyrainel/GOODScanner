@@ -60,6 +60,11 @@ path = "src/bin/ocr_test.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "ui_preview"
+path = "src/bin/ui_preview.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "ocr_eval"
 path = "src/bin/ocr_eval.rs"
 required-features = ["dev-tools"]
@@ -77,6 +82,16 @@ required-features = ["dev-tools"]
 [[test]]
 name = "ui_error"
 path = "tests/ui_error.rs"
+required-features = ["test-as-invoker"]
+
+[[test]]
+name = "gui_layout"
+path = "tests/gui_layout.rs"
+required-features = ["test-as-invoker"]
+
+[[test]]
+name = "gui_feedback"
+path = "tests/gui_feedback.rs"
 required-features = ["test-as-invoker"]
 
 [[test]]

@@ -20,6 +20,12 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
 
+        ui.heading(super::shell::product_name());
+        ui.label(genshin_scanner::updater::current_version_display());
+        ui.hyperlink_to("GitHub", "https://github.com/Anyrainel/GOODScanner");
+        ui.add_space(12.0);
+        ui.strong(l.t("开源致谢", "Credits"));
+
         ui.label(
             egui::RichText::new(l.t(
                 "本软件使用了以下开源项目的代码，在此表示感谢。",
@@ -95,7 +101,7 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
             );
         }
 
-        if set == CreditSet::StarRail {
+        if matches!(set, CreditSet::StarRail | CreditSet::Full | CreditSet::Scanner) {
             #[cfg(feature = "capture")]
             entry(
                 ui,
@@ -145,14 +151,19 @@ pub fn show(ui: &mut egui::Ui, l: Lang, set: CreditSet) {
 
         ui.add_space(8.0);
         ui.separator();
-        ui.label(
-            egui::RichText::new(l.t(
-                "完整许可证文本请查看 THIRD_PARTY_NOTICES.md",
-                "Full license texts are in THIRD_PARTY_NOTICES.md",
-            ))
-            .weak()
-            .size(11.0),
-        );
+        egui::CollapsingHeader::new(l.t("许可证与版权声明", "Licenses & copyright notices")).show(ui, |ui| {
+            let mut notices = include_str!("../../../THIRD_PARTY_NOTICES.md");
+            ui.add(egui::TextEdit::multiline(&mut notices).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+            let mut hsr_notices = include_str!("../../../experimental/hsr/THIRD_PARTY_NOTICES.md");
+            ui.add(egui::TextEdit::multiline(&mut hsr_notices).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+            #[cfg(feature = "capture")]
+            {
+                let mut license = include_str!("../../../experimental/hsr/LICENSE-reliquary.txt");
+                ui.add(egui::TextEdit::multiline(&mut license).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+            }
+            let mut archiver_license = include_str!("../../../experimental/hsr/LICENSE-reliquary-archiver.txt");
+            ui.add(egui::TextEdit::multiline(&mut archiver_license).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+        });
     });
 }
 

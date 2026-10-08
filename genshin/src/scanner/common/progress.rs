@@ -17,3 +17,23 @@
 /// a naked `dyn Fn + Send + Sync` alias would default to `'static` and force
 /// every caller to Box into a 'static closure.
 pub type ProgressFn<'a> = dyn Fn(usize, usize, &str, &str) + Send + Sync + 'a;
+
+/// Category lifecycle is separate from rolling item counts. A partial export
+/// after cancellation must never make a category look successfully finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScanPhaseEvent {
+    Started,
+    Complete(usize),
+    Interrupted,
+}
+
+pub type ScanPhaseFn<'a> = dyn Fn(&str, ScanPhaseEvent) + Send + Sync + 'a;
+/// A user stop without an export is different from a failed export after Stop.
+#[derive(Debug)]
+pub struct ScanCancelled;
+impl std::fmt::Display for ScanCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("扫描被用户中断 / Scan stopped by user")
+    }
+}
+impl std::error::Error for ScanCancelled {}

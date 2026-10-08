@@ -4,91 +4,51 @@ use super::state::{AppState, TaskStatus, UiError, UiText};
 use super::widgets;
 use super::worker::{self, TaskHandle};
 
-pub fn show(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    scan_handle: &mut Option<TaskHandle>,
-    game_busy: bool,
-    restart_required: bool,
-) {
-    let is_scanning = scan_handle.as_ref().is_some_and(|h| !h.is_finished());
-    let native_failure = scan_handle.as_ref().and_then(TaskHandle::native_failure);
+pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_scanning: bool) {
     let l = state.lang;
 
-    // === Action bar (always visible at top) ===
-    ui.add_space(4.0);
-    action_bar(
-        ui,
-        state,
-        scan_handle,
-        is_scanning,
-        game_busy,
-        restart_required,
-        native_failure.as_ref(),
-    );
-    if restart_required {
-        return;
-    }
-    ui.colored_label(
-        egui::Color32::from_rgb(120, 120, 120),
-        if is_scanning {
-            l.t(
-                "扫描过程中可按鼠标右键终止。",
-                "Right-click to abort during scanning.",
-            )
-        } else {
-            l.t(
-                "请确认游戏已运行，扫描过程中可按鼠标右键终止。",
-                "Make sure the game is running. Right-click to abort during scanning.",
-            )
-        },
-    );
-    ui.add_space(4.0);
-    ui.separator();
-
-    // === Scrollable config area ===
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-        ui.add_space(4.0);
-
-        // === Character Names (always visible, shared with manager tab) ===
-        widgets::character_names_section(ui, state, !is_scanning);
-
-        ui.add_space(8.0);
-
-        // === Export Settings (collapsible, horizontal) ===
-        egui::CollapsingHeader::new(l.t("导出设置", "Export Settings"))
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!is_scanning, |ui| {
-                    ui.label(l.t("请先清除背包内的过滤选项。", "Please clear up filters in inventory first."));
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut state.scan_characters, l.t("角色", "Characters"));
-                        ui.add_space(12.0);
-                        ui.checkbox(&mut state.scan_weapons, l.t("武器", "Weapons"));
-                        ui.add_space(12.0);
-                        ui.checkbox(&mut state.scan_artifacts, l.t("圣遗物", "Artifacts"));
-                        ui.add_space(12.0);
-                        ui.checkbox(&mut state.scan_achievements, l.t("成就", "Achievements"));
-                    });
-                    ui.checkbox(&mut state.hdr_mode, l.t("我的原神在使用HDR", "HDR mode"));
-                    ui.checkbox(
-                        &mut state.only_keep_latest_export,
-                        l.t("仅保留最新导出", "Only keep latest export"),
-                    );
-                });
+    widgets::section(ui, l.t("扫描内容", "Scan targets"), |ui| {
+        ui.add_enabled_ui(!is_scanning, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut state.scan_characters, l.t("角色", "Characters"));
+                ui.checkbox(&mut state.scan_weapons, l.t("武器", "Weapons"));
+                ui.checkbox(&mut state.scan_artifacts, l.t("圣遗物", "Artifacts"));
+                ui.checkbox(&mut state.scan_achievements, l.t("成就", "Achievements"));
             });
+            widgets::hint(
+                ui,
+                l.t(
+                    "扫描前请清除背包过滤条件。",
+                    "Clear inventory filters first.",
+                ),
+            );
+        });
+    });
+    if state.scan_characters || state.names_need_attention {
+        widgets::section(ui, l.t("角色信息", "Character names"), |ui| {
+            widgets::character_names_section(ui, state, !is_scanning);
+        });
+    }
+    widgets::section(ui, l.t("导出与显示", "Export & display"), |ui| {
+        ui.add_enabled_ui(!is_scanning, |ui| {
+            ui.checkbox(
+                &mut state.only_keep_latest_export,
+                l.t("仅保留最新导出", "Keep latest export only"),
+            );
+            ui.checkbox(&mut state.hdr_mode, l.t("游戏使用 HDR", "Game uses HDR"));
+            ui.checkbox(
+                &mut state.save_on_cancel,
+                l.t("停止时保存已扫描结果", "Save results when stopped"),
+            );
+        });
+    });
 
-        // === Timing Delays ===
-        egui::CollapsingHeader::new(l.t("延迟设置", "Timing Delays"))
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!is_scanning, |ui| {
-                    // Two delay groups side by side: Character and Inventory
+    // === Timing Delays ===
+    widgets::fold(ui, l.t("延迟设置", "Timing"), |ui| {
+        ui.add_enabled_ui(!is_scanning, |ui| {
                     let defaults = genshin_scanner::cli::GoodUserConfig::default();
-                    ui.columns(2, |cols| {
-                        widgets::delay_group(&mut cols[0], "char_delays", l.t("角色", "Character"), l, &mut [
+                    {
+                        widgets::delay_group(ui, "char_delays", l.t("角色", "Character"), l, &mut [
                             (l.t("打开界面", "Open screen"), &mut state.user_config.char_open_delay, defaults.char_open_delay,
                                 l.t("打开角色界面后等待完全加载的时间", "Wait time for character screen to fully load after opening")),
                             (l.t("关闭界面", "Close screen"), &mut state.user_config.char_close_delay, defaults.char_close_delay,
@@ -98,8 +58,8 @@ pub fn show(
                             (l.t("切换角色", "Next character"), &mut state.user_config.char_next_delay, defaults.char_next_delay,
                                 l.t("切换到下一个角色后等待面板更新的时间", "Wait after switching to next character for panel to update")),
                         ]);
-                        widgets::inventory_delays(&mut cols[1], state, l);
-                    });
+                        widgets::inventory_delays(ui, state, l);
+                    }
                     widgets::delay_group(ui, "achievement_delays", l.t("成就", "Achievements"), l, &mut [
                         (l.t("打开界面", "Open screen"), &mut state.user_config.achievement_open_delay, defaults.achievement_open_delay,
                             l.t("从暂停菜单打开成就界面后的等待", "Wait after opening the achievement screen from the pause menu")),
@@ -109,58 +69,31 @@ pub fn show(
                             l.t("点击左侧成就分类后的等待", "Wait after clicking a left-side achievement category")),
                     ]);
                 });
-            });
+    });
 
-        // === Advanced Options ===
-        egui::CollapsingHeader::new(l.t("高级选项", "Advanced Options"))
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!is_scanning, |ui| {
-                    // Checkboxes in a flowing horizontal layout
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut state.verbose, l.t("详细信息", "Verbose"));
-                        ui.checkbox(&mut state.continue_on_failure, l.t("失败继续", "Continue on failure"));
-                        ui.checkbox(&mut state.dump_images, l.t("保存OCR截图 → debug_images/", "Dump OCR images → debug_images/"));
-                        ui.checkbox(&mut state.save_on_cancel, l.t("手动终止后依然保存文件", "Save partial results on cancel"));
-                    });
-
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(l.t("最大扫描数 (0=全部):", "Max count (0=all):"));
-                        ui.add_space(8.0);
-                        ui.label(l.t("角色:", "Char:"));
-                        max_count_field(ui, &mut state.char_max_count);
-                        ui.add_space(8.0);
-                        ui.label(l.t("武器:", "Wpn:"));
-                        max_count_field(ui, &mut state.weapon_max_count);
-                        ui.add_space(8.0);
-                        ui.label(l.t("圣遗物:", "Art:"));
-                        max_count_field(ui, &mut state.artifact_max_count);
-                        ui.add_space(8.0);
-                        ui.label(l.t("成就:", "Ach:"));
-                        max_count_field(ui, &mut state.achievement_max_count);
-                    });
-
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(l.t(
-                            "OCR池数量 (0=按内存自动):",
-                            "OCR pool size (0=auto by RAM):",
-                        ));
-                        ui.add_space(8.0);
-                        ui.label("v5:");
-                        pool_size_field(ui, &mut state.user_config.ocr_pool_v5_override);
-                        ui.add_space(8.0);
-                        ui.label("v4:");
-                        pool_size_field(ui, &mut state.user_config.ocr_pool_v4_override);
-                        ui.add_space(8.0);
-                        ui.colored_label(
-                            egui::Color32::from_rgb(160, 160, 160),
-                            l.t("下次扫描生效", "Applied on next scan"),
-                        );
-                    });
-
-                    ui.add_space(4.0);
+    // === Advanced Options ===
+    widgets::fold(ui, l.t("高级选项", "Advanced"), |ui| {
+        ui.add_enabled_ui(!is_scanning, |ui| {
+            ui.checkbox(&mut state.verbose, l.t("详细日志", "Detailed logs"));
+            ui.checkbox(&mut state.continue_on_failure, l.t("识别失败时继续", "Continue on OCR errors"));
+            ui.checkbox(&mut state.dump_images, l.t("保存 OCR 截图", "Save OCR screenshots"));
+            ui.separator();
+            ui.strong(l.t("扫描上限", "Scan limits"));
+            widgets::hint(ui, l.t("0 = 全部", "0 = all"));
+            for (label, value) in [
+                (l.t("角色", "Characters"), &mut state.char_max_count),
+                (l.t("武器", "Weapons"), &mut state.weapon_max_count),
+                (l.t("圣遗物", "Artifacts"), &mut state.artifact_max_count),
+                (l.t("成就", "Achievements"), &mut state.achievement_max_count),
+            ] {
+                widgets::field_row(ui, label, |ui| { max_count_field(ui, value); });
+            }
+            ui.separator();
+            ui.strong(l.t("OCR 并发", "OCR workers"));
+            widgets::hint(ui, l.t("0 = 按内存自动分配，下次扫描生效", "0 = automatic. Applies on next scan."));
+            widgets::field_row(ui, "v5", |ui| { pool_size_field(ui, &mut state.user_config.ocr_pool_v5_override); });
+            widgets::field_row(ui, "v4", |ui| { pool_size_field(ui, &mut state.user_config.ocr_pool_v4_override); });
+            ui.separator();
                     widgets::game_data_refresh_control(
                         ui,
                         l,
@@ -176,117 +109,106 @@ pub fn show(
                         },
                     );
                 });
-            });
     });
 }
 
-/// Top action bar
-fn action_bar(
+pub fn show_status(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    scan_handle: &mut Option<TaskHandle>,
-    is_scanning: bool,
+    handle: &mut Option<TaskHandle>,
     game_busy: bool,
-    restart_required: bool,
-    native_failure: Option<&UiError>,
+    restart: bool,
 ) {
     let l = state.lang;
-
-    if restart_required {
-        if let Some(error) = native_failure {
-            widgets::error_card(ui, l, error);
-        } else {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 90, 90),
-                l.t(
-                    "另一个任务发生了底层崩溃。请先复制该任务中的完整错误，然后重启本程序。",
-                    "Another task had a low-level crash. Copy its full error, then restart this application.",
-                ),
-            );
-        }
-        ui.add_enabled(
-            false,
-            egui::Button::new(l.t("需重启程序", "Restart required")),
+    if restart {
+        super::theme::restart_required(
+            ui,
+            l,
+            handle
+                .as_ref()
+                .and_then(TaskHandle::native_failure)
+                .as_ref(),
         );
         return;
     }
-
-    if game_busy && !is_scanning {
-        ui.colored_label(
-            egui::Color32::from_rgb(255, 200, 50),
-            l.t(
-                "另一个游戏数据任务正在运行，请先停止后再扫描",
-                "Another game-data task is running. Stop it before scanning.",
-            ),
-        );
+    let running = handle.as_ref().is_some_and(|h| !h.is_finished());
+    let mut status = worker::try_task_status(&state.scan_status);
+    if matches!(status, Some(TaskStatus::AwaitingInput(_)))
+        && !state.missing_required_character_names()
+    {
+        *state.scan_status.lock().unwrap() = TaskStatus::Idle;
+        status = Some(TaskStatus::Idle);
+        state.names_need_attention = false;
     }
-
-    ui.horizontal(|ui| {
-        if is_scanning {
-            let is_stopping = scan_handle.as_ref().is_some_and(|h| h.is_stopping());
-            let label = if is_stopping {
-                l.t("⏳ 正在停止...", "⏳ Stopping...")
+    if matches!(status, Some(TaskStatus::Idle))
+        && !state.scan_characters
+        && !state.scan_weapons
+        && !state.scan_artifacts
+        && !state.scan_achievements
+    {
+        status = Some(TaskStatus::AwaitingInput(UiText::new(
+            "请选择扫描内容",
+            "Select scan targets",
+        )));
+    }
+    super::theme::task_status(ui, l, status.as_ref(), l.t("准备扫描", "Ready to scan"));
+    if let Ok(progress) = state.scan_progress.try_lock() {
+        let mut display = progress.clone();
+        if matches!(status, Some(TaskStatus::Failed(_))) {
+            display.interrupt_unfinished();
+        }
+        super::task_progress::show(ui, l, &display);
+    }
+    ui.add_space(12.0);
+    if running {
+        let stopping = handle.as_ref().is_some_and(TaskHandle::is_stopping);
+        if super::theme::primary_action(
+            ui,
+            !stopping,
+            if stopping {
+                l.t("正在停止", "Stopping")
             } else {
-                l.t("⏹ 停止扫描", "⏹ Stop Scan")
-            };
-            let clicked = ui
-                .add_enabled(!is_stopping, egui::Button::new(label))
-                .clicked();
-            if clicked {
-                if let Some(ref handle) = scan_handle {
-                    handle.stop();
-                }
-            }
-            if let Some(TaskStatus::Running(phase)) =
-                worker::try_task_status(&state.scan_status)
-            {
-                ui.spinner();
-                ui.label(phase.text(l));
-            }
-        } else {
-            let any_selected = state.scan_characters
-                || state.scan_weapons
-                || state.scan_artifacts
-                || state.scan_achievements;
-            let can_scan = any_selected && !game_busy;
-            if ui
-                .add_enabled(
-                    can_scan,
-                    egui::Button::new(l.t("▶ 开始扫描", "▶ Start Scan")),
-                )
-                .clicked()
-            {
-                if state.missing_required_character_names() {
-                    state.names_need_attention = true;
-                    yas::log_warn!("旅行者为必填项", "Traveler name is required");
-                } else if let Err(e) = super::privilege::ensure_admin_for_action() {
-                    *state.scan_status.lock().unwrap() = TaskStatus::Failed(
-                        UiError::from_anyhow(
-                            UiText::new(
-                                "扫描器需要管理员权限才能控制游戏。请以管理员身份重新启动程序。",
-                                "The scanner needs administrator access to control the game. Restart the application as administrator.",
-                            ),
-                            &e,
-                        ),
-                    );
-                } else {
-                    state.names_need_attention = false;
-                    // Force immediate save before scanning (don't wait for debounce)
-                    state.persist_config_now();
-                    *scan_handle = Some(worker::spawn_scan(state));
-                }
+                l.t("停止扫描", "Stop scan")
+            },
+        )
+        .clicked()
+        {
+            if let Some(h) = handle {
+                h.stop();
             }
         }
-    });
-
-    match worker::try_task_status(&state.scan_status) {
-        Some(TaskStatus::Completed(ref msg)) => {
-            ui.colored_label(egui::Color32::from_rgb(100, 200, 100), msg.text(l));
+    } else if super::theme::primary_action(
+        ui,
+        !game_busy
+            && (state.scan_characters
+                || state.scan_weapons
+                || state.scan_artifacts
+                || state.scan_achievements),
+        if matches!(status, Some(TaskStatus::Failed(_))) {
+            l.t("重试", "Retry")
+        } else {
+            l.t("开始扫描", "Start scan")
         },
-        Some(TaskStatus::Failed(ref error)) => {
-            widgets::error_card(ui, l, error);
-        },
-        _ => {},
+    )
+    .clicked()
+    {
+        if state.missing_required_character_names() {
+            state.names_need_attention = true;
+            *state.scan_status.lock().unwrap() = TaskStatus::AwaitingInput(UiText::new(
+                "请填写旅行者名字",
+                "Enter the Traveler's name",
+            ));
+            *state.scan_progress.lock().unwrap() = Default::default();
+        } else if let Err(e) = super::privilege::ensure_admin_for_action() {
+            *state.scan_status.lock().unwrap() = TaskStatus::Failed(UiError::from_anyhow(
+                UiText::new("请以管理员身份启动程序", "Restart the app as administrator"),
+                &e,
+            ));
+        } else {
+            state.names_need_attention = false;
+            state.persist_config_now();
+            *handle = Some(worker::spawn_scan(state));
+        }
     }
 }
 

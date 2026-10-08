@@ -103,10 +103,14 @@ enum Phase {
     Waiting,
     /// Stop/close requested; keep the handle until its thread really exits.
     Stopping,
+    Stopped,
     /// All data received — auto-exporting.
     Exporting,
     /// Done — file written.
-    Done { summary: UiText, path: String },
+    Done {
+        summary: UiText,
+        path: String,
+    },
     /// Something failed.
     Failed(UiError),
 }
@@ -132,6 +136,17 @@ pub struct CaptureTabState {
 }
 
 impl CaptureTabState {
+    #[cfg(feature = "dev-tools")]
+    pub(super) fn preview_feedback(&mut self, scenario: &str) {
+        self.phase = match scenario {
+            "error" => Phase::Failed(super::preview::preview_error()),
+            "stopped" => Phase::Stopped,
+            "exporting" => Phase::Exporting,
+            "login" => Phase::Waiting,
+            _ => return,
+        };
+    }
+
     pub fn new(output_dir: String) -> Self {
         Self {
             handle: None,
@@ -377,82 +392,34 @@ fn spawn_capture(
     Ok((thread, PendingExport { rx: result_rx }))
 }
 
-pub fn show(
-    ui: &mut egui::Ui,
-    l: Lang,
-    tab: &mut CaptureTabState,
-    game_busy: bool,
-    restart_required: bool,
-) {
-    // --- Phase transitions driven by shared state ---
-    let is_busy = tab.is_busy();
-
-    // === Action bar (always visible at top) ===
-    ui.add_space(4.0);
-    action_bar(ui, l, tab, game_busy, restart_required);
-    if restart_required {
-        return;
-    }
-    if !is_busy {
-        ui.colored_label(
-            egui::Color32::from_rgb(120, 120, 120),
-            l.t(
-                "通过抓包获取游戏数据（角色/武器/圣遗物/成就），需管理员权限。",
-                "Capture game data (characters/weapons/artifacts/achievements) via packet sniffing. Requires admin.",
-            ),
+pub fn show_settings(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, is_busy: bool) {
+    widgets::section(ui, l.t("导出内容", "Export targets"), |ui| {
+        ui.add_enabled_ui(!is_busy, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+                ui.checkbox(&mut tab.include_characters, l.t("角色", "Characters"));
+                ui.checkbox(&mut tab.include_weapons, l.t("武器", "Weapons"));
+                ui.checkbox(&mut tab.include_artifacts, l.t("圣遗物", "Artifacts"));
+                ui.checkbox(&mut tab.include_achievements, l.t("成就", "Achievements"));
+            });
+        });
+    });
+    widgets::section(ui, l.t("导出设置", "Export"), |ui| {
+        ui.add_enabled_ui(!is_busy, |ui| {
+            ui.checkbox(
+                &mut tab.only_keep_latest_dump,
+                l.t("仅保留最新导出", "Keep latest export only"),
+            );
+        });
+    });
+    widgets::fold(ui, l.t("高级设置", "Advanced"), |ui| {
+        ui.checkbox(
+            &mut tab.dump_packets,
+            l.t("保存解密数据包", "Save decoded packets"),
         );
-    }
-    ui.colored_label(
-        egui::Color32::from_rgb(80, 150, 220),
-        l.t(
-            "GGScanner 包含抓包、扫描和管理功能；如不需要抓包，可使用 GGScannerOCR。",
-            "GGScanner includes capture, scanning, and management. Use GGScannerOCR if you prefer an edition without packet capture.",
-        ),
-    );
-    ui.add_space(4.0);
-    ui.separator();
 
-    // === Scrollable config area ===
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.add_space(4.0);
-
-            // === Export Settings ===
-            egui::CollapsingHeader::new(l.t("导出设置", "Export Settings"))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!is_busy, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut tab.include_characters, l.t("角色", "Characters"));
-                            ui.add_space(12.0);
-                            ui.checkbox(&mut tab.include_weapons, l.t("武器", "Weapons"));
-                            ui.add_space(12.0);
-                            ui.checkbox(&mut tab.include_artifacts, l.t("圣遗物", "Artifacts"));
-                            ui.add_space(12.0);
-                            ui.checkbox(&mut tab.include_achievements, l.t("成就", "Achievements"));
-                        });
-                        ui.checkbox(
-                            &mut tab.only_keep_latest_dump,
-                            l.t("仅保留最新导出", "Only keep latest export"),
-                        );
-                    });
-                });
-
-            // === Advanced settings ===
-            egui::CollapsingHeader::new(l.t("高级设置", "Advanced"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.checkbox(
-                        &mut tab.dump_packets,
-                        l.t(
-                            "保存所有数据包 → debug_capture/",
-                            "Dump all decrypted packets → debug_capture/",
-                        ),
-                    );
-
-                    tab.data_cache_refresh.poll();
-                    widgets::game_data_refresh_control(
+        tab.data_cache_refresh.poll();
+        widgets::game_data_refresh_control(
                         ui,
                         l,
                         &mut tab.data_cache_refresh,
@@ -462,13 +429,11 @@ pub fn show(
                         ),
                         genshin_scanner::capture::data_cache::force_refresh,
                     );
-                });
+    });
 
-            // === Help / FAQ ===
-            egui::CollapsingHeader::new(l.t("使用说明", "How to use"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    let steps = match l {
+    // === Help / FAQ ===
+    widgets::fold(ui, l.t("使用说明", "How to use"), |ui| {
+        let steps = match l {
                         Lang::Zh => &[
                             "1. 点击「开始抓包」后，软件开始监听网络数据包。",
                             "2. 如果游戏已在运行，请关闭并重新启动，登录进入游戏（过门）。",
@@ -482,11 +447,10 @@ pub fn show(
                             "4. The exported file can be imported directly into ggartifact.com and similar tools.",
                         ],
                     };
-                    for step in steps {
-                        ui.label(*step);
-                    }
-                });
-        });
+        for step in steps {
+            ui.label(*step);
+        }
+    });
 }
 
 /// Start a fresh capture directly from either the initial or completed state.
@@ -537,19 +501,27 @@ fn start_capture(tab: &mut CaptureTabState) {
 }
 
 fn start_button(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, game_busy: bool) {
-    if ui
-        .add_enabled(
-            !game_busy && !tab.is_busy(),
-            egui::Button::new(l.t("▶ 开始抓包", "▶ Start Capture")),
-        )
-        .clicked()
+    if super::theme::primary_action(
+        ui,
+        !game_busy
+            && !tab.is_busy()
+            && (tab.include_characters
+                || tab.include_weapons
+                || tab.include_artifacts
+                || tab.include_achievements),
+        if matches!(tab.phase, Phase::Failed(_)) {
+            l.t("重试", "Retry")
+        } else {
+            l.t("开始抓包", "Start capture")
+        },
+    )
+    .clicked()
     {
         start_capture(tab);
     }
 }
 
-/// Top action bar: start/stop button + inline status.
-fn action_bar(
+pub fn show_status(
     ui: &mut egui::Ui,
     l: Lang,
     tab: &mut CaptureTabState,
@@ -557,168 +529,115 @@ fn action_bar(
     restart_required: bool,
 ) {
     if restart_required {
-        if let Some(error) = tab.native_failure() {
-            widgets::error_card(ui, l, &error);
-        } else {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 90, 90),
-                l.t(
-                    "扫描器或管理器发生了底层崩溃。请先复制其中的完整错误，然后重启本程序。",
-                    "The scanner or manager had a low-level crash. Copy its full error, then restart this application.",
-                ),
-            );
-        }
-        ui.add_enabled(
-            false,
-            egui::Button::new(l.t("需重启程序", "Restart required")),
-        );
+        super::theme::restart_required(ui, l, tab.native_failure().as_ref());
         return;
     }
-
+    let received = tab.capture_state.try_lock().is_ok_and(|s| {
+        s.has_characters
+            || s.has_items
+            || s.has_achievements
+            || s.weapon_count > 0
+            || s.artifact_count > 0
+    });
+    let text = match &tab.phase {
+        Phase::Stopped => l.t("抓包已停止 · 未导出", "Capture stopped · no export"),
+        Phase::Idle => l.t("准备抓包", "Ready to capture"),
+        Phase::Initializing => l.t("正在初始化抓包", "Initializing capture"),
+        Phase::Waiting if received => l.t("等待剩余类别数据", "Waiting for remaining data"),
+        Phase::Waiting => l.t("请重启游戏并登录", "Restart the game and log in"),
+        Phase::Stopping => l.t("正在停止抓包", "Stopping capture"),
+        Phase::Exporting => l.t("正在导出数据", "Exporting data"),
+        Phase::Done { .. } => l.t("数据已导出", "Data exported"),
+        Phase::Failed(_) => l.t("抓包未完成", "Capture failed"),
+    };
+    let feedback = match &tab.phase {
+        Phase::Idle
+            if !tab.include_characters
+                && !tab.include_weapons
+                && !tab.include_artifacts
+                && !tab.include_achievements =>
+        {
+            Some(state::TaskStatus::AwaitingInput(UiText::new(
+                "请选择导出内容",
+                "Select export targets",
+            )))
+        },
+        Phase::Failed(error) => Some(super::state::TaskStatus::Failed(error.clone())),
+        Phase::Done { summary, path } => Some(super::state::TaskStatus::Exported {
+            message: summary.clone(),
+            path: path.clone(),
+            partial: false,
+        }),
+        Phase::Stopped => Some(super::state::TaskStatus::Stopped(UiText::new(text, text))),
+        _ => None,
+    };
+    super::theme::task_status(ui, l, feedback.as_ref(), text);
+    if let Ok(cs) = tab.capture_state.try_lock() {
+        for (selected, key, zh, en, complete, count) in [
+            (
+                tab.include_characters,
+                "characters",
+                "角色",
+                "Characters",
+                cs.has_characters,
+                cs.character_count,
+            ),
+            (
+                tab.include_weapons,
+                "weapons",
+                "武器",
+                "Weapons",
+                cs.has_items,
+                cs.weapon_count,
+            ),
+            (
+                tab.include_artifacts,
+                "artifacts",
+                "圣遗物",
+                "Artifacts",
+                cs.has_items,
+                cs.artifact_count,
+            ),
+            (
+                tab.include_achievements,
+                "achievements",
+                "成就",
+                "Achievements",
+                cs.has_achievements,
+                cs.achievement_count,
+            ),
+        ] {
+            if selected {
+                let mut step = super::task_progress::Step::new(key, zh, en);
+                step.completed = count;
+                if complete {
+                    step.state = super::task_progress::StepState::Complete;
+                } else if matches!(tab.phase, Phase::Failed(_) | Phase::Stopped) {
+                    step.state = super::task_progress::StepState::Interrupted;
+                }
+                super::task_progress::row(ui, l, &step);
+            }
+        }
+    }
+    ui.add_space(16.0);
     match &tab.phase {
-        Phase::Idle => {
-            if game_busy {
-                ui.colored_label(
-                    egui::Color32::from_rgb(255, 200, 50),
-                    l.t(
-                        "其他任务正在运行，请等待完成",
-                        "Another task is running. Please wait for it to finish.",
-                    ),
-                );
-            }
-
-            ui.horizontal(|ui| {
-                start_button(ui, l, tab, game_busy);
-            });
-        },
-
-        Phase::Initializing => {
-            ui.horizontal(|ui| {
-                if ui.button(l.t("⏹ 停止抓包", "⏹ Stop Capture")).clicked() {
-                    if let Some(ref mut h) = tab.handle {
-                        h.send(CaptureCommand::StopCapture);
-                        h.close();
-                    }
-                    tab.phase = Phase::Stopping;
+        Phase::Initializing | Phase::Waiting => {
+            if super::theme::primary_action(ui, true, l.t("停止抓包", "Stop capture")).clicked()
+            {
+                if let Some(h) = &tab.handle {
+                    h.send(CaptureCommand::StopCapture);
+                    h.close();
                 }
-                ui.spinner();
-                ui.label(l.t(
-                    "正在初始化（下载数据缓存）...",
-                    "Initializing (downloading data cache)...",
-                ));
-            });
-        },
-
-        Phase::Waiting => {
-            ui.horizontal(|ui| {
-                if ui.button(l.t("⏹ 停止抓包", "⏹ Stop Capture")).clicked() {
-                    if let Some(ref mut h) = tab.handle {
-                        h.send(CaptureCommand::StopCapture);
-                        h.close();
-                    }
-                    tab.phase = Phase::Stopping;
-                }
-                ui.colored_label(
-                    egui::Color32::from_rgb(100, 200, 100),
-                    l.t("● 正在等待游戏数据...", "● Waiting for game data..."),
-                );
-            });
-
-            ui.colored_label(
-                egui::Color32::from_rgb(120, 120, 120),
-                l.t(
-                    "请关闭游戏并重新启动，登录（过门）。",
-                    "Please close the game, relaunch, and log in (enter door).",
-                ),
-            );
-
-            // Show partial progress
-            if let Ok(cs) = tab.capture_state.try_lock() {
-                if cs.has_characters || cs.has_items || cs.has_achievements {
-                    let mut parts = Vec::new();
-                    if cs.has_characters {
-                        parts.push(match l {
-                            Lang::Zh => format!("角色: {}", cs.character_count),
-                            Lang::En => format!("Characters: {}", cs.character_count),
-                        });
-                    }
-                    if cs.has_items {
-                        parts.push(match l {
-                            Lang::Zh => {
-                                format!("武器: {}, 圣遗物: {}", cs.weapon_count, cs.artifact_count)
-                            },
-                            Lang::En => format!(
-                                "Weapons: {}, Artifacts: {}",
-                                cs.weapon_count, cs.artifact_count
-                            ),
-                        });
-                    }
-                    if cs.has_achievements {
-                        parts.push(match l {
-                            Lang::Zh => format!("成就: {}", cs.achievement_count),
-                            Lang::En => format!("Achievements: {}", cs.achievement_count),
-                        });
-                    }
-                    ui.colored_label(egui::Color32::from_rgb(100, 200, 100), parts.join("  |  "));
-
-                    let mut missing = Vec::new();
-                    if !cs.has_characters {
-                        missing.push(l.t("角色", "characters"));
-                    }
-                    if !cs.has_items {
-                        missing.push(l.t("物品", "items"));
-                    }
-                    if tab.include_achievements && !cs.has_achievements {
-                        missing.push(l.t("成就", "achievements"));
-                    }
-                    if !missing.is_empty() {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(255, 200, 50),
-                            match l {
-                                Lang::Zh => format!("等待{}数据...", missing.join("、")),
-                                Lang::En => format!("Waiting for {} data...", missing.join(", ")),
-                            },
-                        );
-                    }
-                }
+                tab.phase = Phase::Stopping;
             }
         },
-
-        Phase::Exporting => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(l.t("正在导出...", "Exporting..."));
-            });
+        Phase::Stopping | Phase::Exporting => {
+            super::theme::primary_action(ui, false, l.t("正在处理", "Processing"));
         },
-
-        Phase::Stopping => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(l.t("正在停止抓包...", "Stopping capture..."));
-            });
+        Phase::Failed(_) => {
+            start_button(ui, l, tab, game_busy);
         },
-
-        Phase::Done { summary, path } => {
-            let summary = summary.clone();
-            let path = path.clone();
-            ui.horizontal(|ui| {
-                start_button(ui, l, tab, game_busy);
-                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), summary.text(l));
-            });
-            ui.label(egui::RichText::new(format!("→ {}", path)).size(11.0).weak());
-        },
-
-        Phase::Failed(error) => {
-            let error = error.clone();
-            ui.horizontal(|ui| {
-                start_button(ui, l, tab, game_busy);
-                if tab.is_busy() {
-                    ui.spinner();
-                    ui.label(l.t("正在停止抓包...", "Stopping capture..."));
-                }
-            });
-            widgets::error_card(ui, l, &error);
-        },
+        Phase::Done { .. } | Phase::Idle | Phase::Stopped => start_button(ui, l, tab, game_busy),
     }
 }
 
@@ -726,15 +645,6 @@ fn action_bar(
 fn update_phase(tab: &mut CaptureTabState) {
     if let Some(error) = tab.native_failure() {
         tab.phase = Phase::Failed(error);
-        return;
-    }
-
-    if tab.phase == Phase::Stopping {
-        if tab.handle.as_ref().is_none_or(CaptureHandle::is_finished) {
-            tab.handle = None;
-            tab.pending_export = None;
-            tab.phase = Phase::Idle;
-        }
         return;
     }
 
@@ -746,7 +656,7 @@ fn update_phase(tab: &mut CaptureTabState) {
     // Initialization failures have no export result. Preserve their actual cause.
     if matches!(
         tab.phase,
-        Phase::Initializing | Phase::Waiting | Phase::Exporting
+        Phase::Initializing | Phase::Waiting | Phase::Exporting | Phase::Stopping
     ) {
         let error = tab
             .capture_state
@@ -760,13 +670,22 @@ fn update_phase(tab: &mut CaptureTabState) {
             tab.pending_export = None;
             tab.phase = Phase::Failed(UiError::from_message(
                 UiText::new(
-                    "抓包器在启动或读取游戏数据时停止。下方完整错误包含底层原因。",
-                    "Capture stopped while starting or reading game data. The full error below contains the underlying cause.",
+                    "抓包器在启动或读取游戏数据时停止。",
+                    "Capture stopped while starting or reading game data.",
                 ),
                 error,
             ));
             return;
         }
+    }
+
+    if tab.phase == Phase::Stopping {
+        if worker_finished {
+            tab.handle = None;
+            tab.pending_export = None;
+            tab.phase = Phase::Stopped;
+        }
+        return;
     }
 
     // Do not expose completion or enable another game task until the capture
@@ -898,5 +817,30 @@ fn update_phase(tab: &mut CaptureTabState) {
         && tab.capture_state.try_lock().is_ok_and(|s| s.complete)
     {
         tab.phase = Phase::Exporting;
+    }
+}
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+    #[test]
+    fn stop_remains_visible_after_the_worker_exits() {
+        let mut tab = CaptureTabState::new(String::new());
+        tab.phase = Phase::Stopping;
+        tab.tick();
+        assert_eq!(tab.phase, Phase::Stopped);
+        tab.tick();
+        assert_eq!(tab.phase, Phase::Stopped);
+        assert!(!tab.is_busy());
+    }
+    #[test]
+    fn capture_failure_cannot_become_export_success() {
+        let mut tab = CaptureTabState::new(String::new());
+        tab.phase = Phase::Stopping;
+        tab.capture_state.lock().unwrap().error = Some("CAPTURE_ERROR_MARKER".into());
+        tab.tick();
+        let Phase::Failed(error) = &tab.phase else {
+            panic!("capture failure was hidden")
+        };
+        assert!(error.copy_text(Lang::En).contains("CAPTURE_ERROR_MARKER"));
     }
 }

@@ -1,10 +1,16 @@
-name: Build and Release
+name: Build (manual release)
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish binaries as a GitHub release
+        type: boolean
+        required: true
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,7 +50,11 @@ jobs:
         run: |
           cargo test -p genshin_scanner --lib updater::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p good_tools_app --features test-as-invoker --test ui_error --test update_restart --test shared_games
+          cargo test -p good_tools_app --features test-as-invoker --test ui_error --test update_restart --test shared_games --test gui_layout --test gui_feedback
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p good_tools_app --features capture,test-as-invoker --test ui_error --test shared_games --test gui_layout --test gui_feedback
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p good_tools_app --features capture,test-as-invoker --lib feedback_tests
 
       - name: Set version in Cargo.toml
         run: |
@@ -80,7 +90,7 @@ jobs:
       - name: Build GGScanner (Release)
         run: cargo build --release --bin GGScanner --features capture
 
-      - name: Publish bridge release under existing download names
+      - name: Prepare existing download names
         run: |
           # Branding changes now; public download names change after adoption.
           # At that cutoff add the GG names to uploads and retain these old
@@ -104,12 +114,14 @@ jobs:
             target/release/GOODCapture.exe
 
       - name: Delete existing release if any
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
         run: gh release delete $env:VERSION --yes --cleanup-tag 2>$null
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate bilingual release description
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
         run: |
           # Keep this machine-readable line for legacy and current updaters.
           "Build revision: ${{ github.run_number }}" | Set-Content -Encoding utf8 release-notes.md
@@ -117,6 +129,7 @@ jobs:
           Get-Content -Raw .github/release-description.md | Add-Content -Encoding utf8 release-notes.md
 
       - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}

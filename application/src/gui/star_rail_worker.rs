@@ -30,6 +30,32 @@ use super::{
 
 const MAX_MANAGER_INSTRUCTIONS_BYTES: u64 = 16 * 1024 * 1024;
 
+fn manager_scan_observer(
+    progress: Arc<Mutex<super::task_progress::TaskProgress>>,
+) -> hsr_scanner::scan_progress::ScanObserver {
+    Box::new(move |category, event| {
+        if category != hsr_scanner::scan_progress::ScanCategory::Gear {
+            return;
+        }
+        if let hsr_scanner::scan_progress::ScanEvent::Progress {
+            recognized, total, ..
+        } = event
+        {
+            if let Some(step) = progress
+                .lock()
+                .unwrap()
+                .steps
+                .iter_mut()
+                .find(|s| s.key == "gear")
+            {
+                step.completed = recognized;
+                step.total = total;
+                step.state = super::task_progress::StepState::Running;
+            }
+        }
+    })
+}
+
 pub fn settings_identity(settings: &StarRailSettings) -> String {
     serde_json::to_string(settings).unwrap_or_default()
 }
@@ -58,10 +84,29 @@ fn stopped(task: TaskKind) -> UiText {
 }
 
 pub(super) fn hsr_ui_error(hint: UiText, error: HsrError) -> UiError {
-    UiError::from_message(hint, error.localized_message(hsr_language()))
+    let language = hsr_language();
+    let actionable = error.hint();
+    UiError::from_message(
+        UiText::new(
+            actionable.select(hsr_scanner::localization::Language::ZhCn),
+            actionable.select(hsr_scanner::localization::Language::En),
+        ),
+        format!(
+            "{}\n{}",
+            hint.text(match language {
+                hsr_scanner::localization::Language::ZhCn => super::state::Lang::Zh,
+                hsr_scanner::localization::Language::En => super::state::Lang::En,
+            }),
+            error.localized_message(language)
+        ),
+    )
 }
 
 fn ensure_ocr_runtime() -> Result<(), UiError> {
+    ensure_ocr_runtime_with_status(None)
+}
+
+fn ensure_ocr_runtime_with_status(status: Option<&Arc<Mutex<TaskStatus>>>) -> Result<(), UiError> {
     #[cfg(target_os = "windows")]
     {
         genshin_scanner::cli::check_vcpp_runtime().map_err(|error| {
@@ -74,6 +119,10 @@ fn ensure_ocr_runtime() -> Result<(), UiError> {
             )
         })?;
         if !genshin_scanner::cli::check_onnxruntime() {
+            if let Some(status) = status {
+                *status.lock().unwrap() =
+                    TaskStatus::Running(UiText::new("正在下载 OCR 引擎", "Downloading OCR engine"));
+            }
             genshin_scanner::cli::download_onnxruntime().map_err(|error| {
                 UiError::from_anyhow(
                     UiText::new(
@@ -262,8 +311,36 @@ pub fn archive_completed_manager_journal(path: &Path) -> Result<Option<PathBuf>,
     ))
 }
 
-pub fn spawn_scan(settings: &StarRailSettings, status: Arc<Mutex<TaskStatus>>) -> TaskHandle {
+pub fn spawn_scan(
+    settings: &StarRailSettings,
+    status: Arc<Mutex<TaskStatus>>,
+    progress: Arc<Mutex<super::task_progress::TaskProgress>>,
+) -> TaskHandle {
+    use super::task_progress::{Step, TaskProgress};
+    let mut steps = Vec::new();
+    for (enabled, key, zh, en) in [
+        (settings.scan_characters, "characters", "角色", "Characters"),
+        (
+            settings.scan_light_cones,
+            "light_cones",
+            "光锥",
+            "Light Cones",
+        ),
+        (
+            settings.scan_relics_and_ornaments,
+            "gear",
+            "遗器与位面饰品",
+            "Relics & Ornaments",
+        ),
+    ] {
+        if enabled {
+            steps.push(Step::new(key, zh, en));
+        }
+    }
+    *progress.lock().unwrap() = TaskProgress { steps };
     let settings = settings.clone();
+    let status_for_progress = status.clone();
+    let status_for_phases = status.clone();
     worker::spawn_cancellable_task(
         TaskKind::Scanner,
         LogSource::Scanner,
@@ -276,7 +353,65 @@ pub fn spawn_scan(settings: &StarRailSettings, status: Arc<Mutex<TaskStatus>>) -
             "正在安全停止星穹铁道扫描...",
             "Stopping the Star Rail scan safely...",
         ),
-        move |cancel| run_scan(&settings, cancel, None),
+        move |cancel| {
+            let track = progress.clone();
+            let cancel_for_observer = cancel.clone();
+            let observer = Box::new(move |category, event| {
+                use super::task_progress::StepState;
+                use hsr_scanner::scan_progress::{ScanCategory, ScanEvent};
+                let key = match category {
+                    ScanCategory::Characters => "characters",
+                    ScanCategory::LightCones => "light_cones",
+                    ScanCategory::Gear => "gear",
+                };
+                if let Some(step) = track
+                    .lock()
+                    .unwrap()
+                    .steps
+                    .iter_mut()
+                    .find(|s| s.key == key)
+                {
+                    match event {
+                        ScanEvent::Started => {
+                            step.state = StepState::Running;
+                            if !cancel_for_observer.is_cancelled() {
+                                *status_for_progress.lock().unwrap() =
+                                    TaskStatus::Running(UiText::new(
+                                        format!("正在扫描{}", step.zh),
+                                        format!("Scanning {}", step.en),
+                                    ));
+                            }
+                        },
+                        ScanEvent::Progress {
+                            recognized, total, ..
+                        } => {
+                            step.completed = recognized;
+                            step.total = total;
+                        },
+                        ScanEvent::Finished {
+                            recognized,
+                            complete,
+                        } => {
+                            step.completed = recognized;
+                            step.state = if complete {
+                                StepState::Complete
+                            } else {
+                                StepState::Interrupted
+                            };
+                        },
+                    }
+                }
+            });
+            let result = run_scan_observed(
+                &settings,
+                cancel,
+                None,
+                Some(observer),
+                Some(&status_for_phases),
+            );
+            progress.lock().unwrap().interrupt_unfinished();
+            result
+        },
     )
 }
 
@@ -286,8 +421,24 @@ pub(crate) fn run_scan(
     cancel: yas::cancel::CancelToken,
     sample_limit: Option<usize>,
 ) -> Result<UiText, UiError> {
+    run_scan_observed(settings, cancel, sample_limit, None, None).map(|status| match status {
+        TaskStatus::Exported { message, .. } | TaskStatus::Stopped(message) => message,
+        _ => unreachable!("scan returns an export or a stopped outcome"),
+    })
+}
+
+fn run_scan_observed(
+    settings: &StarRailSettings,
+    cancel: yas::cancel::CancelToken,
+    sample_limit: Option<usize>,
+    observer: Option<hsr_scanner::scan_progress::ScanObserver>,
+    status: Option<&Arc<Mutex<TaskStatus>>>,
+) -> Result<TaskStatus, UiError> {
     if user_aborted(&cancel) {
-        return Ok(stopped(TaskKind::Scanner));
+        return Ok(TaskStatus::Stopped(UiText::new(
+            "扫描已停止 · 未导出",
+            "Scan stopped · no export",
+        )));
     }
     let targets = ScanTargets {
         characters: settings.scan_characters,
@@ -298,9 +449,21 @@ pub(crate) fn run_scan(
     config.scan_item_limit = sample_limit;
     let output_dir = ensure_output_dir(settings)?;
     if user_aborted(&cancel) {
-        return Ok(stopped(TaskKind::Scanner));
+        return Ok(TaskStatus::Stopped(UiText::new(
+            "扫描已停止 · 未导出",
+            "Scan stopped · no export",
+        )));
     }
-    ensure_ocr_runtime()?;
+    let phase = |zh, en| {
+        if !user_aborted(&cancel) {
+            if let Some(status) = status {
+                *status.lock().unwrap() = TaskStatus::Running(UiText::new(zh, en));
+            }
+        }
+    };
+    phase("正在准备 OCR 引擎", "Preparing OCR engine");
+    ensure_ocr_runtime_with_status(status)?;
+    phase("正在加载游戏数据", "Loading game data");
     let references = load_references().map_err(|error| {
         hsr_ui_error(
             UiText::new(
@@ -311,7 +474,10 @@ pub(crate) fn run_scan(
         )
     })?;
     if user_aborted(&cancel) {
-        return Ok(stopped(TaskKind::Scanner));
+        return Ok(TaskStatus::Stopped(UiText::new(
+            "扫描已停止 · 未导出",
+            "Scan stopped · no export",
+        )));
     }
     let _controller_lease = HsrControllerLease::try_acquire().map_err(|error| {
         hsr_ui_error(
@@ -322,31 +488,57 @@ pub(crate) fn run_scan(
             error,
         )
     })?;
+    phase("正在连接游戏", "Connecting to the game");
     let result = match HsrScanner::live_with_cancel(references.clone(), config, cancel.clone())
+        .map(|scanner| match observer {
+            Some(observer) => scanner.with_observer(observer),
+            None => scanner,
+        })
         .and_then(HsrScanner::scan)
     {
         Ok(result) => result,
-        Err(_) if user_aborted(&cancel) => return Ok(stopped(TaskKind::Scanner)),
+        Err(error)
+            if user_aborted(&cancel)
+                && matches!(error.code(), "HSR-SCAN-CANCELLED" | "HSR-DEVICE-CANCELLED") =>
+        {
+            return Ok(TaskStatus::Stopped(UiText::new(
+                "扫描已停止 · 未导出",
+                "Scan stopped · no export",
+            )))
+        },
         Err(error) => {
             return Err(hsr_ui_error(
                 UiText::new(
-                    "星穹铁道扫描未能完成。请复制完整错误以搜索或寻求帮助。",
-                    "The Star Rail scan could not finish. Copy the full error to search or ask for help.",
+                    "星穹铁道扫描未能完成。",
+                    "The Star Rail scan could not finish.",
                 ),
                 error,
             ));
         },
     };
     if user_aborted(&cancel) {
-        return Ok(stopped(TaskKind::Scanner));
+        return Ok(TaskStatus::Stopped(UiText::new(
+            "扫描已停止 · 未导出",
+            "Scan stopped · no export",
+        )));
     }
+    phase("正在导出数据", "Saving export");
     let export = write_v4_export(
         &result.observations,
         &references,
         &output_dir,
         &result.export_details,
     )?;
-    Ok(v4_export_message(export.counts, &export.path))
+    let partial = (targets.characters
+        && result.coverage.characters != hsr_scanner::model::CoverageLevel::Complete)
+        || (targets.light_cones
+            && result.coverage.light_cones != hsr_scanner::model::CoverageLevel::Complete)
+        || (targets.gear && result.coverage.relics != hsr_scanner::model::CoverageLevel::Complete);
+    Ok(TaskStatus::Exported {
+        message: v4_export_message(export.counts, &export.path),
+        path: export.path.display().to_string(),
+        partial,
+    })
 }
 
 fn load_manager_instructions(path: &Path) -> Result<ManagerInstructionsEnvelope, UiError> {
@@ -477,6 +669,7 @@ pub fn spawn_manager_preview(
     settings: &StarRailSettings,
     status: Arc<Mutex<TaskStatus>>,
     preview: Arc<Mutex<Option<ManagerPreview>>>,
+    progress: Arc<Mutex<super::task_progress::TaskProgress>>,
 ) -> TaskHandle {
     let settings = settings.clone();
     let identity = settings_identity(&settings);
@@ -566,6 +759,10 @@ pub fn spawn_manager_preview(
                 )
             })?;
             let config = manager_scan_config(&settings)?;
+            let mut step =
+                super::task_progress::Step::new("gear", "重扫遗器库存", "Rescan Relic inventory");
+            step.state = super::task_progress::StepState::Running;
+            progress.lock().unwrap().steps = vec![step];
             let mut scanner = match HsrScanner::live_with_cancel(references, config, cancel.clone())
             {
                 Ok(scanner) => scanner,
@@ -581,6 +778,7 @@ pub fn spawn_manager_preview(
                     ));
                 },
             };
+            scanner = scanner.with_observer(manager_scan_observer(progress.clone()));
             let inventory = match scanner.scan_manager_inventory() {
                 Ok(inventory) => inventory,
                 Err(_) if user_aborted(&cancel) => return Ok(stopped(TaskKind::Manager)),
@@ -594,6 +792,10 @@ pub fn spawn_manager_preview(
                     ));
                 },
             };
+            if let Some(step) = progress.lock().unwrap().steps.first_mut() {
+                step.completed = inventory.len();
+                step.state = super::task_progress::StepState::Complete;
+            }
             if user_aborted(&cancel) {
                 return Ok(stopped(TaskKind::Manager));
             }
@@ -624,9 +826,24 @@ pub fn spawn_manager_apply(
     status: Arc<Mutex<TaskStatus>>,
     preview: Arc<Mutex<Option<ManagerPreview>>>,
     authorized_scopes: BTreeSet<MutationScope>,
+    progress: Arc<Mutex<super::task_progress::TaskProgress>>,
 ) -> TaskHandle {
     let settings = settings.clone();
     let expected_identity = settings_identity(&settings);
+    let status_for_progress = status.clone();
+    {
+        let mut track = progress.lock().unwrap();
+        if let Some(step) = track.steps.iter_mut().find(|s| s.key == "gear") {
+            step.completed = 0;
+            step.total = None;
+            step.state = super::task_progress::StepState::Pending;
+        } else {
+            track.steps.insert(
+                0,
+                super::task_progress::Step::new("gear", "重扫遗器库存", "Rescan Relic inventory"),
+            );
+        }
+    }
     worker::spawn_cancellable_task(
         TaskKind::Manager,
         LogSource::Manager,
@@ -705,7 +922,7 @@ pub fn spawn_manager_apply(
                     error,
                 )
             })?;
-            let mut journal = AppendOnlyJsonJournalStore::new(PathBuf::from(
+            let journal = AppendOnlyJsonJournalStore::new(PathBuf::from(
                 settings.manager_journal_path.trim(),
             ))
             .try_acquire_apply_lease_with_controller(controller_lease)
@@ -721,7 +938,7 @@ pub fn spawn_manager_apply(
             let authorization =
                 ApplyAuthorization::new(reviewed.plan.digest.clone(), authorized_scopes);
             let config = manager_scan_config(&settings)?;
-            let mut scanner = HsrScanner::live_with_cancel(references, config, cancel).map_err(
+            let mut scanner = HsrScanner::live_with_cancel(references, config, cancel.clone()).map_err(
                 |error| {
                     hsr_ui_error(
                         UiText::new(
@@ -732,6 +949,13 @@ pub fn spawn_manager_apply(
                     )
                 },
             )?;
+            scanner = scanner.with_observer(manager_scan_observer(progress.clone()));
+            let mut journal = super::hsr_manager_progress::TrackedJournal {
+                inner: journal,
+                progress: progress.clone(),
+                status: status_for_progress,
+                cancel,
+            };
             let expected_digest = reviewed.plan.digest.clone();
             let report = apply_manager_envelope(
                 &envelope,
@@ -749,6 +973,9 @@ pub fn spawn_manager_apply(
                             ),
                             "fresh manager plan digest differs from the UI-reviewed digest",
                         ));
+                    }
+                    if let Some(step) = progress.lock().unwrap().steps.iter_mut().find(|s| s.key == "gear") {
+                        step.state = super::task_progress::StepState::Complete;
                     }
                     Ok(())
                 },
@@ -814,4 +1041,31 @@ pub fn spawn_manager_apply(
             }
         },
     )
+}
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+    #[test]
+    fn actionable_backend_hint_is_primary_and_context_is_retained() {
+        let error = HsrError::new(
+            "HSR-TEST",
+            hsr_scanner::localization::LocalizedText::new(
+                "请切回游戏。",
+                "Switch back to the game.",
+            ),
+            "FOCUS_LOST_MARKER",
+        );
+        let failure = hsr_ui_error(UiText::new("扫描未完成", "Scan did not finish"), error);
+        assert_eq!(
+            failure.hint_text(super::super::state::Lang::En),
+            "Switch back to the game."
+        );
+        assert_eq!(
+            failure.hint_text(super::super::state::Lang::Zh),
+            "请切回游戏。"
+        );
+        assert!(failure
+            .copy_text(super::super::state::Lang::En)
+            .contains("FOCUS_LOST_MARKER"));
+    }
 }

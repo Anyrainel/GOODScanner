@@ -88,9 +88,6 @@ impl WindowsHsrDevice {
             let (hwnd, title, client_rect) = locate_hsr_window()?;
             let capturer: Rc<dyn Capturer<RgbImage>> = match capture_method {
                 CaptureMethod::BitBlt => Rc::new(GenericCapturer::new().map_err(device_error)?),
-                CaptureMethod::PrintWindow => {
-                    Rc::new(yas::capture::PrintWindowCapturer::new(hwnd).map_err(device_error)?)
-                },
                 CaptureMethod::Wgc => Rc::new(
                     yas::capture::WgcCapturer::new(
                         hwnd,

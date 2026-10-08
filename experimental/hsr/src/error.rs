@@ -25,6 +25,11 @@ impl HsrError {
         self.code
     }
 
+    /// The actionable user message, separate from diagnostic details.
+    pub fn hint(&self) -> LocalizedText {
+        self.hint
+    }
+
     pub fn write_failed(code: &'static str, detail: impl Into<String>) -> Self {
         Self::new(code, hints::WRITE_FAILED, detail)
     }

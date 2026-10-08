@@ -431,7 +431,20 @@ pub enum TaskStatus {
     Idle,
     Running(UiText),
     Completed(UiText),
+    Stopped(UiText),
+    AwaitingInput(UiText),
+    Exported {
+        message: UiText,
+        path: String,
+        partial: bool,
+    },
     Failed(UiError),
+}
+
+impl From<UiText> for TaskStatus {
+    fn from(message: UiText) -> Self {
+        Self::Completed(message)
+    }
 }
 
 /// Which tab a log entry belongs to.
@@ -656,6 +669,7 @@ pub struct AppState {
 
     // --- Scanner task ---
     pub scan_status: Arc<Mutex<TaskStatus>>,
+    pub scan_progress: Arc<Mutex<super::task_progress::TaskProgress>>,
 
     // --- Manager tab config ---
     pub server_port: u16,
@@ -668,6 +682,7 @@ pub struct AppState {
     /// If true, narrow lock/unlock management to the artifact sets involved in the request.
     pub filter_involved_sets: bool,
     pub server_status: Arc<Mutex<TaskStatus>>,
+    pub server_job: Arc<Mutex<genshin_scanner::manager::models::JobState>>,
     // --- Per-tab log buffers ---
     pub scanner_log_lines: Arc<LogStore>,
     pub manager_log_lines: Arc<LogStore>,
@@ -717,8 +732,12 @@ impl AppState {
             config_snapshot,
             config_dirty_since: None,
             scan_status: Arc::new(Mutex::new(TaskStatus::Idle)),
+            scan_progress: Arc::new(Mutex::new(super::task_progress::TaskProgress::default())),
             server_enabled: Arc::new(AtomicBool::new(true)),
             server_status: Arc::new(Mutex::new(TaskStatus::Idle)),
+            server_job: Arc::new(Mutex::new(
+                genshin_scanner::manager::models::JobState::idle(),
+            )),
             scanner_log_lines: Arc::new(LogStore::new(2000)),
             manager_log_lines: Arc::new(LogStore::new(2000)),
             mappings_refresh: RefreshState::Idle,

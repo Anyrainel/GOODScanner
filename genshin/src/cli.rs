@@ -553,13 +553,31 @@ const U64_FIELDS: &[&str] = &[
     "artifact_open_delay",
 ];
 
-/// Sanitize a parsed JSON object: remove u64 fields that have non-numeric values
-/// (e.g. empty strings from old config migrations) so serde defaults apply.
+/// Migrate retired capture settings and remove invalid numeric fields so serde
+/// defaults apply (e.g. empty strings from old config migrations).
 fn sanitize_config_json(val: &mut serde_json::Value) {
     let obj = match val.as_object_mut() {
         Some(o) => o,
         None => return,
     };
+    // Legacy unversioned good_config.json could store capture_method="print_window".
+    // Both config-loading paths sanitize before deserialization. Replace only
+    // this retired backend with the normal HDR-derived choice.
+    if obj
+        .get("capture_method")
+        .and_then(serde_json::Value::as_str)
+        == Some("print_window")
+    {
+        let hdr_mode = obj
+            .get("hdr_mode")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        obj.insert(
+            "capture_method".to_owned(),
+            serde_json::to_value(CaptureMethod::for_hdr_mode(hdr_mode))
+                .expect("capture method is serializable"),
+        );
+    }
     for &field in U64_FIELDS {
         let should_remove = match obj.get(field) {
             Some(serde_json::Value::Number(_)) => false,
@@ -1594,6 +1612,17 @@ pub fn run_scan_core(
     status_fn: Option<&dyn Fn(&str)>,
     cancel_token: Option<yas::cancel::CancelToken>,
 ) -> Result<String> {
+    run_scan_core_observed(user_config, config, status_fn, cancel_token, None, None)
+}
+
+pub fn run_scan_core_observed(
+    user_config: &GoodUserConfig,
+    config: &ScanCoreConfig,
+    status_fn: Option<&dyn Fn(&str)>,
+    cancel_token: Option<yas::cancel::CancelToken>,
+    progress_fn: Option<&crate::scanner::common::progress::ProgressFn<'_>>,
+    phase_fn: Option<&crate::scanner::common::progress::ScanPhaseFn<'_>>,
+) -> Result<String> {
     init_rayon_pool();
     crate::scanner::common::annotator::init(config.dump_images);
     crate::scanner::common::pixel_profile::set_hdr_mode(config.hdr_mode);
@@ -1652,8 +1681,9 @@ pub fn run_scan_core(
         pools,
         user_config,
         config,
-        None,
+        progress_fn,
         status_fn,
+        phase_fn,
         token.clone(),
         ScanRunOptions {
             save_on_cancel,
@@ -1670,7 +1700,7 @@ pub fn run_scan_core(
     if token.is_cancelled() {
         log_info!("扫描被用户中断", "Scan stopped by user");
         if !save_on_cancel {
-            return Err(anyhow!("扫描被用户中断 / Scan stopped by user"));
+            return Err(crate::scanner::common::progress::ScanCancelled.into());
         }
     }
 
@@ -1678,6 +1708,7 @@ pub fn run_scan_core(
     crate::scanner::common::annotator::flush();
 
     // Export as GOOD v3
+    report("正在导出数据 / Saving export");
     let export = GoodExport::new(characters, weapons, artifacts).with_achievements(achievements);
     let json = serde_json::to_string_pretty(&export)?;
 
@@ -1728,6 +1759,34 @@ pub fn run_server_core(
     dump_images: bool,
     dump_job_data: bool,
     status_fn: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
+) -> Result<()> {
+    run_server_core_observed(
+        user_config,
+        server_port,
+        ocr,
+        enabled,
+        shutdown,
+        stop_on_all_matched,
+        filter_involved_sets,
+        dump_images,
+        dump_job_data,
+        status_fn,
+        None,
+    )
+}
+
+pub fn run_server_core_observed(
+    user_config: &GoodUserConfig,
+    server_port: u16,
+    ocr: &OcrEngineArgs,
+    enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop_on_all_matched: bool,
+    filter_involved_sets: bool,
+    dump_images: bool,
+    dump_job_data: bool,
+    status_fn: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
+    native_job: Option<std::sync::Arc<std::sync::Mutex<crate::manager::models::JobState>>>,
 ) -> Result<()> {
     init_rayon_pool();
     crate::scanner::common::annotator::init(dump_images);
@@ -1811,13 +1870,14 @@ pub fn run_server_core(
         }))
     };
 
-    crate::server::run_server(
+    crate::server::run_server_observed(
         server_port,
         init_executor,
         enabled,
         shutdown,
         dump_job_data,
         status_fn,
+        native_job,
     )
 }
 
@@ -1921,6 +1981,28 @@ mod tests {
         assert_eq!(backends.character, expect("ppocrv5"));
         assert_eq!(backends.weapon, expect("ppocrv4"));
         assert_eq!(backends.artifact, expect("ppocrv4"));
+    }
+
+    #[test]
+    fn retired_capture_method_migrates_without_losing_genshin_preferences() {
+        for hdr_mode in [false, true] {
+            let mut saved = serde_json::json!({
+                "capture_method":"print_window", "hdr_mode":hdr_mode,
+                "traveler_name":"Traveler", "char_tab_delay":750,
+                "scan_artifacts":false, "dump_images":true
+            });
+            sanitize_config_json(&mut saved);
+            let config: GoodUserConfig = serde_json::from_value(saved).unwrap();
+            assert_eq!(config.capture_method, CaptureMethod::for_hdr_mode(hdr_mode));
+            assert_eq!(config.hdr_mode, hdr_mode);
+            assert_eq!(config.traveler_name, "Traveler");
+            assert_eq!(config.char_tab_delay, 750);
+            assert!(!config.scan_artifacts);
+            assert!(config.dump_images);
+            assert!(!serde_json::to_string(&config)
+                .unwrap()
+                .contains("print_window"));
+        }
     }
 
     #[test]

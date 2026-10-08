@@ -17,7 +17,7 @@ use crate::scanner::common::game_controller::GenshinGameController;
 use crate::scanner::common::mappings::MappingManager;
 use crate::scanner::common::models::{GoodArtifact, GoodCharacter, GoodWeapon};
 use crate::scanner::common::ocr_pool::SharedOcrPools;
-use crate::scanner::common::progress::ProgressFn;
+use crate::scanner::common::progress::{ProgressFn, ScanPhaseEvent, ScanPhaseFn};
 use crate::scanner::weapon::GoodWeaponScanner;
 
 /// Result of a single scan phase.
@@ -51,6 +51,40 @@ impl<T> ScanPhaseResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_never_reports_cancelled_partial_exports_as_complete() {
+        let events = std::sync::Mutex::new(Vec::new());
+        let report = |_: &str, event| events.lock().unwrap().push(event);
+        let token = yas::cancel::CancelToken::new();
+        report_phase(
+            Some(&report),
+            "characters",
+            &ScanPhaseResult::Complete(vec![1, 2]),
+            &token,
+        );
+        token.cancel(yas::cancel::StopReason::UserAbort);
+        report_phase(
+            Some(&report),
+            "weapons",
+            &ScanPhaseResult::Complete(vec![1]),
+            &token,
+        );
+        report_phase(
+            Some(&report),
+            "artifacts",
+            &ScanPhaseResult::<u8>::Incomplete,
+            &token,
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                ScanPhaseEvent::Complete(2),
+                ScanPhaseEvent::Interrupted,
+                ScanPhaseEvent::Interrupted
+            ]
+        );
+    }
 
     #[test]
     fn skipped_due_to_cancel_marks_requested_phases_incomplete() {
@@ -162,6 +196,7 @@ pub fn run_scan_phases(
     config: &ScanCoreConfig,
     progress_fn: Option<&ProgressFn<'_>>,
     status_fn: Option<&dyn Fn(&str)>,
+    phase_fn: Option<&ScanPhaseFn<'_>>,
     cancel_token: yas::cancel::CancelToken,
     options: ScanRunOptions,
 ) -> Result<ScanRunResult> {
@@ -215,6 +250,9 @@ pub fn run_scan_phases(
             ScanPhaseResult::Incomplete
         } else {
             report("扫描角色 / Scanning characters...");
+            if let Some(f) = phase_fn {
+                f("characters", ScanPhaseEvent::Started);
+            }
             log_info!("扫描角色...", "Scanning characters...");
             let cfg = GoodScannerApplication::make_char_config(&scanner_config, user_config);
             let scan_result = match GoodCharacterScanner::new(cfg, mappings.clone()) {
@@ -222,6 +260,7 @@ pub fn run_scan_phases(
                 Err(e) => Err(e),
             };
             let phase = phase_result(scan_result, &cancel_token, options, "character")?;
+            report_phase(phase_fn, "characters", &phase, &cancel_token);
             if matches!(phase, ScanPhaseResult::Complete(_)) && !scan_cancelled(&cancel_token, ctrl)
             {
                 ctrl.return_to_main_ui(4);
@@ -241,6 +280,9 @@ pub fn run_scan_phases(
 
     if config.scan_weapons {
         report("扫描武器 / Scanning weapons...");
+        if let Some(f) = phase_fn {
+            f("weapons", ScanPhaseEvent::Started);
+        }
         log_info!("扫描武器...", "Scanning weapons...");
         let cfg = GoodScannerApplication::make_weapon_config(&scanner_config, user_config);
         let scan_result = match GoodWeaponScanner::new(cfg, mappings.clone()) {
@@ -248,6 +290,7 @@ pub fn run_scan_phases(
             Err(e) => Err(e),
         };
         weapons = phase_result(scan_result, &cancel_token, options, "weapon")?;
+        report_phase(phase_fn, "weapons", &weapons, &cancel_token);
     }
 
     if scan_cancelled(&cancel_token, ctrl) {
@@ -261,6 +304,9 @@ pub fn run_scan_phases(
 
     if config.scan_artifacts {
         report("扫描圣遗物 / Scanning artifacts...");
+        if let Some(f) = phase_fn {
+            f("artifacts", ScanPhaseEvent::Started);
+        }
         log_info!("扫描圣遗物...", "Scanning artifacts...");
         let cfg = GoodScannerApplication::make_artifact_config(&scanner_config, user_config);
         let skip_open = matches!(weapons, ScanPhaseResult::Complete(_));
@@ -269,6 +315,7 @@ pub fn run_scan_phases(
             Err(e) => Err(e),
         };
         artifacts = phase_result(scan_result, &cancel_token, options, "artifact")?;
+        report_phase(phase_fn, "artifacts", &artifacts, &cancel_token);
     }
 
     // Achievements run after all requested roster and inventory scans.
@@ -278,6 +325,9 @@ pub fn run_scan_phases(
         ScanPhaseResult::Incomplete
     } else {
         report("扫描成就 / Scanning achievements...");
+        if let Some(f) = phase_fn {
+            f("achievements", ScanPhaseEvent::Started);
+        }
         log_info!("扫描成就...", "Scanning achievements...");
         let cfg = GoodScannerApplication::make_achievement_config(&scanner_config, user_config);
         let scan_result = AchievementCatalog::new().and_then(|catalog| {
@@ -290,12 +340,31 @@ pub fn run_scan_phases(
         phase_result(scan_result, &cancel_token, options, "achievement")?
     };
 
+    report_phase(phase_fn, "achievements", &achievements, &cancel_token);
+
     Ok(ScanRunResult {
         characters,
         weapons,
         artifacts,
         achievements,
     })
+}
+
+fn report_phase<T>(
+    callback: Option<&ScanPhaseFn<'_>>,
+    key: &str,
+    result: &ScanPhaseResult<T>,
+    cancel: &yas::cancel::CancelToken,
+) {
+    if let Some(f) = callback {
+        match result {
+            ScanPhaseResult::Complete(data) if !cancel.is_cancelled() => {
+                f(key, ScanPhaseEvent::Complete(data.len()))
+            },
+            ScanPhaseResult::NotAttempted => {},
+            _ => f(key, ScanPhaseEvent::Interrupted),
+        }
+    }
 }
 
 fn phase_result<T>(

@@ -185,6 +185,7 @@ pub struct HsrScanner<D, R> {
     config: ScanConfig,
     uid: Option<u64>,
     uid_candidate: Option<u64>,
+    observer: Option<crate::scan_progress::ScanObserver>,
 }
 
 impl HsrScanner<WindowsHsrDevice, PaddleOcrReader> {
@@ -218,6 +219,22 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             config,
             uid: None,
             uid_candidate: None,
+            observer: None,
+        }
+    }
+
+    pub fn with_observer(mut self, observer: crate::scan_progress::ScanObserver) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    fn report(
+        &self,
+        category: crate::scan_progress::ScanCategory,
+        event: crate::scan_progress::ScanEvent,
+    ) {
+        if let Some(observer) = &self.observer {
+            observer(category, event);
         }
     }
 
@@ -284,7 +301,18 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
         let mut export_details = CaptureExportDetails::default();
         let character_coverage = if self.config.targets.characters {
+            self.report(
+                crate::scan_progress::ScanCategory::Characters,
+                crate::scan_progress::ScanEvent::Started,
+            );
             let scan = self.scan_characters()?;
+            self.report(
+                crate::scan_progress::ScanCategory::Characters,
+                crate::scan_progress::ScanEvent::Finished {
+                    recognized: scan.items.len(),
+                    complete: scan.coverage == CoverageLevel::Complete,
+                },
+            );
             characters = scan.items;
             export_details = scan.details;
             scan.coverage
@@ -292,14 +320,36 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             CoverageLevel::Unknown
         };
         let light_cone_coverage = if self.config.targets.light_cones {
+            self.report(
+                crate::scan_progress::ScanCategory::LightCones,
+                crate::scan_progress::ScanEvent::Started,
+            );
             let scan = self.scan_light_cones()?;
+            self.report(
+                crate::scan_progress::ScanCategory::LightCones,
+                crate::scan_progress::ScanEvent::Finished {
+                    recognized: scan.items.len(),
+                    complete: scan.coverage == CoverageLevel::Complete,
+                },
+            );
             light_cones = scan.items;
             scan.coverage
         } else {
             CoverageLevel::Unknown
         };
         let gear_coverage = if self.config.targets.gear {
+            self.report(
+                crate::scan_progress::ScanCategory::Gear,
+                crate::scan_progress::ScanEvent::Started,
+            );
             let scan = self.scan_gear()?;
+            self.report(
+                crate::scan_progress::ScanCategory::Gear,
+                crate::scan_progress::ScanEvent::Finished {
+                    recognized: scan.items.len(),
+                    complete: scan.coverage == CoverageLevel::Complete,
+                },
+            );
             gear_items = scan.items;
             scan.coverage
         } else {
@@ -432,6 +482,18 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 category_cap
             });
         let mut items = Vec::with_capacity(limit);
+        let progress_category = match kind {
+            InventoryKind::LightCone => crate::scan_progress::ScanCategory::LightCones,
+            InventoryKind::Gear => crate::scan_progress::ScanCategory::Gear,
+        };
+        self.report(
+            progress_category,
+            crate::scan_progress::ScanEvent::Progress {
+                recognized: 0,
+                visited: 0,
+                total: Some(limit),
+            },
+        );
         let mut incomplete_reason = None;
         // The first slot is already selected. Later items use the inventory
         // next-item key. The client moves the highlight and scrolls the grid;
@@ -465,6 +527,14 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 },
                 Err(error) => return Err(error),
             }
+            self.report(
+                progress_category,
+                crate::scan_progress::ScanEvent::Progress {
+                    recognized: items.len(),
+                    visited: ordinal + 1,
+                    total: Some(limit),
+                },
+            );
             if ordinal % 25 == 0 || ordinal + 1 == limit {
                 yas::log_info!(
                     "库存进度：{}/{}。",
@@ -1214,6 +1284,14 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                             Some(path_name(&parsed.reference.path)?.to_string());
                     }
                     items.push(parsed.observation);
+                    self.report(
+                        crate::scan_progress::ScanCategory::Characters,
+                        crate::scan_progress::ScanEvent::Progress {
+                            recognized: items.len(),
+                            visited: items.len(),
+                            total: None,
+                        },
+                    );
                     yas::log_info!("角色进度：{}。", "Character progress: {}.", items.len());
                 }
             }
@@ -2592,11 +2670,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.effective_capture_method(), CaptureMethod::Wgc);
-        for method in [
-            CaptureMethod::BitBlt,
-            CaptureMethod::Wgc,
-            CaptureMethod::PrintWindow,
-        ] {
+        for method in [CaptureMethod::BitBlt, CaptureMethod::Wgc] {
             config.capture_method = Some(method);
             assert_eq!(config.effective_capture_method(), method);
         }
@@ -3142,11 +3216,24 @@ mod tests {
                 ReferenceCache::from_snapshot(snapshot).unwrap(),
                 config,
             );
+            let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let observed = events.clone();
+            scanner = scanner.with_observer(Box::new(move |category, event| {
+                observed.lock().unwrap().push((category, event))
+            }));
             let scan = scanner
                 .scan_inventory(kind, |_, _, _, _, ordinal| Ok(ordinal))
                 .unwrap();
             assert_eq!(scan.items, [0]);
             assert_eq!(scan.coverage, CoverageLevel::Unknown);
+            assert!(events.lock().unwrap().iter().any(|(_, event)| matches!(
+                event,
+                crate::scan_progress::ScanEvent::Progress {
+                    recognized: 1,
+                    visited: 1,
+                    total: Some(1)
+                }
+            )));
             assert!(!scanner
                 .device()
                 .commands()

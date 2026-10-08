@@ -6,99 +6,44 @@ use super::state::{AppState, TaskStatus, UiError, UiText};
 use super::widgets;
 use super::worker::{self, TaskHandle};
 
-pub fn show(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    server_handle: &mut Option<TaskHandle>,
-    scan_running: bool,
-    restart_required: bool,
-) {
-    let is_server_running = server_handle.as_ref().is_some_and(|h| !h.is_finished());
-    let native_failure = server_handle.as_ref().and_then(TaskHandle::native_failure);
+pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_server_running: bool) {
     let l = state.lang;
 
-    // === Action bar (always visible at top) ===
-    ui.add_space(4.0);
-    action_bar(
-        ui,
-        state,
-        server_handle,
-        is_server_running,
-        scan_running,
-        restart_required,
-        native_failure.as_ref(),
-    );
-    if restart_required {
-        return;
-    }
-    ui.colored_label(
-        egui::Color32::from_rgb(120, 120, 120),
-        if is_server_running {
-            l.t(
-                "服务器运行中，可在网页前端发送指令。指令执行时可按鼠标右键终止。",
-                "Server is running. Send instructions from the web frontend. Right-click to abort during execution.",
-            )
-        } else {
-            l.t(
-                "接收来自网页前端的圣遗物管理指令（装备/锁定/解锁）。",
-                "Accept artifact manage instructions (equip/lock/unlock) from a web frontend.",
-            )
-        },
-    );
-    ui.add_space(4.0);
-    ui.separator();
+    widgets::section(ui, l.t("连接", "Connection"), |ui| {
+        widgets::field_row(ui, l.t("端口", "Port"), |ui| {
+            ui.add(
+                egui::DragValue::new(&mut state.server_port)
+                    .range(1024..=65535)
+                    .speed(0.0),
+            );
+        });
+    });
+    widgets::section(ui, l.t("执行选项", "Execution"), |ui| {
+        ui.add_enabled_ui(!is_server_running, |ui| {
+            ui.checkbox(&mut state.filter_involved_sets, l.t("仅筛选涉及的套装", "Filter target sets only"))
+                .on_hover_text(l.t("加解锁时只扫描涉及的套装，速度更快；不会更新完整背包。", "Scan only the requested artifact sets for faster lock changes. The full inventory will not be updated."));
+            if state.filter_involved_sets { state.update_inventory = false; }
+            ui.add_enabled_ui(!state.filter_involved_sets, |ui| {
+                ui.checkbox(&mut state.update_inventory, l.t("操作后更新圣遗物列表", "Update inventory after scan"))
+                    .on_hover_text(l.t("关闭可加快扫描。", "Disable for faster scans."));
+            });
+            ui.checkbox(&mut state.hdr_mode, l.t("游戏使用 HDR", "Game uses HDR"));
+        });
+    });
+    widgets::section(ui, l.t("角色信息", "Character names"), |ui| {
+        widgets::character_names_section(ui, state, !is_server_running);
+    });
 
-    // === Scrollable config area ===
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.add_space(4.0);
-
-            // === Character Names (always visible, shared with scanner) ===
-            widgets::character_names_section(ui, state, !is_server_running);
-
-            ui.add_space(8.0);
-
-            // === Server Options ===
-            egui::CollapsingHeader::new(l.t("服务器选项", "Server Options"))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!is_server_running, |ui| {
-                        ui.checkbox(
-                            &mut state.filter_involved_sets,
-                            l.t(
-                                "只筛选涉及的套装后加解锁（更快）",
-                                "Filter involved artifact sets before lock/unlock (faster)",
-                            ),
-                        );
-                        if state.filter_involved_sets {
-                            state.update_inventory = false;
-                        }
-                        ui.add_enabled_ui(!state.filter_involved_sets, |ui| {
-                            ui.checkbox(
-                                &mut state.update_inventory,
-                                l.t(
-                                    "扫描后更新圣遗物列表（关闭可加快扫描）",
-                                    "Update inventory after scan (disable to scan faster)",
-                                ),
-                            );
-                        });
-                        ui.checkbox(&mut state.hdr_mode, l.t("我的原神在使用HDR", "HDR mode"));
-                    });
-                });
-
-            // === Timing Delays ===
-            //
-            // Scan API runs the same character/weapon/artifact scanners as the
-            // scanner tab, so all their delays apply when the server executes a
-            // scan job. Layout: character + inventory + manager in one row.
-            egui::CollapsingHeader::new(l.t("延迟设置", "Timing Delays"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!is_server_running, |ui| {
+    // === Timing Delays ===
+    //
+    // Scan API runs the same character/weapon/artifact scanners as the
+    // scanner tab, so all their delays apply when the server executes a
+    // scan job. Layout: character + inventory + manager in one row.
+    widgets::fold(ui, l.t("延迟设置", "Timing"), |ui| {
+        ui.add_enabled_ui(!is_server_running, |ui| {
                         let defaults = genshin_scanner::cli::GoodUserConfig::default();
-                        ui.columns(3, |cols| {
-                            widgets::delay_group(&mut cols[0], "char_delays", l.t("角色", "Character"), l, &mut [
+                        {
+                            widgets::delay_group(ui, "char_delays", l.t("角色", "Character"), l, &mut [
                                 (l.t("打开界面", "Open screen"), &mut state.user_config.char_open_delay, defaults.char_open_delay,
                                     l.t("打开角色界面后等待完全加载的时间", "Wait time for character screen to fully load after opening")),
                                 (l.t("关闭界面", "Close screen"), &mut state.user_config.char_close_delay, defaults.char_close_delay,
@@ -108,8 +53,8 @@ pub fn show(
                                 (l.t("切换角色", "Next character"), &mut state.user_config.char_next_delay, defaults.char_next_delay,
                                     l.t("切换到下一个角色后等待面板更新的时间", "Wait after switching to next character for panel to update")),
                             ]);
-                            widgets::inventory_delays(&mut cols[1], state, l);
-                            widgets::delay_group(&mut cols[2], "mgr_delays", l.t("管理器", "Manager"), l, &mut [
+                            widgets::inventory_delays(ui, state, l);
+                            widgets::delay_group(ui, "mgr_delays", l.t("管理器", "Manager"), l, &mut [
                                 (l.t("画面切换", "Screen transition"), &mut state.user_config.mgr_transition_delay, defaults.mgr_transition_delay,
                                     l.t("打开/关闭角色面板等大画面切换后的等待", "Wait after major screen transitions like opening/closing character panel")),
                                 (l.t("操作按钮", "Action button"), &mut state.user_config.mgr_action_delay, defaults.mgr_action_delay,
@@ -119,18 +64,16 @@ pub fn show(
                                 (l.t("滚动等待", "Scroll settle"), &mut state.user_config.mgr_scroll_delay, defaults.mgr_scroll_delay,
                                     l.t("翻页后等待物品列表稳定的时间", "Wait after scrolling for item list to stabilize")),
                             ]);
-                        });
+                        }
                     });
-                });
+    });
 
-            // === Advanced Options (shared with scanner tab) ===
-            egui::CollapsingHeader::new(l.t("高级选项", "Advanced Options"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(!is_server_running, |ui| {
+    // === Advanced Options (shared with scanner tab) ===
+    widgets::fold(ui, l.t("高级选项", "Advanced"), |ui| {
+        ui.add_enabled_ui(!is_server_running, |ui| {
                         ui.horizontal_wrapped(|ui| {
                             ui.checkbox(&mut state.verbose, l.t("详细信息", "Verbose"));
-                            ui.checkbox(&mut state.dump_images, l.t("保存OCR截图 → debug_images/", "Dump OCR images → debug_images/"));
+                            ui.checkbox(&mut state.dump_images, l.t("保存 OCR 截图", "Save OCR screenshots"));
                             ui.checkbox(&mut state.dump_job_data, l.t("保存请求数据", "Dump request data"));
                         });
 
@@ -146,119 +89,71 @@ pub fn show(
                             genshin_scanner::scanner::common::mappings::force_refresh,
                         );
                     });
-                });
-        });
+    });
 }
 
 /// Top action bar with port, start/stop button, and status.
-fn action_bar(
+pub fn show_status(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    server_handle: &mut Option<TaskHandle>,
-    is_server_running: bool,
-    scan_running: bool,
-    restart_required: bool,
-    native_failure: Option<&UiError>,
+    handle: &mut Option<TaskHandle>,
+    game_busy: bool,
+    restart: bool,
 ) {
     let l = state.lang;
-
-    if restart_required {
-        if let Some(error) = native_failure {
-            widgets::error_card(ui, l, error);
-        } else {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 90, 90),
-                l.t(
-                    "另一个任务发生了底层崩溃。请先复制该任务中的完整错误，然后重启本程序。",
-                    "Another task had a low-level crash. Copy its full error, then restart this application.",
-                ),
-            );
-        }
-        ui.add_enabled(
-            false,
-            egui::Button::new(l.t("需重启程序", "Restart required")),
+    if restart {
+        super::theme::restart_required(
+            ui,
+            l,
+            handle
+                .as_ref()
+                .and_then(TaskHandle::native_failure)
+                .as_ref(),
         );
         return;
     }
-
-    if scan_running && !is_server_running {
-        ui.colored_label(
-            egui::Color32::from_rgb(255, 200, 50),
-            l.t(
-                "另一个游戏数据任务正在运行，请等待完成",
-                "Another game-data task is running. Please wait for it to finish.",
-            ),
+    let running = handle.as_ref().is_some_and(|h| !h.is_finished());
+    let status = worker::try_task_status(&state.server_status);
+    if handle.as_ref().is_some_and(TaskHandle::is_stopping) {
+        super::theme::task_status(
+            ui,
+            l,
+            status.as_ref(),
+            l.t("正在停止连接", "Stopping connection"),
         );
+    } else {
+        super::manager_progress::show(ui, l, &state.server_job, status.as_ref());
     }
-
-    ui.horizontal(|ui| {
-        ui.label(l.t("端口:", "Port:"));
-        ui.add_enabled(
-            !is_server_running,
-            egui::DragValue::new(&mut state.server_port)
-                .range(1024..=65535)
-                .speed(0.0),
-        );
-
-        ui.add_space(12.0);
-
-        if scan_running && !is_server_running {
-            ui.add_enabled(
-                false,
-                egui::Button::new(l.t("▶ 启动HTTP服务器", "▶ Start HTTP Server")),
-            );
-        } else if is_server_running {
-            if ui.button(l.t("■ 停止服务器", "■ Stop Server")).clicked() {
-                if let Some(ref h) = server_handle {
-                    h.stop();
-                }
-            }
-            if let Some(TaskStatus::Running(ref phase)) =
-                worker::try_task_status(&state.server_status)
-            {
-                ui.spinner();
-                ui.label(phase.text(l));
+    ui.add_space(16.0);
+    if running {
+        let stopping = handle.as_ref().is_some_and(TaskHandle::is_stopping);
+        if super::theme::primary_action(
+            ui,
+            !stopping,
+            if stopping {
+                l.t("正在停止", "Stopping")
             } else {
-                ui.colored_label(
-                    egui::Color32::from_rgb(100, 200, 100),
-                    format!(
-                        "● {} {}",
-                        l.t("运行中", "Running on port"),
-                        state.server_port
-                    ),
-                );
-            }
-        } else if ui
-            .button(l.t("▶ 启动HTTP服务器", "▶ Start HTTP Server"))
-            .clicked()
+                l.t("停止连接", "Stop connection")
+            },
+        )
+        .clicked()
         {
-            if let Err(e) = super::privilege::ensure_admin_for_action() {
-                *state.server_status.lock().unwrap() = TaskStatus::Failed(UiError::from_anyhow(
-                    UiText::new(
-                        "管理器需要管理员权限才能控制游戏。请以管理员身份重新启动程序。",
-                        "The manager needs administrator access to control the game. Restart the application as administrator.",
-                    ),
-                    &e,
-                ));
-            } else {
-                state.server_enabled.store(true, Ordering::Relaxed);
-                // Force immediate save before starting server
-                state.persist_config_now();
-                *server_handle = Some(worker::spawn_server(state));
+            if let Some(h) = handle {
+                h.stop();
             }
         }
-    });
-
-    // Status from previous run
-    if !is_server_running {
-        match worker::try_task_status(&state.server_status) {
-            Some(TaskStatus::Failed(ref error)) => {
-                widgets::error_card(ui, l, error);
-            },
-            Some(TaskStatus::Completed(ref msg)) => {
-                ui.colored_label(egui::Color32::from_rgb(150, 150, 150), msg.text(l));
-            },
-            _ => {},
+    } else if super::theme::primary_action(ui, !game_busy, l.t("启动连接", "Start connection"))
+        .clicked()
+    {
+        if let Err(e) = super::privilege::ensure_admin_for_action() {
+            *state.server_status.lock().unwrap() = TaskStatus::Failed(UiError::from_anyhow(
+                UiText::new("请以管理员身份启动程序", "Restart the app as administrator"),
+                &e,
+            ));
+        } else {
+            state.server_enabled.store(true, Ordering::Relaxed);
+            state.persist_config_now();
+            *handle = Some(worker::spawn_server(state));
         }
     }
 }

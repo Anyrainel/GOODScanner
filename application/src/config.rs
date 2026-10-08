@@ -106,7 +106,6 @@ pub enum StarRailCaptureMethod {
     Auto,
     BitBlt,
     Wgc,
-    PrintWindow,
 }
 
 impl StarRailCaptureMethod {
@@ -115,7 +114,6 @@ impl StarRailCaptureMethod {
             Self::Auto => None,
             Self::Wgc => Some(yas::capture::CaptureMethod::Wgc),
             Self::BitBlt => Some(yas::capture::CaptureMethod::BitBlt),
-            Self::PrintWindow => Some(yas::capture::CaptureMethod::PrintWindow),
         }
     }
 }
@@ -254,6 +252,12 @@ fn migrate_star_rail_scan_settings(value: &mut serde_json::Value) -> Result<()> 
     let Some(settings) = value.get_mut("starRail").and_then(Value::as_object_mut) else {
         return Ok(());
     };
+    // v1/v2 and earlier local v3 files could save captureMethod="printWindow".
+    // Retire that backend within the existing v3 migration from origin's v2;
+    // Auto uses the saved hdrMode to select BitBlt or WGC.
+    if settings.get("captureMethod").and_then(Value::as_str) == Some("printWindow") {
+        settings.insert("captureMethod".to_owned(), Value::from("auto"));
+    }
     if settings.contains_key("timings") {
         return Ok(());
     }
@@ -388,7 +392,7 @@ impl ApplicationConfigStore {
         // scan, capture, manager, navigation and output settings.
         // v1/v2 and earlier local v3 files stored a concrete captureMethod
         // (default bitBlt) and no HDR
-        // setting. Preserve explicit choices as advanced overrides; an omitted
+        // setting. Preserve supported choices as advanced overrides; an omitted
         // method now uses Auto, which still selects BitBlt with HDR disabled.
         // Merge into the existing unpublished v3 migration from origin's v2.
         if matches!(config.schema_version, 1 | 2) {

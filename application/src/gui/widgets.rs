@@ -4,9 +4,79 @@ use eframe::egui;
 
 use super::state::{AppState, Lang, RefreshState, UiError, UiText};
 
+/// Native egui frames provide the same spacing and hierarchy for every form.
+pub fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    form_frame(ui, |ui| {
+        ui.label(egui::RichText::new(title).size(13.0).strong());
+        ui.add_space(3.0);
+        body(ui);
+    });
+}
+
+pub fn fold(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    form_frame(ui, |ui| {
+        egui::CollapsingHeader::new(egui::RichText::new(title).size(13.0).strong())
+            .show_unindented(ui, |ui| {
+                ui.add_space(3.0);
+                body(ui);
+            });
+    });
+}
+
+fn form_frame(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+    let width = ui.available_width();
+    egui::Frame::none()
+        .fill(super::theme::SURFACE)
+        .rounding(9.0)
+        .inner_margin(egui::vec2(12.0, 10.0))
+        .show(ui, |ui| {
+            ui.set_width((width - 24.0).max(1.0));
+            ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+            ui.spacing_mut().item_spacing = egui::vec2(7.0, 4.0);
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
+            ui.spacing_mut().interact_size.y = 26.0;
+            body(ui);
+        });
+}
+
+/// Labels and controls share a fixed-height row and a stable label column.
+pub fn field_row(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
+    let width = ui.available_width();
+    let label_width = (width * 0.35).clamp(65.0, 112.0);
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+    let label_rect =
+        egui::Rect::from_min_max(row.min, egui::pos2(row.left() + label_width, row.bottom()));
+    let control_rect =
+        egui::Rect::from_min_max(egui::pos2(label_rect.right() + 8.0, row.top()), row.max);
+    let mut label_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(label_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    label_ui
+        .add(egui::Label::new(label).truncate())
+        .on_hover_text(label);
+    let mut control_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(control_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    control(&mut control_ui);
+}
+
+pub fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(12.0)
+                .color(super::theme::MUTED),
+        )
+        .wrap(),
+    );
+}
+
 /// Render every user-visible failure with the same information hierarchy:
-/// a localized plain-language hint first, followed by the exact technical
-/// error in a selectable block and a one-click copy action.
+/// a localized hint first, then copyable diagnostics behind a native disclosure.
 pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {
     let hint = error.hint_text(l);
     let technical_details = error.technical_details(l);
@@ -15,12 +85,11 @@ pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {
     ui.group(|ui| {
         ui.set_width(ui.available_width());
         ui.colored_label(
-            egui::Color32::from_rgb(255, 100, 100),
+            ui.visuals().error_fg_color,
             egui::RichText::new(hint).strong(),
         );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.strong(l.t("完整错误详情", "Full error details"));
             if ui
                 .small_button(l.t("复制完整错误", "Copy full error"))
                 .clicked()
@@ -28,13 +97,42 @@ pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {
                 ui.ctx().copy_text(copy_text.clone());
             }
         });
-        ui.add(
-            egui::TextEdit::multiline(&mut technical_details.as_str())
-                .font(egui::TextStyle::Monospace)
-                .desired_width(f32::INFINITY)
-                .desired_rows(technical_details.lines().count().clamp(2, 6)),
-        );
+        egui::CollapsingHeader::new(l.t("错误详情", "Error details")).show_unindented(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut technical_details.as_str())
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(technical_details.lines().count().clamp(2, 6)),
+            );
+        });
     });
+}
+
+pub fn export_file(ui: &mut egui::Ui, l: Lang, path: &str) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(l.t("导出文件", "Export file"))
+                .size(12.0)
+                .color(super::theme::MUTED),
+        );
+        if ui.small_button(l.t("复制路径", "Copy path")).clicked() {
+            ui.ctx().copy_text(path.to_owned());
+        }
+    });
+    ui.add(
+        egui::TextEdit::singleline(&mut path.as_ref())
+            .font(egui::TextStyle::Small)
+            .desired_width(ui.available_width()),
+    );
+}
+
+pub fn output_folder(ui: &mut egui::Ui, l: Lang, path: &mut String) {
+    ui.label(l.t("输出文件夹", "Output folder"));
+    if path_control(ui, path, l.t("选择…", "Choose…")).clicked() {
+        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+            *path = folder.display().to_string();
+        }
+    }
 }
 
 /// Shared game-data refresh control used by scanner, manager, and capture.
@@ -93,11 +191,14 @@ pub fn game_data_refresh_control<F>(
 }
 
 /// Numeric input for u64 values (clamped to 5000).
-pub fn num_input_u64(ui: &mut egui::Ui, value: &mut u64, _width: f32) {
-    ui.add(egui::DragValue::new(value).range(0..=5000).speed(1.0));
+pub fn num_input_u64(ui: &mut egui::Ui, value: &mut u64, width: f32) {
+    ui.add_sized(
+        [width, 24.0],
+        egui::DragValue::new(value).range(0..=5000).speed(1.0),
+    );
 }
 
-/// A labeled group of delay fields rendered in a 2-column grid.
+/// A labeled group of delay fields with aligned value controls.
 /// Each field is `(label, value, default, tooltip)`. Values below their default get a
 /// warning asterisk, and a footnote is shown underneath when any field is below default.
 pub fn delay_group(
@@ -107,36 +208,34 @@ pub fn delay_group(
     l: Lang,
     fields: &mut [(&str, &mut u64, u64, &str)],
 ) {
-    ui.strong(category);
+    ui.strong(format!("{category} (ms)"));
     let mut any_below = false;
     let warn_color = egui::Color32::from_rgb(255, 200, 50);
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing([8.0, 2.0])
-        .show(ui, |ui| {
-            for (label, value, default, tooltip) in fields.iter_mut() {
-                let below = **value < *default;
-                let label_text = if below {
-                    any_below = true;
-                    format!("  {}* (ms):", label)
-                } else {
-                    format!("  {} (ms):", label)
-                };
-                let rich = if below {
-                    egui::RichText::new(&label_text).color(warn_color)
-                } else {
-                    egui::RichText::new(&label_text)
-                };
-                let resp = ui.add(egui::Label::new(rich).sense(egui::Sense::hover()));
-                if !tooltip.is_empty() && resp.hovered() {
-                    egui::show_tooltip(ui.ctx(), ui.layer_id(), resp.id.with("tip"), |ui| {
-                        ui.label(*tooltip);
+    ui.push_id(id, |ui| {
+        for (label, value, default, tooltip) in fields.iter_mut() {
+            let below = **value < *default;
+            let label_text = if below {
+                any_below = true;
+                format!("{}*", label)
+            } else {
+                label.to_string()
+            };
+            let rich = if below {
+                egui::RichText::new(&label_text).color(warn_color)
+            } else {
+                egui::RichText::new(&label_text)
+            };
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    num_input_u64(ui, value, 60.0);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(rich).truncate())
+                            .on_hover_text(format!("{label}\n{tooltip}"));
                     });
-                }
-                num_input_u64(ui, value, 60.0);
-                ui.end_row();
-            }
-        });
+                });
+            });
+        }
+    });
     if any_below {
         ui.colored_label(
             warn_color,
@@ -153,15 +252,6 @@ pub fn delay_group(
 pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled: bool) {
     let l = state.lang;
 
-    let names_header = if state.names_need_attention {
-        egui::RichText::new(l.t("⚠ 角色名称", "⚠ Character Names"))
-            .color(egui::Color32::from_rgb(255, 200, 50))
-            .strong()
-    } else {
-        egui::RichText::new(l.t("角色名称", "Character Names")).strong()
-    };
-    ui.label(names_header);
-    ui.add_space(2.0);
     ui.add_enabled_ui(enabled, |ui| {
         if state.names_need_attention {
             ui.colored_label(
@@ -173,38 +263,46 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
             );
             ui.add_space(4.0);
         } else {
-            ui.label(l.t(
-                "这些角色可在游戏内改名；奇偶·男性和奇偶·女性可留空（* 为必填）",
-                "These characters can be renamed in-game. Manekin and Manekina may be left blank (* = required).",
-            ));
+            hint(
+                ui,
+                l.t(
+                    "填写游戏内昵称；* 为必填。",
+                    "Use in-game names. * Required.",
+                ),
+            );
         }
-        ui.add_space(2.0);
-
-        let required_color = if state.names_need_attention {
-            egui::Color32::from_rgb(255, 200, 50)
-        } else {
-            ui.visuals().text_color()
-        };
-
-        // Two name fields per row
-        let total_w = ui.available_width();
-        let field_w = ((total_w - 80.0 * 2.0 - 24.0) / 2.0).max(80.0);
-        ui.horizontal(|ui| {
-            let traveler_empty = state.names_need_attention && state.missing_required_character_names();
-            let label_color = if traveler_empty { egui::Color32::from_rgb(255, 100, 100) } else { required_color };
-            ui.colored_label(label_color, l.t("旅行者*", "Traveler*"));
-            ui.add(egui::TextEdit::singleline(&mut state.user_config.traveler_name).desired_width(field_w));
-            ui.add_space(16.0);
-            ui.label(l.t("流浪者", "Wanderer"));
-            ui.add(egui::TextEdit::singleline(&mut state.user_config.wanderer_name).desired_width(field_w));
+        field_row(ui, l.t("旅行者*", "Traveler*"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.user_config.traveler_name)
+                    .desired_width(ui.available_width())
+                    .min_size(egui::vec2(0.0, 26.0)),
+            );
         });
-        ui.horizontal(|ui| {
-            ui.label(l.t("奇偶·男性", "Manekin"));
-            ui.add(egui::TextEdit::singleline(&mut state.user_config.manekin_name).desired_width(field_w));
-            ui.add_space(16.0);
-            ui.label(l.t("奇偶·女性", "Manekina"));
-            ui.add(egui::TextEdit::singleline(&mut state.user_config.manekina_name).desired_width(field_w));
-        });
+        egui::CollapsingHeader::new(l.t("其他可改名角色", "Other renamed characters"))
+            .show_unindented(ui, |ui| {
+                for (label, name) in [
+                    (
+                        l.t("流浪者", "Wanderer"),
+                        &mut state.user_config.wanderer_name,
+                    ),
+                    (
+                        l.t("奇偶·男性", "Manekin"),
+                        &mut state.user_config.manekin_name,
+                    ),
+                    (
+                        l.t("奇偶·女性", "Manekina"),
+                        &mut state.user_config.manekina_name,
+                    ),
+                ] {
+                    field_row(ui, label, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(name)
+                                .desired_width(ui.available_width())
+                                .min_size(egui::vec2(0.0, 26.0)),
+                        );
+                    });
+                }
+            });
 
         if state.names_need_attention && !state.missing_required_character_names() {
             state.names_need_attention = false;
@@ -249,4 +347,26 @@ pub fn star_rail_game_data_refresh_control(
         ),
         || hsr_scanner::data_cache::force_refresh().map_err(anyhow::Error::new),
     );
+}
+/// Keep path fields and their picker buttons within one bounded row, including
+/// long Windows paths inside a horizontally scrollable settings pane.
+pub(super) fn path_control(ui: &mut egui::Ui, value: &mut String, button: &str) -> egui::Response {
+    let width = ui.available_width().max(180.0);
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::hover());
+    let picker = egui::Rect::from_min_max(egui::pos2(row.right() - 112.0, row.top()), row.max);
+    let input = egui::Rect::from_min_max(row.min, egui::pos2(picker.left() - 10.0, row.bottom()));
+    let mut field_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(input)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    field_ui.add(
+        egui::TextEdit::singleline(value)
+            .desired_width(input.width())
+            .min_size(egui::vec2(0.0, 30.0)),
+    );
+    let mut picker_ui = ui.new_child(egui::UiBuilder::new().max_rect(picker).layout(
+        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+    ));
+    picker_ui.add(egui::Button::new(button).wrap_mode(egui::TextWrapMode::Extend))
 }

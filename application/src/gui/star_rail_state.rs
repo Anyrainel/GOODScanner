@@ -19,7 +19,9 @@ pub struct ManagerPreview {
 pub struct StarRailState {
     pub data_cache_refresh: super::state::RefreshState,
     pub scan_status: Arc<Mutex<TaskStatus>>,
+    pub scan_progress: Arc<Mutex<super::task_progress::TaskProgress>>,
     pub manager_status: Arc<Mutex<TaskStatus>>,
+    pub manager_progress: Arc<Mutex<super::task_progress::TaskProgress>>,
     pub scan_handle: Option<TaskHandle>,
     pub manager_handle: Option<TaskHandle>,
     pub manager_preview: Arc<Mutex<Option<ManagerPreview>>>,
@@ -39,7 +41,9 @@ impl StarRailState {
         Self {
             data_cache_refresh: super::state::RefreshState::Idle,
             scan_status: Arc::new(Mutex::new(TaskStatus::Idle)),
+            scan_progress: Arc::new(Mutex::new(super::task_progress::TaskProgress::default())),
             manager_status: Arc::new(Mutex::new(TaskStatus::Idle)),
+            manager_progress: Arc::new(Mutex::new(super::task_progress::TaskProgress::default())),
             scan_handle: None,
             manager_handle: None,
             manager_preview: Arc::new(Mutex::new(None)),
@@ -87,6 +91,7 @@ impl StarRailState {
     }
 
     pub fn invalidate_manager_preview(&mut self) {
+        self.manager_progress.lock().unwrap().steps.clear();
         match self.manager_preview.lock() {
             Ok(mut preview) => *preview = None,
             Err(poisoned) => {

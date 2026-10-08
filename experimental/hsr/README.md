@@ -125,8 +125,8 @@ navigation delays migrate to equivalent total waits.
 Capture defaults to **Automatic**: BitBlt for SDR and WGC with FP16 capture and
 tone mapping when **HDR mode** is enabled beside the scan targets. Existing saved
 backend choices remain overrides. Select Automatic to restore the recommended
-behavior. Changing HDR mode also restores Automatic capture. PrintWindow remains
-a troubleshooting override.
+behavior. Changing HDR mode also restores Automatic capture. Retired PrintWindow
+selections migrate to Automatic.
 
 **Advanced Options** contains the capture override, image dumps and separate scan
 caps for Characters, Light Cones, and Relics/Ornaments. `0` scans the whole
@@ -140,7 +140,7 @@ evaluated fields; model and pool overrides are not shown.
 
 截图方式默认为**自动**：普通模式使用 BitBlt；在扫描目标旁勾选 **HDR** 后，使用 WGC
 以 FP16 截图并进行色调映射。旧版保存的截图方式保留为手动覆盖，选择“自动”可恢复推荐设置。
-切换 HDR 选项也会恢复自动截图。PrintWindow 保留用于排查截图问题。
+切换 HDR 选项也会恢复自动截图。旧版 PrintWindow 设置会迁移为自动截图。
 
 **高级选项**包含截图方式覆盖、OCR 截图保存，以及角色、光锥、遗器与饰品各自的最大扫描数。
 `0` 表示扫描全部；提前达到上限时，覆盖率标记为未知。背包上限用于抽样，不会因为背包总数
