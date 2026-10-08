@@ -10,7 +10,7 @@ Label sources:
   gt-corrected  identity matches groundtruth but this field differed; label from GT
   ocr-only      no groundtruth alignment; label is the raw OCR text (review before use)
 
-Characters rescanned in phase 2 (debug_images/characters_rescan/<index>) are
+Characters rescanned in phase 2 (debug_images/gi_characters_rescan/<index>) are
 aligned via the rescan's object; their crops are stored as item "<index>_rescan".
 
 Output layout (--out):
@@ -306,26 +306,31 @@ def load_manifests(dump_root, category):
 def iter_items(run_dir):
     """Yield (dump root, category, scanned objects, item manifests by phase)."""
     export = glob.glob(os.path.join(run_dir, "good_export_*.json"))
-    # Accept a new game/run directory directly, or discover all Genshin runs
-    # under a scanner working directory. Keep historical flat dumps readable.
+    # Accept debug_images directly or discover it under the scanner cwd.
+    # Historical unprefixed and timestamped dumps remain readable.
     categories = ("characters", "weapons", "artifacts")
-    if any(os.path.isdir(os.path.join(run_dir, c)) for c in categories):
-        roots = [run_dir]
+    if any(os.path.isdir(os.path.join(run_dir, "gi_" + c)) for c in categories):
+        roots = [(run_dir, "gi_")]
+    elif any(os.path.isdir(os.path.join(run_dir, c)) for c in categories):
+        roots = [(run_dir, "")]
     else:
-        roots = sorted(glob.glob(os.path.join(run_dir, "debug_images", "genshin", "run_*")))
-        legacy = os.path.join(run_dir, "debug_images")
-        if any(os.path.isdir(os.path.join(legacy, c)) for c in categories):
-            roots.append(legacy)
-    for root in roots:
-        yield from iter_dump_items(root, categories, export)
+        dump_root = os.path.join(run_dir, "debug_images")
+        if any(os.path.isdir(os.path.join(dump_root, "gi_" + c)) for c in categories):
+            roots = [(dump_root, "gi_")]
+        else:
+            roots = [(p, "") for p in sorted(glob.glob(os.path.join(dump_root, "genshin", "run_*")))]
+            if any(os.path.isdir(os.path.join(dump_root, c)) for c in categories):
+                roots.append((dump_root, ""))
+    for root, prefix in roots:
+        yield from iter_dump_items(root, categories, export, prefix)
 
 
-def iter_dump_items(root, categories, export):
+def iter_dump_items(root, categories, export, prefix):
     for category in categories:
-        items = load_manifests(root, category)
+        items = load_manifests(root, prefix + category)
         if not items:
             continue
-        rescans = load_manifests(root, RESCAN_DIR) if category == "characters" else {}
+        rescans = load_manifests(root, prefix + RESCAN_DIR) if category == "characters" else {}
         scanned = (load_json(export[0]).get(category) or []) if export else []
         if not export:
             scanned = [

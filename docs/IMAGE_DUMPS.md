@@ -7,19 +7,28 @@ HSR already depends on this crate for the embedded OCR models.
 
 ## Folder ownership
 
-Each enabled scan/manager initialization starts a new run:
+Each enabled scan/manager initialization replaces that game's previous dumps:
 
 ```
 debug_images/
-  genshin/run_<timestamp>_<pid>/characters/0000/
-  hsr/run_<timestamp>_<pid>/characters/0000/
+  gi_characters/0000/
+  hsr_characters/0000/
 ```
 
-Run and item folders are reserved with atomic `create_dir`, including across
-processes. Repeating the same category/index reserves `0000_2`, `0000_3`, etc.
-No existing folder is deleted. Manager artifact reads use `manager_artifacts`,
-separate from normal artifact scans. Genshin achievement and failure captures
-also use the game/run namespace. Legacy per-field writes reserve fresh filenames.
+After flushing pending writes, initialization clears only directories with the
+active game's prefix (`gi_` or `hsr_`). This removes stale higher indices even
+when a new scan finds no items. The other game's dumps are retained. There are
+no timestamp or game parent folders; new scans reuse the same category/index paths.
+Linked category directories are rejected before cleanup. Save a copy outside
+these folders before scanning again if a session should join a training archive.
+
+Item folders are reserved with atomic `create_dir`. Repeating an index within
+the same scan reserves `0000_2`, `0000_3`, etc., preserving current retries.
+Manager artifact reads use `gi_manager_artifacts`, separate from `gi_artifacts`.
+Achievement and failure captures also use game-prefixed categories. Code-owned
+category identifiers must be lowercase ASCII, digits, or underscores, so path
+sanitization cannot merge distinct category owners. Legacy per-field writes
+reserve fresh filenames.
 The filter-test helper accepts an explicit external output prefix; its caller
 owns that destination, and its PNG writes reserve filenames too.
 
@@ -66,10 +75,9 @@ automatic HSR groundtruth labeling is possible.
 field manifests and a groundtruth GOOD export. It emits images, `manifest.jsonl`,
 PaddleOCR `rec_gt.txt`, charset, and coverage reports. Verified labels come from
 groundtruth; OCR-only hypotheses are separated for review. Failed inferences are
-excluded. It accepts a scanner working directory (discovering its Genshin runs)
-or an individual `debug_images/genshin/run_*` directory, and still reads historical
-flat dumps. Point other offline evaluators at a specific game/run directory where
-they previously expected `debug_images/`.
+excluded. It accepts a scanner working directory or its `debug_images` directory,
+using the `gi_` categories and excluding HSR. It still reads historical flat and
+timestamped dumps. Other offline evaluators need the game-prefixed category paths.
 
 At this audit there is no committed end-to-end custom PPOCR training plan or
 training configuration. The dataset builder and live/offline field evaluators are

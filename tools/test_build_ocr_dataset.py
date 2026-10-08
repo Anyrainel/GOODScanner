@@ -7,8 +7,8 @@ from build_ocr_dataset import collect, iter_items
 
 
 class DumpLayoutTests(unittest.TestCase):
-    def make_item(self, root, game="genshin"):
-        item = root / "characters" / "0000"
+    def make_item(self, root, game="genshin", prefix=""):
+        item = root / (prefix + "characters") / "0000"
         item.mkdir(parents=True)
         (item / "name.png").write_bytes(b"fixture crop")
         (item / "failed.png").write_bytes(b"fixture crop")
@@ -42,6 +42,19 @@ class DumpLayoutTests(unittest.TestCase):
             cwd = Path(temp)
             self.make_item(cwd / "debug_images")
             self.assertEqual(len(collect([str(cwd)], {}, None)), 1)
+
+    def test_flat_game_prefixes_use_genshin_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cwd = Path(temp)
+            dumps = cwd / "debug_images"
+            self.make_item(dumps, prefix="gi_")
+            self.make_item(dumps, "hsr", prefix="hsr_")
+            # Stale pre-prefix dumps should not leak into the current library.
+            self.make_item(dumps)
+            for source in [cwd, dumps]:
+                records = collect([str(source)], {}, None)
+                self.assertEqual(len(records), 1)
+                self.assertIn("gi_characters", records[0]["src_path"])
 
 
 if __name__ == "__main__":
