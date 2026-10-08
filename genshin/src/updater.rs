@@ -32,8 +32,10 @@ const DOWNLOAD_MIRRORS: &[&str] = &[
     "", // direct GitHub
 ];
 
-/// Base URL for the releases/latest redirect (non-API).
-const RELEASES_LATEST_URL: &str = "https://github.com/Anyrainel/GOODScanner/releases/latest";
+/// Try the future repository first, while supporting the transition release
+/// before the repository is renamed. Old installed updaters still need release
+/// assets published under GOODScanner/GOODCapture aliases after the rename.
+const RELEASE_REPOSITORIES: &[&str] = &["Anyrainel/GGScanner", "Anyrainel/GOODScanner"];
 
 /// Minimum plausible exe size (1 MB).  The real binary is 20+ MB;
 /// anything smaller is almost certainly an error page or truncated download.
@@ -52,6 +54,49 @@ struct GitHubRelease {
 struct ReleaseBuild {
     tag: String,
     revision: u32,
+    /// Additive to the existing manifest: old updaters ignore these fields.
+    /// Stable roles let a transition build find future renamed binaries.
+    #[serde(default)]
+    assets: ReleaseAssets,
+}
+
+#[derive(Default, Deserialize)]
+struct ReleaseAssets {
+    scanner: Option<String>,
+    capture: Option<String>,
+}
+
+struct ResolvedRelease {
+    repository: &'static str,
+    tag: String,
+    revision: u32,
+    assets: ReleaseAssets,
+}
+
+impl ResolvedRelease {
+    fn download_url(&self, asset_name: &str) -> Result<String> {
+        let mapped = match asset_name {
+            ASSET_SCANNER => self.assets.scanner.as_deref(),
+            ASSET_CAPTURE => self.assets.capture.as_deref(),
+            _ => None,
+        };
+        // Manifest filenames are already revision-specific. Legacy manifests
+        // have no role map and use the existing revision naming convention.
+        let filename = mapped
+            .map(str::to_owned)
+            .unwrap_or_else(|| revision_asset_name(asset_name, self.revision));
+        if !filename.ends_with(".exe")
+            || !filename
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        {
+            return Err(anyhow!("Invalid release executable filename: {filename}"));
+        }
+        Ok(format!(
+            "https://github.com/{}/releases/download/{}/{}",
+            self.repository, self.tag, filename
+        ))
+    }
 }
 
 fn release_revision(body: Option<&str>) -> u32 {
@@ -150,10 +195,7 @@ pub fn current_version_display() -> String {
 // ── Tag resolution strategies ────────────────────────────────────
 
 /// Strategy 1: GitHub REST API (fast, works in most regions).
-fn get_tag_via_api() -> Option<(String, u32)> {
-    let url = "https://api.github.com/repos/Anyrainel/GOODScanner/releases/latest";
-    log_debug!("检查更新(API): {}", "Checking via API: {}", url);
-
+fn get_tag_via_api() -> Option<ResolvedRelease> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
@@ -161,35 +203,41 @@ fn get_tag_via_api() -> Option<(String, u32)> {
         .build()
         .ok()?;
 
-    let resp = client.get(url).send().ok()?;
-    if !resp.status().is_success() {
-        log_debug!("API 返回: {}", "API returned: {}", resp.status());
-        return None;
+    for &repository in RELEASE_REPOSITORIES {
+        let url = format!("https://api.github.com/repos/{repository}/releases/latest");
+        log_debug!("检查更新(API): {}", "Checking via API: {}", url);
+        let Ok(resp) = client.get(url).send() else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            log_debug!("API 返回: {}", "API returned: {}", resp.status());
+            continue;
+        }
+        let Ok(release) = resp.json::<GitHubRelease>() else {
+            continue;
+        };
+        if parse_calver_tag(&release.tag_name).is_some() {
+            return Some(ResolvedRelease {
+                repository,
+                tag: release.tag_name,
+                revision: release_revision(release.body.as_deref()),
+                assets: ReleaseAssets::default(),
+            });
+        }
     }
-    let release: GitHubRelease = resp.json().ok()?;
-    // Validate it looks like a CalVer tag before returning
-    if parse_calver_tag(&release.tag_name).is_some() {
-        Some((release.tag_name, release_revision(release.body.as_deref())))
-    } else {
-        log_debug!(
-            "无法解析版本号: {}",
-            "Cannot parse release tag: {}",
-            release.tag_name
-        );
-        None
-    }
+    None
 }
 
 /// The daily tag stays compatible with old updaters. A small mirrored asset
 /// carries the revision when the GitHub API is unavailable.
-fn get_revision_via_mirrors(tag: &str) -> u32 {
+fn get_build_via_mirrors(repository: &str, tag: &str) -> Option<ReleaseBuild> {
     let Ok(client) = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
         .user_agent("GOODScanner-Updater")
         .build()
     else {
-        return 0;
+        return None;
     };
     let check = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -197,27 +245,27 @@ fn get_revision_via_mirrors(tag: &str) -> u32 {
         .as_secs();
     for mirror in DOWNLOAD_MIRRORS {
         let url = format!(
-            "{mirror}https://github.com/Anyrainel/GOODScanner/releases/download/{tag}/update.json?check={check}"
+            "{mirror}https://github.com/{repository}/releases/download/{tag}/update.json?check={check}"
         );
         if let Ok(response) = client.get(url).send() {
             if response.status().is_success() {
                 if let Ok(build) = response.json::<ReleaseBuild>() {
                     if build.tag == tag {
-                        return build.revision;
+                        return Some(build);
                     }
                 }
             }
         }
     }
-    0 // Legacy releases have no revision asset.
+    None // Legacy releases have no revision asset.
 }
 
 /// Strategy 2: Follow `/releases/latest` redirect through download mirrors.
 ///
-/// GitHub responds with 302 → `/releases/tag/vYYYY.MM.DD`.
-/// We disable redirect-following in reqwest and read the `Location` header.
+/// A repository rename can add redirects before `/releases/tag/vYYYY.MM.DD`.
+/// Follow those hops manually and stop at the tag, without downloading HTML.
 /// Tried through each mirror prefix so it works when github.com is blocked.
-fn get_tag_via_redirect() -> Option<String> {
+fn get_tag_via_redirect() -> Option<ResolvedRelease> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
@@ -226,19 +274,31 @@ fn get_tag_via_redirect() -> Option<String> {
         .build()
         .ok()?;
 
-    for mirror in DOWNLOAD_MIRRORS {
-        let url = if mirror.is_empty() {
-            RELEASES_LATEST_URL.to_string()
-        } else {
-            format!("{}{}", mirror, RELEASES_LATEST_URL)
-        };
-        log_debug!("检查更新(redirect): {}", "Checking via redirect: {}", url);
+    for &repository in RELEASE_REPOSITORIES {
+        for mirror in DOWNLOAD_MIRRORS {
+            let url = format!("{mirror}https://github.com/{repository}/releases/latest");
+            log_debug!("检查更新(redirect): {}", "Checking via redirect: {}", url);
+            if let Some(tag) = follow_release_redirects(&client, &url) {
+                return Some(ResolvedRelease {
+                    repository,
+                    tag,
+                    revision: 0,
+                    assets: ReleaseAssets::default(),
+                });
+            }
+        }
+    }
+    None
+}
 
-        let resp = match client.get(&url).send() {
+fn follow_release_redirects(client: &reqwest::blocking::Client, url: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(url).ok()?;
+    for _ in 0..5 {
+        let resp = match client.get(url.clone()).send() {
             Ok(r) => r,
             Err(e) => {
                 log_debug!("连接失败: {}", "Connection failed: {}", e);
-                continue;
+                return None;
             },
         };
 
@@ -249,19 +309,23 @@ fn get_tag_via_redirect() -> Option<String> {
                 "Non-redirect response: {}",
                 resp.status()
             );
-            continue;
+            return None;
         }
 
         let location = match resp.headers().get("location") {
             Some(v) => match v.to_str() {
                 Ok(s) => s.to_string(),
-                Err(_) => continue,
+                Err(_) => return None,
             },
-            None => continue,
+            None => return None,
         };
 
         if let Some(tag) = extract_tag_from_url(&location) {
             return Some(tag.to_string());
+        }
+        url = url.join(&location).ok()?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return None;
         }
     }
 
@@ -301,36 +365,38 @@ pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
     };
 
     // Try API first, then redirect fallback
-    let (latest_tag, latest_revision) = get_tag_via_api()
+    let mut release = get_tag_via_api()
         .or_else(|| {
             log_debug!("API失败，尝试redirect方式", "API failed, trying redirect");
-            get_tag_via_redirect().map(|tag| {
-                let revision = get_revision_via_mirrors(&tag);
-                (tag, revision)
-            })
+            get_tag_via_redirect()
         })
         .ok_or_else(|| anyhow!("无法获取最新版本信息 / Cannot determine latest version"))?;
 
-    let latest_int = parse_calver_tag(&latest_tag)
-        .ok_or_else(|| anyhow!("无法解析版本号 / Cannot parse release tag: {}", latest_tag))?;
+    // Read the role map even when the API works: it decouples installed
+    // transition binaries from the names chosen for subsequent releases.
+    if let Some(build) = get_build_via_mirrors(release.repository, &release.tag) {
+        // A cached manifest from an earlier same-day build must not override
+        // the revision/filenames announced by the API.
+        if build.revision >= release.revision {
+            release.revision = build.revision;
+            release.assets = build.assets;
+        }
+    }
+    let latest_int = parse_calver_tag(&release.tag)
+        .ok_or_else(|| anyhow!("无法解析版本号 / Cannot parse release tag: {}", release.tag))?;
 
-    if (latest_int, latest_revision) <= (current_int, current_revision()) {
+    if (latest_int, release.revision) <= (current_int, current_revision()) {
         return Ok(UpdateStatus::UpToDate);
     }
 
-    // Construct download URL from tag (don't rely on API assets list)
-    let asset_name = revision_asset_name(asset_name, latest_revision);
-    let download_url = format!(
-        "https://github.com/Anyrainel/GOODScanner/releases/download/{}/{}",
-        latest_tag, asset_name,
-    );
+    let download_url = release.download_url(asset_name)?;
 
     Ok(UpdateStatus::UpdateAvailable {
         current_version: current_version_display(),
-        latest_version: if latest_revision == 0 {
-            latest_tag
+        latest_version: if release.revision == 0 {
+            release.tag
         } else {
-            format!("{latest_tag} (build {latest_revision})")
+            format!("{} (build {})", release.tag, release.revision)
         },
         download_url,
     })
@@ -535,6 +601,127 @@ mod tests {
             revision_asset_name(ASSET_SCANNER, 123),
             "GOODScanner-123.exe"
         );
+        let build: ReleaseBuild =
+            serde_json::from_str(r#"{"tag":"v2026.10.05","revision":123}"#).unwrap();
+        let release = ResolvedRelease {
+            repository: "Anyrainel/GOODScanner",
+            tag: build.tag,
+            revision: build.revision,
+            assets: build.assets,
+        };
+        assert_eq!(
+            release.download_url(ASSET_SCANNER).unwrap(),
+            "https://github.com/Anyrainel/GOODScanner/releases/download/v2026.10.05/GOODScanner-123.exe"
+        );
+    }
+
+    #[test]
+    fn manifest_roles_preserve_editions_across_repository_and_binary_rename() {
+        let build: ReleaseBuild = serde_json::from_str(
+            r#"{
+            "tag":"v2026.10.07", "revision":125,
+            "assets":{"scanner":"GGScannerOCR-125.exe","capture":"GGScanner-125.exe"}
+        }"#,
+        )
+        .unwrap();
+        let release = ResolvedRelease {
+            repository: "Anyrainel/GGScanner",
+            tag: build.tag,
+            revision: build.revision,
+            assets: build.assets,
+        };
+        assert_eq!(
+            release.download_url(ASSET_SCANNER).unwrap(),
+            "https://github.com/Anyrainel/GGScanner/releases/download/v2026.10.07/GGScannerOCR-125.exe"
+        );
+        assert_eq!(
+            release.download_url(ASSET_CAPTURE).unwrap(),
+            "https://github.com/Anyrainel/GGScanner/releases/download/v2026.10.07/GGScanner-125.exe"
+        );
+    }
+
+    #[test]
+    fn manifest_asset_must_be_an_executable_filename() {
+        for invalid in [
+            "../GGScanner.exe",
+            "GGScanner.exe?other=1",
+            "https://example.com/a.exe",
+            "a.zip",
+        ] {
+            let release = ResolvedRelease {
+                repository: "Anyrainel/GGScanner",
+                tag: "v2026.10.07".into(),
+                revision: 125,
+                assets: ReleaseAssets {
+                    scanner: Some(invalid.into()),
+                    capture: None,
+                },
+            };
+            assert!(release.download_url(ASSET_SCANNER).is_err());
+        }
+    }
+
+    #[test]
+    fn redirect_fallback_follows_repository_rename_and_relative_locations() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/GOODScanner/releases/latest",
+            server.server_addr()
+        );
+        let worker =
+            std::thread::spawn(move || {
+                for (expected, location) in [
+                    ("/GOODScanner/releases/latest", "/GGScanner/releases/latest"),
+                    ("/GGScanner/releases/latest", "../releases/tag/v2026.10.07"),
+                ] {
+                    let request = server
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(request.url(), expected);
+                    request
+                        .respond(tiny_http::Response::empty(302).with_header(
+                            tiny_http::Header::from_bytes("Location", location).unwrap(),
+                        ))
+                        .unwrap();
+                }
+            });
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        assert_eq!(
+            follow_release_redirects(&client, &url).as_deref(),
+            Some("v2026.10.07")
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn redirect_fallback_stops_on_redirect_loops() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/releases/latest", server.server_addr());
+        let worker = std::thread::spawn(move || {
+            for _ in 0..5 {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                request
+                    .respond(tiny_http::Response::empty(302).with_header(
+                        tiny_http::Header::from_bytes("Location", "/releases/latest").unwrap(),
+                    ))
+                    .unwrap();
+            }
+        });
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        assert!(follow_release_redirects(&client, &url).is_none());
+        worker.join().unwrap();
     }
 
     fn test_dir() -> PathBuf {

@@ -62,7 +62,16 @@ jobs:
           foreach ($file in $files) {
               $pattern.Replace((Get-Content -Raw $file), $ver, 1) | Out-File -FilePath $file
           }
-          @{ tag = $env:VERSION; revision = [int]${{ github.run_number }} } |
+          # Stable roles allow installed transition builds to find renamed
+          # assets later. Keep these filenames in sync with release uploads.
+          @{
+            tag = $env:VERSION
+            revision = [int]${{ github.run_number }}
+            assets = @{
+              scanner = "GOODScanner-${{ github.run_number }}.exe"
+              capture = "GOODCapture-${{ github.run_number }}.exe"
+            }
+          } |
             ConvertTo-Json | Set-Content -Encoding utf8 update.json
 
       - name: Build GOODScanner (Release)
