@@ -55,8 +55,8 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
                                 *worker_state.lock().unwrap() = UpdateState::Failed(
                                     UiError::from_anyhow(
                                         UiText::new(
-                                            "更新无法下载或安装。请检查网络连接、磁盘空间和安全软件设置，然后重启程序以重试。",
-                                            "The update could not be downloaded or installed. Check the network connection, disk space, and security software, then restart the application to retry.",
+                                            "更新无法下载或安装。可前往 GitHub 发布页手动下载，或检查网络连接、磁盘空间和安全软件设置后重试。",
+                                            "The update could not be downloaded or installed. Download it manually from the GitHub release page, or check the network connection, disk space, and security software before retrying.",
                                         ),
                                         &error,
                                     ),
@@ -118,6 +118,10 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
         },
         UpdateState::Failed(ref error) => {
             ui.horizontal(|ui| {
+                ui.hyperlink_to(
+                    l.t("前往 GitHub 手动下载", "Download manually on GitHub"),
+                    genshin_scanner::updater::RELEASES_URL,
+                );
                 if ui.button(l.t("关闭", "Dismiss")).clicked() {
                     *update_state.lock().unwrap() = UpdateState::None;
                 }
@@ -148,6 +152,15 @@ pub fn spawn_check(asset_name: &'static str, update_state: &Arc<Mutex<UpdateStat
                     latest_version,
                     download_url,
                 };
+            },
+            Ok(Ok(genshin_scanner::updater::UpdateStatus::ManualDownload { latest_version })) => {
+                *state.lock().unwrap() = UpdateState::Failed(UiError::from_message(
+                    UiText::new(
+                        format!("发现新版本 {latest_version}，但未找到此版本的程序文件。请前往 GitHub 发布页手动下载。当前版本仍可继续使用。"),
+                        format!("Release {latest_version} is available, but its executable for this edition was not found. Download manually from the GitHub release page. You can keep using the current version."),
+                    ),
+                    format!("No executable for {asset_name} in release {latest_version}"),
+                ));
             },
             Ok(Ok(_)) => {
                 *state.lock().unwrap() = UpdateState::None;

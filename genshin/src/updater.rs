@@ -24,6 +24,8 @@ use yas::{log_debug, log_info, log_warn};
 pub const ASSET_SCANNER: &str = "GGScannerOCR.exe";
 /// Asset filename for the merged packet capture + OCR/manager binary.
 pub const ASSET_CAPTURE: &str = "GGScanner.exe";
+/// Keep the original URL during the bridge; GitHub redirects it after renaming.
+pub const RELEASES_URL: &str = "https://github.com/Anyrainel/GOODScanner/releases/latest";
 
 /// Download mirror prefixes, tried in order.  Empty string = direct GitHub.
 const DOWNLOAD_MIRRORS: &[&str] = &[
@@ -48,6 +50,13 @@ struct GitHubRelease {
     tag_name: String,
     #[serde(default)]
     body: Option<String>,
+    // None distinguishes an unavailable inventory from a known empty release.
+    assets: Option<Vec<GitHubAsset>>,
+}
+
+#[derive(Deserialize)]
+struct GitHubAsset {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -71,31 +80,52 @@ struct ResolvedRelease {
     tag: String,
     revision: u32,
     assets: ReleaseAssets,
+    published_assets: Option<Vec<GitHubAsset>>,
 }
 
 impl ResolvedRelease {
-    fn download_url(&self, asset_name: &str) -> Result<String> {
-        let mapped = match asset_name {
-            ASSET_SCANNER | "GOODScanner.exe" => self.assets.scanner.as_deref(),
-            ASSET_CAPTURE | "GOODCapture.exe" => self.assets.capture.as_deref(),
-            _ => None,
+    fn download_url(&self, asset_name: &str) -> Result<Option<String>> {
+        let (mapped, legacy, renamed) = match asset_name {
+            ASSET_SCANNER | "GOODScanner.exe" => (
+                self.assets.scanner.as_deref(),
+                "GOODScanner.exe",
+                ASSET_SCANNER,
+            ),
+            ASSET_CAPTURE | "GOODCapture.exe" => (
+                self.assets.capture.as_deref(),
+                "GOODCapture.exe",
+                ASSET_CAPTURE,
+            ),
+            _ => return Err(anyhow!("Unknown updater edition: {asset_name}")),
         };
-        // Manifest filenames are already revision-specific. Legacy manifests
-        // have no role map and use the existing revision naming convention.
-        let filename = mapped
-            .map(str::to_owned)
-            .unwrap_or_else(|| revision_asset_name(asset_name, self.revision));
-        if !filename.ends_with(".exe")
-            || !filename
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        {
-            return Err(anyhow!("Invalid release executable filename: {filename}"));
+        let mut candidates = Vec::new();
+        if let Some(filename) = mapped {
+            if !filename.ends_with(".exe")
+                || !filename
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            {
+                return Err(anyhow!("Invalid release executable filename: {filename}"));
+            }
+            candidates.push(filename.to_owned());
         }
-        Ok(format!(
+        // Without a manifest, prefer the still-published old names. The API
+        // inventory also allows a renamed client to update from legacy releases.
+        candidates.push(revision_asset_name(legacy, self.revision));
+        candidates.push(revision_asset_name(renamed, self.revision));
+        let filename = match &self.published_assets {
+            Some(assets) => candidates
+                .iter()
+                .find(|name| assets.iter().any(|asset| &asset.name == *name)),
+            None => candidates.first(),
+        };
+        let Some(filename) = filename else {
+            return Ok(None);
+        };
+        Ok(Some(format!(
             "https://github.com/{}/releases/download/{}/{}",
             self.repository, self.tag, filename
-        ))
+        )))
     }
 }
 
@@ -128,6 +158,8 @@ pub enum UpdateStatus {
         /// Direct github.com download URL for the exe asset.
         download_url: String,
     },
+    /// A newer release exists, but has no executable for the installed edition.
+    ManualDownload { latest_version: String },
     /// Running a dev build — skip update checks.
     DevBuild,
 }
@@ -222,6 +254,7 @@ fn get_tag_via_api() -> Option<ResolvedRelease> {
                 tag: release.tag_name,
                 revision: release_revision(release.body.as_deref()),
                 assets: ReleaseAssets::default(),
+                published_assets: release.assets,
             });
         }
     }
@@ -284,6 +317,7 @@ fn get_tag_via_redirect() -> Option<ResolvedRelease> {
                     tag,
                     revision: 0,
                     assets: ReleaseAssets::default(),
+                    published_assets: None,
                 });
             }
         }
@@ -378,26 +412,43 @@ pub fn check_for_update(asset_name: &str) -> Result<UpdateStatus> {
         // A cached manifest from an earlier same-day build must not override
         // the revision/filenames announced by the API.
         if build.revision >= release.revision {
+            if build.revision > release.revision {
+                // The manifest can arrive before a refreshed API response.
+                // That older response cannot establish which assets exist now.
+                release.published_assets = None;
+            }
             release.revision = build.revision;
             release.assets = build.assets;
         }
     }
+    resolve_update(release, asset_name, current_int, current_revision())
+}
+
+fn resolve_update(
+    release: ResolvedRelease,
+    asset_name: &str,
+    current_int: u32,
+    current_revision: u32,
+) -> Result<UpdateStatus> {
     let latest_int = parse_calver_tag(&release.tag)
         .ok_or_else(|| anyhow!("无法解析版本号 / Cannot parse release tag: {}", release.tag))?;
 
-    if (latest_int, release.revision) <= (current_int, current_revision()) {
+    if (latest_int, release.revision) <= (current_int, current_revision) {
         return Ok(UpdateStatus::UpToDate);
     }
 
     let download_url = release.download_url(asset_name)?;
-
+    let latest_version = if release.revision == 0 {
+        release.tag
+    } else {
+        format!("{} (build {})", release.tag, release.revision)
+    };
+    let Some(download_url) = download_url else {
+        return Ok(UpdateStatus::ManualDownload { latest_version });
+    };
     Ok(UpdateStatus::UpdateAvailable {
         current_version: current_version_display(),
-        latest_version: if release.revision == 0 {
-            release.tag
-        } else {
-            format!("{} (build {})", release.tag, release.revision)
-        },
+        latest_version,
         download_url,
     })
 }
@@ -608,9 +659,10 @@ mod tests {
             tag: build.tag,
             revision: build.revision,
             assets: build.assets,
+            published_assets: None,
         };
         assert_eq!(
-            release.download_url("GOODScanner.exe").unwrap(),
+            release.download_url("GOODScanner.exe").unwrap().unwrap(),
             "https://github.com/Anyrainel/GOODScanner/releases/download/v2026.10.05/GOODScanner-123.exe"
         );
     }
@@ -629,15 +681,144 @@ mod tests {
             tag: build.tag,
             revision: build.revision,
             assets: build.assets,
+            published_assets: None,
         };
         assert_eq!(
-            release.download_url(ASSET_SCANNER).unwrap(),
+            release.download_url(ASSET_SCANNER).unwrap().unwrap(),
             "https://github.com/Anyrainel/GGScanner/releases/download/v2026.10.07/GGScannerOCR-125.exe"
         );
         assert_eq!(
-            release.download_url(ASSET_CAPTURE).unwrap(),
+            release.download_url(ASSET_CAPTURE).unwrap().unwrap(),
             "https://github.com/Anyrainel/GGScanner/releases/download/v2026.10.07/GGScanner-125.exe"
         );
+        assert_eq!(
+            release.download_url("GOODScanner.exe").unwrap(),
+            release.download_url(ASSET_SCANNER).unwrap()
+        );
+        assert_eq!(
+            release.download_url("GOODCapture.exe").unwrap(),
+            release.download_url(ASSET_CAPTURE).unwrap()
+        );
+    }
+
+    fn release_with_inventory(names: &[&str]) -> ResolvedRelease {
+        ResolvedRelease {
+            repository: "Anyrainel/GOODScanner",
+            tag: "v2026.10.07".into(),
+            revision: 0,
+            assets: ReleaseAssets::default(),
+            published_assets: Some(
+                names
+                    .iter()
+                    .map(|name| GitHubAsset {
+                        name: (*name).into(),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    #[test]
+    fn renamed_clients_find_legacy_assets_without_a_manifest() {
+        let release = release_with_inventory(&["GOODScanner.exe", "GOODCapture.exe"]);
+        assert!(release
+            .download_url(ASSET_SCANNER)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODScanner.exe"));
+        assert!(release
+            .download_url(ASSET_CAPTURE)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODCapture.exe"));
+        // The redirect-only path also uses the legacy names before a role map exists.
+        let release = ResolvedRelease {
+            published_assets: None,
+            ..release
+        };
+        assert!(release
+            .download_url(ASSET_SCANNER)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODScanner.exe"));
+    }
+
+    #[test]
+    fn legacy_clients_find_renamed_assets_without_a_manifest() {
+        let release = release_with_inventory(&["GGScannerOCR.exe", "GGScanner.exe"]);
+        assert!(release
+            .download_url("GOODScanner.exe")
+            .unwrap()
+            .unwrap()
+            .ends_with("/GGScannerOCR.exe"));
+        assert!(release
+            .download_url("GOODCapture.exe")
+            .unwrap()
+            .unwrap()
+            .ends_with("/GGScanner.exe"));
+    }
+
+    #[test]
+    fn manifest_maps_new_client_to_bridge_assets() {
+        let mut release = release_with_inventory(&["GOODScanner-125.exe", "GOODCapture-125.exe"]);
+        release.revision = 125;
+        release.assets = ReleaseAssets {
+            scanner: Some("GOODScanner-125.exe".into()),
+            capture: Some("GOODCapture-125.exe".into()),
+        };
+        assert!(release
+            .download_url(ASSET_SCANNER)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODScanner-125.exe"));
+        assert!(release
+            .download_url(ASSET_CAPTURE)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODCapture-125.exe"));
+    }
+
+    #[test]
+    fn missing_executable_offers_manual_download_without_changing_editions() {
+        // A capture-only upload must never be offered to an OCR-only installation.
+        for names in [
+            &[][..],
+            &["GGScanner.exe"][..],
+            &["GOODCapture.exe", "update.json"][..],
+        ] {
+            let release = release_with_inventory(names);
+            assert!(matches!(
+                resolve_update(release, ASSET_SCANNER, 20261005, 0).unwrap(),
+                UpdateStatus::ManualDownload { latest_version } if latest_version == "v2026.10.07"
+            ));
+        }
+        let release = release_with_inventory(&["GGScannerOCR.exe"]);
+        assert!(matches!(
+            resolve_update(release, ASSET_CAPTURE, 20261005, 0).unwrap(),
+            UpdateStatus::ManualDownload { .. }
+        ));
+        let release = release_with_inventory(&[]);
+        assert!(matches!(
+            resolve_update(release, ASSET_SCANNER, 20261007, 0).unwrap(),
+            UpdateStatus::UpToDate
+        ));
+    }
+
+    #[test]
+    fn unavailable_manifest_asset_uses_matching_alias_or_manual_download() {
+        let mut release = release_with_inventory(&["GOODScanner-125.exe"]);
+        release.revision = 125;
+        release.assets.scanner = Some("GGScannerOCR-125.exe".into());
+        assert!(release
+            .download_url(ASSET_SCANNER)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODScanner-125.exe"));
+        release.published_assets = Some(Vec::new());
+        assert!(matches!(
+            resolve_update(release, ASSET_SCANNER, 20261005, 0).unwrap(),
+            UpdateStatus::ManualDownload { .. }
+        ));
     }
 
     #[test]
@@ -656,6 +837,7 @@ mod tests {
                     scanner: Some(invalid.into()),
                     capture: None,
                 },
+                published_assets: None,
             };
             assert!(release.download_url(ASSET_SCANNER).is_err());
         }

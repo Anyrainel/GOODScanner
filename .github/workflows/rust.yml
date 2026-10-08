@@ -68,8 +68,8 @@ jobs:
             tag = $env:VERSION
             revision = [int]${{ github.run_number }}
             assets = @{
-              scanner = "GGScannerOCR-${{ github.run_number }}.exe"
-              capture = "GGScanner-${{ github.run_number }}.exe"
+              scanner = "GOODScanner-${{ github.run_number }}.exe"
+              capture = "GOODCapture-${{ github.run_number }}.exe"
             }
           } |
             ConvertTo-Json | Set-Content -Encoding utf8 update.json
@@ -80,17 +80,17 @@ jobs:
       - name: Build GGScanner (Release)
         run: cargo build --release --bin GGScanner --features capture
 
-      - name: Preserve legacy and revision-specific download names
+      - name: Publish bridge release under existing download names
         run: |
-          # Keep these aliases indefinitely: installed updaters may skip the
-          # bridge release. Each legacy name must stay on its original edition.
+          # Branding changes now; public download names change after adoption.
+          # At that cutoff add the GG names to uploads and retain these old
+          # names indefinitely for clients that skipped the bridge release.
           $editions = @(
             @{ Canonical = 'GGScannerOCR'; Legacy = 'GOODScanner' }
             @{ Canonical = 'GGScanner'; Legacy = 'GOODCapture' }
           )
           foreach ($edition in $editions) {
             $source = "target/release/$($edition.Canonical).exe"
-            Copy-Item $source "target/release/$($edition.Canonical)-${{ github.run_number }}.exe"
             Copy-Item $source "target/release/$($edition.Legacy).exe"
             Copy-Item $source "target/release/$($edition.Legacy)-${{ github.run_number }}.exe"
           }
@@ -100,8 +100,8 @@ jobs:
         with:
           name: GGScanner_${{ env.VERSION }}
           path: |
-            target/release/GGScannerOCR.exe
-            target/release/GGScanner.exe
+            target/release/GOODScanner.exe
+            target/release/GOODCapture.exe
 
       - name: Delete existing release if any
         run: gh release delete $env:VERSION --yes --cleanup-tag 2>$null
@@ -123,10 +123,6 @@ jobs:
           name: ${{ env.VERSION }}
           body_path: release-notes.md
           files: |
-            target/release/GGScannerOCR.exe
-            target/release/GGScanner.exe
-            target/release/GGScannerOCR-${{ github.run_number }}.exe
-            target/release/GGScanner-${{ github.run_number }}.exe
             target/release/GOODScanner.exe
             target/release/GOODCapture.exe
             update.json
