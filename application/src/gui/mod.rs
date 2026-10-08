@@ -29,9 +29,9 @@ use worker::TaskHandle;
 /// Launch the GUI application.
 pub fn run_gui() {
     #[cfg(feature = "capture")]
-    const PRODUCT_NAME: &str = "GOODCapture Scanner";
+    const PRODUCT_NAME: &str = "GGScanner";
     #[cfg(not(feature = "capture"))]
-    const PRODUCT_NAME: &str = "GOOD Scanner";
+    const PRODUCT_NAME: &str = "GGScannerOCR";
 
     if let Err(error) = restart::wait_for_update_parent() {
         show_startup_error(PRODUCT_NAME, Lang::Zh, &state::UiError::from_error(
@@ -359,8 +359,8 @@ impl eframe::App for GuiApp {
                     }
                 });
             });
-            // `active_tab()` may be a runtime fallback (GOODScanner cannot
-            // show Capture). Preserve the raw saved GOODCapture tab unless
+            // `active_tab()` may be a runtime fallback (GGScannerOCR cannot
+            // show Capture). Preserve the raw saved GGScanner tab unless
             // the user explicitly chooses another available tab.
             if active_tab != original_active_tab {
                 self.app_config.config.navigation.select_tab(active_tab);

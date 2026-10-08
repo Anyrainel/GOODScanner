@@ -311,7 +311,7 @@ impl CaptureMonitor {
 
         // Auto-stop once the normal GOOD data and every requested extension
         // have arrived. Achievement capture is optional for backwards-compatible
-        // workflows, but defaults on in GOODCapture.
+        // workflows, but defaults on in GGScanner.
         let should_stop = self.state.lock().map_or(false, |s| {
             s.has_characters
                 && s.has_items

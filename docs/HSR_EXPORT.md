@@ -1,17 +1,18 @@
 # Star Rail export format / 《星穹铁道》导出格式
 
-GOODCapture writes **one** JSON file: `star_rail_capture_<timestamp>.json`.
+GGScanner writes **one** JSON file: `star_rail_capture_<timestamp>.json`.
 The screenshot scanner writes the same v4 shape to `star_rail_scan_<timestamp>.json`.
 
 The file is **HSR-Scanner format v4**, the same interchange used by
 [HSR-Scanner](https://github.com/kel-z/HSR-Scanner) (`source: "HSR-Scanner"`)
 and [Reliquary Archiver](https://github.com/IceDynamix/reliquary-archiver)
 (`source: "reliquary_archiver"`). Fribbels Optimizer imports either source.
-GOODCapture uses `source: "HSR-Scanner"` because Fribbels allowlists that
-string; `generator` records the actual producer.
+GGScanner uses `source: "HSR-Scanner"` because Fribbels allowlists that
+string; `generator` retains the historical producer name `GOODScanner` for
+compatibility with existing exports.
 
 抓包与截图扫描写同一套 v4 JSON，但文件名前缀不同（`star_rail_capture_` /
-`star_rail_scan_`），避免互相覆盖。GOODScanner 的 `source` 固定为 `HSR-Scanner`，
+`star_rail_scan_`），避免互相覆盖。GGScanner 的 `source` 固定为 `HSR-Scanner`，
 真正的生成器写在 `generator` 里。截图扫描会读取画面上能看到的技能/行迹文字；
 无法从画面读出的字段（成就数据包、`ability_version` 等）省略，不另起一套 schema。
 截图扫描把左下角水印里的 UID 写入 `metadata.uid`（整数；需两个画面读数一致才采用，否则为 `null`）；抓包导出始终为 `null`。
@@ -37,7 +38,7 @@ Preservation, Abundance, Remembrance, Elation.
 
 Percent substats use a trailing `_` (`CRIT Rate_`, `HP_`). Flat stats do not.
 
-## GOODScanner extensions / 扩展（省略 = 未观察）
+## GGScanner extensions / 扩展（省略 = 未观察）
 
 Unknown fields must be ignored by consumers. Omit a field when that data was
 not captured; do not invent empty coverage.

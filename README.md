@@ -1,14 +1,14 @@
 <div align="center">
 
-# GOODScanner
+# GGScanner
 
 **中文 | [English](README_EN.md)**
 
 基于 [yas](https://github.com/1803233552/yas) 编写的《原神》与《崩坏：星穹铁道》Windows 扫描、抓包与管理工具
 
-同一套 `GOODScanner.exe` 与 `GOODCapture.exe` 同时服务两款游戏。《原神》数据继续导出为兼容现有工具的 [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc)；《星穹铁道》扫描与抓包导出为 [HSR-Scanner v4](docs/HSR_EXPORT.md)（Fribbels / Reliquary 互通格式，并扩展成就与开拓者性别/命途）。
+同一套 `GGScannerOCR.exe` 与 `GGScanner.exe` 同时服务两款游戏。《原神》数据继续导出为兼容现有工具的 [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc)；《星穹铁道》扫描与抓包导出为 [HSR-Scanner v4](docs/HSR_EXPORT.md)（Fribbels / Reliquary 互通格式，并扩展成就与开拓者性别/命途）。
 
-[![Build](https://github.com/Anyrainel/GOODScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GOODScanner/actions)
+[![Build](https://github.com/Anyrainel/GGScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GGScanner/actions)
 
 </div>
 
@@ -16,10 +16,10 @@
 
 - **游戏切换**：窗口顶部以等宽的“原神 / 星穹铁道”选项切换流程，并分别保留两款游戏的设置和当前页面
 - **原神扫描与抓包**：角色、武器、圣遗物及现有 GOOD v3 导出能力保持兼容
-- **原神成就抓包**：GOODCapture 默认导出账号已完成的成就 ID
+- **原神成就抓包**：GGScanner 默认导出账号已完成的成就 ID
 - **星穹铁道扫描**：角色、光锥、隧洞遗器和位面饰品
 - **星穹铁道导出与管理**：扫描与抓包都导出 [HSR-Scanner v4](docs/HSR_EXPORT.md)；遗器管理指令仍使用 `goodscanner.hsr.manager-instructions`
-- **星穹铁道成就抓包**：GOODCapture 在程序内捕获并导出已完成的成就，无需另行下载 HSR 程序或抓包辅助程序
+- **星穹铁道成就抓包**：GGScanner 在程序内捕获并导出已完成的成就，无需另行下载 HSR 程序或抓包辅助程序
 - **双引擎 OCR**：PPOCRv4（通用）+ PPOCRv5（特殊部分专用），自动选择最优结果
 - **副词条验证**：Roll Solver 基于游戏精确度验证词条合法性
 
@@ -29,10 +29,12 @@
 
 发布页提供两个可执行文件；它们都可在窗口顶部切换《原神》和《星穹铁道》：
 
-- `GOODScanner.exe` — 两款游戏的 OCR 扫描、导出与管理
-- `GOODCapture.exe` — 在上述能力之外，增加《原神》数据抓包及两款游戏的成就抓包
+- `GGScanner.exe` — 两款游戏的抓包、OCR 扫描、导出与管理
+- `GGScannerOCR.exe` — OCR 扫描、导出与管理，不包含抓包代码及依赖
 
-请从 [Releases](https://github.com/Anyrainel/GOODScanner/releases) 页面下载。**无需也不应寻找单独的 HSR 可执行文件。**
+旧的 `GOODCapture.exe` 与 `GOODScanner.exe` 下载名称会继续保留，供已安装的旧版程序自动更新。详见[更名发布流程](docs/RENAME_RELEASE.md)。
+
+请从 [Releases](https://github.com/Anyrainel/GGScanner/releases) 页面下载。**无需也不应寻找单独的 HSR 可执行文件。**
 
 ### 成就导出语义
 
@@ -62,11 +64,11 @@
 以下命令行参数继续用于《原神》，其行为和 GOOD v3 输出保持不变。默认扫描全部（角色 + 武器 + 圣遗物），也可以指定：
 
 ```shell
-GOODScanner.exe                    # 扫描全部
-GOODScanner.exe --characters       # 仅扫描角色
-GOODScanner.exe --weapons          # 仅扫描武器
-GOODScanner.exe --artifacts        # 仅扫描圣遗物
-GOODScanner.exe --characters --weapons  # 组合扫描
+GGScannerOCR.exe                    # 扫描全部
+GGScannerOCR.exe --characters       # 仅扫描角色
+GGScannerOCR.exe --weapons          # 仅扫描武器
+GGScannerOCR.exe --artifacts        # 仅扫描圣遗物
+GGScannerOCR.exe --characters --weapons  # 组合扫描
 ```
 
 ## 注意事项
@@ -134,14 +136,14 @@ rustup default stable
 git lfs pull
 
 # 构建两款游戏共用的普通扫描版
-cargo build --locked --release -p good_tools_app --bin GOODScanner
+cargo build --locked --release -p good_tools_app --bin GGScannerOCR
 
 # 构建包含两款游戏成就抓包的抓包版
-cargo build --locked --release -p good_tools_app --features capture --bin GOODCapture
+cargo build --locked --release -p good_tools_app --features capture --bin GGScanner
 
-# 产物仍为以下两个既有路径：
-# target/release/GOODScanner.exe
-# target/release/GOODCapture.exe
+# 编译产物路径：
+# target/release/GGScannerOCR.exe
+# target/release/GGScanner.exe
 ```
 
 夹具与回放测试只能证明解析、导出及模拟交互契约，不能证明当前《星穹铁道》客户端上的实时扫描、抓包或管理操作已经通过实机验证。
@@ -154,4 +156,4 @@ cargo build --locked --release -p good_tools_app --features capture --bin GOODCa
 
 ## 反馈
 
-- [GitHub Issues](https://github.com/Anyrainel/GOODScanner/issues)
+- [GitHub Issues](https://github.com/Anyrainel/GGScanner/issues)

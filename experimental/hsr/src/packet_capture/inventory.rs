@@ -335,8 +335,8 @@ fn unique_group<'a, T>(
 
 fn invalid(detail: impl Into<String>) -> HsrError {
     HsrError::new("HSR-CAPTURE-INVENTORY", LocalizedText::new(
-        "无法识别完整的星穹铁道库存。请刷新游戏数据后重新登录抓包；若仍失败，请更新 GOODCapture。",
-        "The complete Star Rail inventory could not be decoded. Refresh game data and capture a new login; if it still fails, update GOODCapture."), detail)
+        "无法识别完整的星穹铁道库存。请刷新游戏数据后重新登录抓包；若仍失败，请更新 GGScanner。",
+        "The complete Star Rail inventory could not be decoded. Refresh game data and capture a new login; if it still fails, update GGScanner."), detail)
 }
 
 // Current AvatarPathSkillTree uses public point anchors 1-22 (Reliquary v23).

@@ -1,4 +1,4 @@
-# GOODScanner HTTP API
+# GGScanner HTTP API
 
 Server: `http://127.0.0.1:{port}` (default 8765)
 
@@ -34,7 +34,7 @@ Every response with an error body keeps the same schema:
 {"error":"<message>"}
 ```
 
-`message` uses the language currently configured in GOODScanner (`zh` or `en`).
+`message` uses the language currently configured in GGScanner (`zh` or `en`).
 It contains one language only; clients should not split it on `" / "`.
 
 When the server has a lower-level I/O, JSON parsing, serialization, or job-channel
@@ -148,7 +148,7 @@ Lock toggles use the scanned piece's `elixirCrafted` to apply a 40px Y-shift whe
 
 #### Server-side performance options (GUI)
 
-These are configured in the GOODScanner **Manager** tab, not in the HTTP request. They affect lock/unlock behavior:
+These are configured in the GGScanner **Manager** tab, not in the HTTP request. They affect lock/unlock behavior:
 
 | GUI option | Effect |
 |------------|--------|
@@ -492,7 +492,7 @@ Full execution result. Requires the `jobId` returned by `POST /manage`, `POST /e
 }
 ```
 
-Every result keeps the existing `id` and `status` fields. Failed results also include an optional `message` string. Its first paragraph is a plain-language hint selected from GOODScanner's configured language. When a lower-level error exists, the same string then contains `完整错误详情:` or `Full error details:` followed by the complete diagnostic/source chain. Clients should display the whole string as selectable/copyable text; successful results omit `message`.
+Every result keeps the existing `id` and `status` fields. Failed results also include an optional `message` string. Its first paragraph is a plain-language hint selected from GGScanner's configured language. When a lower-level error exists, the same string then contains `完整错误详情:` or `Full error details:` followed by the complete diagnostic/source chain. Clients should display the whole string as selectable/copyable text; successful results omit `message`.
 
 #### Other responses
 
@@ -690,7 +690,7 @@ The `jobId` parameter is **optional** for backwards compatibility:
 ## Cancellation
 
 Cancellation is local only — there is no cancel endpoint.
-The user cancels by right-clicking in the game or stopping via the GOODScanner GUI.
+The user cancels by right-clicking in the game or stopping via the GGScanner GUI.
 The client just keeps polling; eventually `/status` will show `"completed"` with
 aborted instructions reflected in the results.
 

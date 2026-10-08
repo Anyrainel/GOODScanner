@@ -405,8 +405,8 @@ pub fn show(
     ui.colored_label(
         egui::Color32::from_rgb(80, 150, 220),
         l.t(
-            "GOODCapture 现已包含 GOODScanner，今后只需使用一个程序即可。",
-            "GOODScanner is now included in GOODCapture, so you only need one program going forward.",
+            "GGScanner 包含抓包、扫描和管理功能；如不需要抓包，可使用 GGScannerOCR。",
+            "GGScanner includes capture, scanning, and management. Use GGScannerOCR if you prefer an edition without packet capture.",
         ),
     );
     ui.add_space(4.0);

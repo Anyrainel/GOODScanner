@@ -21,9 +21,9 @@ use serde::Deserialize;
 use yas::{log_debug, log_info, log_warn};
 
 /// Asset filename for the OCR scanner binary.
-pub const ASSET_SCANNER: &str = "GOODScanner.exe";
+pub const ASSET_SCANNER: &str = "GGScannerOCR.exe";
 /// Asset filename for the merged packet capture + OCR/manager binary.
-pub const ASSET_CAPTURE: &str = "GOODCapture.exe";
+pub const ASSET_CAPTURE: &str = "GGScanner.exe";
 
 /// Download mirror prefixes, tried in order.  Empty string = direct GitHub.
 const DOWNLOAD_MIRRORS: &[&str] = &[
@@ -76,8 +76,8 @@ struct ResolvedRelease {
 impl ResolvedRelease {
     fn download_url(&self, asset_name: &str) -> Result<String> {
         let mapped = match asset_name {
-            ASSET_SCANNER => self.assets.scanner.as_deref(),
-            ASSET_CAPTURE => self.assets.capture.as_deref(),
+            ASSET_SCANNER | "GOODScanner.exe" => self.assets.scanner.as_deref(),
+            ASSET_CAPTURE | "GOODCapture.exe" => self.assets.capture.as_deref(),
             _ => None,
         };
         // Manifest filenames are already revision-specific. Legacy manifests
@@ -592,13 +592,13 @@ mod tests {
         );
         assert_eq!(release_revision(Some("Build revision: invalid")), 0);
         assert_eq!(parse_calver_tag("v2026.10.05"), Some(20261005));
-        assert_eq!(revision_asset_name(ASSET_CAPTURE, 0), "GOODCapture.exe");
+        assert_eq!(revision_asset_name("GOODCapture.exe", 0), "GOODCapture.exe");
         assert_eq!(
-            revision_asset_name(ASSET_CAPTURE, 123),
+            revision_asset_name("GOODCapture.exe", 123),
             "GOODCapture-123.exe"
         );
         assert_eq!(
-            revision_asset_name(ASSET_SCANNER, 123),
+            revision_asset_name("GOODScanner.exe", 123),
             "GOODScanner-123.exe"
         );
         let build: ReleaseBuild =
@@ -610,7 +610,7 @@ mod tests {
             assets: build.assets,
         };
         assert_eq!(
-            release.download_url(ASSET_SCANNER).unwrap(),
+            release.download_url("GOODScanner.exe").unwrap(),
             "https://github.com/Anyrainel/GOODScanner/releases/download/v2026.10.05/GOODScanner-123.exe"
         );
     }

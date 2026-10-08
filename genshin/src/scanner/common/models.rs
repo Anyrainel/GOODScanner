@@ -97,7 +97,7 @@ pub struct GoodExport {
     pub weapons: Option<Vec<GoodWeapon>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<Vec<GoodArtifact>>,
-    /// GOODCapture extension: completed in-game achievement IDs.
+    /// GGScanner extension: completed in-game achievement IDs.
     ///
     /// Presence is authoritative, including an empty array. Absence preserves
     /// achievement state in consumers that understand this extension.

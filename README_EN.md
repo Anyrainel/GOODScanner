@@ -1,14 +1,14 @@
 <div align="center">
 
-# GOODScanner
+# GGScanner
 
 **[中文](README.md) | English**
 
 Windows scanner, capture, and manager for Genshin Impact and Honkai: Star Rail, based on [yas](https://github.com/wormtql/yas)
 
-The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data remains compatible [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc); Star Rail scanner and capture write [HSR-Scanner v4](docs/HSR_EXPORT.md) (the Fribbels / Reliquary interchange, plus achievement and Trailblazer gender/path extensions).
+The same `GGScannerOCR.exe` and `GGScanner.exe` serve both games. Genshin data remains compatible [GOOD v3](https://frzyc.github.io/genshin-optimizer/#/doc); Star Rail scanner and capture write [HSR-Scanner v4](docs/HSR_EXPORT.md) (the Fribbels / Reliquary interchange, plus achievement and Trailblazer gender/path extensions).
 
-[![Build](https://github.com/Anyrainel/GOODScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GOODScanner/actions)
+[![Build](https://github.com/Anyrainel/GGScanner/actions/workflows/rust.yml/badge.svg)](https://github.com/Anyrainel/GGScanner/actions)
 
 </div>
 
@@ -16,10 +16,10 @@ The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data 
 
 - **Game switcher**: equal-width Genshin and Star Rail choices at the top of the window; each game keeps its own settings and current page
 - **Genshin scanning and capture**: existing Character, Weapon, Artifact, and GOOD v3 export behavior remains compatible
-- **Genshin achievement capture**: GOODCapture exports the account's completed achievement IDs by default
+- **Genshin achievement capture**: GGScanner exports the account's completed achievement IDs by default
 - **Star Rail scanning**: Characters, Light Cones, Cavern Relics, and Planar Ornaments
 - **Star Rail export and manager**: scanner and capture both write [HSR-Scanner v4](docs/HSR_EXPORT.md); Relic manager instructions still use `goodscanner.hsr.manager-instructions`
-- **Star Rail achievement capture**: GOODCapture captures completed achievements in process; no separate HSR application or packet-capture helper download is required
+- **Star Rail achievement capture**: GGScanner captures completed achievements in process; no separate HSR application or packet-capture helper download is required
 - **Dual-engine OCR**: PPOCRv4 (general) + PPOCRv5 (level-specific), automatically picks the best result
 - **Substat validation**: Roll Solver verifies substat combinations against game mechanics
 
@@ -29,10 +29,13 @@ The same `GOODScanner.exe` and `GOODCapture.exe` serve both games. Genshin data 
 
 The releases page provides two executables. Both let you switch between Genshin and Star Rail at the top of the window:
 
-- `GOODScanner.exe` — OCR scanning, export, and manager flows for both games
-- `GOODCapture.exe` — all of the above plus Genshin data capture and completed-achievement capture for both games
+- `GGScanner.exe` — capture, OCR scanning, export, and manager flows for both games
+- `GGScannerOCR.exe` — OCR scanning, export, and manager flows, without packet capture code or dependencies
 
-Download them from the [Releases](https://github.com/Anyrainel/GOODScanner/releases) page. **There is no separate HSR executable to download.**
+The old `GOODCapture.exe` and `GOODScanner.exe` downloads remain available as
+compatibility aliases for existing auto-updaters. See the [rename rollout](docs/RENAME_RELEASE.md).
+
+Download them from the [Releases](https://github.com/Anyrainel/GGScanner/releases) page. **There is no separate HSR executable to download.**
 
 ### Achievement export semantics
 
@@ -62,11 +65,11 @@ The built-in Star Rail reference is the complete public GIlore `1.2.0` snapshot 
 These command-line flags remain Genshin-only and preserve their existing GOOD v3 behavior. By default, all categories are scanned; you can also pick specific ones:
 
 ```shell
-GOODScanner.exe                    # Scan all
-GOODScanner.exe --characters       # Characters only
-GOODScanner.exe --weapons          # Weapons only
-GOODScanner.exe --artifacts        # Artifacts only
-GOODScanner.exe --characters --weapons  # Combine targets
+GGScannerOCR.exe                    # Scan all
+GGScannerOCR.exe --characters       # Characters only
+GGScannerOCR.exe --weapons          # Weapons only
+GGScannerOCR.exe --artifacts        # Artifacts only
+GGScannerOCR.exe --characters --weapons  # Combine targets
 ```
 
 ## Requirements
@@ -134,14 +137,14 @@ rustup default stable
 git lfs pull
 
 # Build the normal shared scanner
-cargo build --locked --release -p good_tools_app --bin GOODScanner
+cargo build --locked --release -p good_tools_app --bin GGScannerOCR
 
 # Build the shared capture edition
-cargo build --locked --release -p good_tools_app --features capture --bin GOODCapture
+cargo build --locked --release -p good_tools_app --features capture --bin GGScanner
 
-# The existing output paths remain:
-# target/release/GOODScanner.exe
-# target/release/GOODCapture.exe
+# Build output paths:
+# target/release/GGScannerOCR.exe
+# target/release/GGScanner.exe
 ```
 
 Fixtures and replay tests prove parser, export, and simulated-interaction behavior only. They do not prove live scanning, capture, or manager behavior against the current Star Rail client.
@@ -154,4 +157,4 @@ Fixtures and replay tests prove parser, export, and simulated-interaction behavi
 
 ## Feedback
 
-- [GitHub Issues](https://github.com/Anyrainel/GOODScanner/issues)
+- [GitHub Issues](https://github.com/Anyrainel/GGScanner/issues)

@@ -3,7 +3,7 @@ name = "hsr_scanner"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Honkai: Star Rail capture, OCR scanner, export, and attended manager for GOODScanner"
+description = "Honkai: Star Rail capture, OCR scanner, export, and attended manager for GGScanner"
 license = "GPL-2.0-or-later"
 publish = false
 
@@ -38,7 +38,7 @@ yas = { path = "../../yas", package = "yas_core", features = ["ort", "capturer_w
 # Source of the embedded PaddleOCR v5 / v6 tiny weights (`ocr_factory`).
 genshin_scanner = { path = "../../genshin" }
 
-# Packet capture is compiled only into GOODCapture.
+# Packet capture is compiled only into GGScanner.
 etherparse = { version = "0.17", optional = true }
 kcp = { git = "https://github.com/hashblen/mhy-kcp", rev = "1acf4ba5938ff91f7f2d2a31e16bf1f8d2db9c8f", optional = true }
 protobuf = { version = "=3.7.1", optional = true }

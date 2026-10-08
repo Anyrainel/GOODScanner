@@ -1,6 +1,6 @@
 # HDR pixel calibration
 
-GOODScanner currently assumes SDR-like captured RGB. HDR can remap brightness
+GGScannerOCR currently assumes SDR-like captured RGB. HDR can remap brightness
 and color channels, so every detector that compares raw RGB or brightness needs
 validation from HDR dumps.
 
@@ -28,7 +28,7 @@ captured window content is shifted.
 1. Run one HDR scan with dumps enabled:
 
    ```powershell
-   cargo run --release --bin GOODScanner -- --all --dump-images --output-dir target/release
+   cargo run --release --bin GGScannerOCR -- --all --dump-images --output-dir target/release
    ```
 
 2. Run the pixel-only evaluator against the HDR dump and the SDR/capture export

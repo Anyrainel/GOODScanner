@@ -8,16 +8,16 @@ Status date: 2026-09-04. Branch: `codex/hsr-capture`. Integration base: `4cea0d7
 
 Honkai: Star Rail is integrated into the existing Windows products. Users do not download or run a separate HSR executable:
 
-- `GOODScanner.exe` contains Genshin and Star Rail Scanner, Export, and Manager flows.
-- `GOODCapture.exe` contains those same flows plus in-process achievement packet capture for both games.
+- `GGScannerOCR.exe` contains Genshin and Star Rail Scanner, Export, and Manager flows.
+- `GGScanner.exe` contains those same flows plus in-process achievement packet capture for both games.
 - The GUI begins with two equal-width, visibly clickable Genshin and Star Rail choices. Selecting a game changes the available workflow while each game's settings and last selected page remain independent.
 - Existing Genshin CLI behavior, `data/good_config.json`, GOOD v3 output, and the optional GOOD achievement extension remain compatible.
 - Cross-game navigation and Star Rail settings use the separate versioned `data/good_app_config.json` boundary.
 
 《星穹铁道》现已集成到既有 Windows 产品中，用户无需下载或运行单独的 HSR 可执行文件：
 
-- `GOODScanner.exe` 同时提供《原神》和《星穹铁道》的扫描、导出与管理流程。
-- `GOODCapture.exe` 包含上述全部能力，并在程序内为两款游戏提供成就抓包。
+- `GGScannerOCR.exe` 同时提供《原神》和《星穹铁道》的扫描、导出与管理流程。
+- `GGScanner.exe` 包含上述全部能力，并在程序内为两款游戏提供成就抓包。
 - 窗口顶部首先显示两个等宽、静止时也清晰可点击的“原神 / 星穹铁道”选项。切换游戏会切换可用流程，同时分别保留两款游戏的设置与上次页面。
 - 现有《原神》命令行行为、`data/good_config.json`、GOOD v3 输出及可选 GOOD 成就扩展保持兼容。
 - 跨游戏导航与《星穹铁道》设置使用独立且带版本的 `data/good_app_config.json`。
@@ -28,9 +28,9 @@ Star Rail retains screenshot/OCR scanning for Characters, Light Cones, Cavern Re
 
 ## Completed-achievement capture / 已完成成就抓包
 
-`GOODCapture.exe` captures HSR UDP traffic in process and emits a snapshot only after recognizing a structurally complete achievement response. It does not download, stage, or launch Reliquary Archiver or any other helper executable. Packet transport/decryption support is compiled into GOODCapture from the revision-pinned dependency and bundled protocol keys; GOODScanner does not contain the capture feature.
+`GGScanner.exe` captures HSR UDP traffic in process and emits a snapshot only after recognizing a structurally complete achievement response. It does not download, stage, or launch Reliquary Archiver or any other helper executable. Packet transport/decryption support is compiled into GGScanner from the revision-pinned dependency and bundled protocol keys; GGScannerOCR does not contain the capture feature.
 
-`GOODCapture.exe` 在程序内捕获 HSR UDP 流量，并且只会在识别到结构完整的成就响应后生成快照。它不会下载、暂存或启动 Reliquary Archiver 或其他辅助可执行文件。数据包传输/解密能力通过固定修订的依赖和内置协议密钥编译进 GOODCapture；GOODScanner 不包含抓包功能。
+`GGScanner.exe` 在程序内捕获 HSR UDP 流量，并且只会在识别到结构完整的成就响应后生成快照。它不会下载、暂存或启动 Reliquary Archiver 或其他辅助可执行文件。数据包传输/解密能力通过固定修订的依赖和内置协议密钥编译进 GGScanner；GGScannerOCR 不包含抓包功能。
 
 Only completed public definition IDs are retained. Raw protocol statuses `2` and `3` both normalize to `"completed"`. IDs are validated against the loaded GIlore references, sorted ascending, and deduplicated. UIDs, player names, account/session/device identifiers, timestamps, progress, raw statuses, server item IDs, packet bytes, protobuf payloads, and PCAP/ETL files are not exported.
 
@@ -144,8 +144,8 @@ cargo check --locked -p hsr_scanner --all-features --all-targets
 cargo check --locked -p good_tools_app --features "capture,test-as-invoker" --all-targets
 cargo clippy --locked -p hsr_scanner --all-features --all-targets --no-deps -- -D warnings
 cargo clippy --locked -p good_tools_app --features "capture,test-as-invoker" --all-targets --no-deps -- -D warnings
-cargo build --locked --release -p good_tools_app --bin GOODScanner
-cargo build --locked --release -p good_tools_app --features capture --bin GOODCapture
+cargo build --locked --release -p good_tools_app --bin GGScannerOCR
+cargo build --locked --release -p good_tools_app --features capture --bin GGScanner
 ```
 
 The workspace does not use one blanket `--all-features` invocation because `yas_core` exposes mutually exclusive OCR backends. The supported default and capture feature matrices above are checked separately.
@@ -155,8 +155,8 @@ The workspace does not use one blanket `--all-features` invocation because `yas_
 The concrete build outputs remain:
 
 ```text
-target\release\GOODScanner.exe
-target\release\GOODCapture.exe
+target\release\GGScannerOCR.exe
+target\release\GGScanner.exe
 ```
 
 The branch must remain isolated: do not merge, push, deploy, replace release binaries, or copy these artifacts over the main checkout as part of this work.
@@ -169,6 +169,6 @@ Protocol fixtures, packet replay, generated/sanitized images, and simulated cont
 
 协议夹具、数据包回放、生成/脱敏图像与控制器模拟可以证明确定性解析、规范化、导出、路由及安全行为；它们**不能**证明 HSR 实时抓包、当前客户端 OCR 坐标、焦点/输入行为、HDR 或非 16:9 布局、渠道服差异或实时管理变更。
 
-The smallest remaining achievement-capture validation is attended and read-only: open the current HSR client at its “Click to Start” screen, run this branch's `target\release\GOODCapture.exe` as administrator, choose Star Rail → Capture, start capture, and enter the game once. Verify that the resulting v3 JSON imports into GGStarRail. Until that is performed against a live client, live HSR capture remains explicitly unvalidated. Do not perform a Manager mutation during this calibration.
+The smallest remaining achievement-capture validation is attended and read-only: open the current HSR client at its “Click to Start” screen, run this branch's `target\release\GGScanner.exe` as administrator, choose Star Rail → Capture, start capture, and enter the game once. Verify that the resulting v3 JSON imports into GGStarRail. Until that is performed against a live client, live HSR capture remains explicitly unvalidated. Do not perform a Manager mutation during this calibration.
 
-剩余最小的成就抓包验证需要有人值守，但只读：把当前 HSR 客户端停在“点击进入”界面，以管理员身份运行本分支的 `target\release\GOODCapture.exe`，选择“星穹铁道 → 抓包”，开始抓包后进入游戏一次，再确认生成的 v3 JSON 可导入 GGStarRail。在当前实机客户端完成该步骤前，HSR 实时抓包仍明确视为未验证。校准期间不得执行管理变更。
+剩余最小的成就抓包验证需要有人值守，但只读：把当前 HSR 客户端停在“点击进入”界面，以管理员身份运行本分支的 `target\release\GGScanner.exe`，选择“星穹铁道 → 抓包”，开始抓包后进入游戏一次，再确认生成的 v3 JSON 可导入 GGStarRail。在当前实机客户端完成该步骤前，HSR 实时抓包仍明确视为未验证。校准期间不得执行管理变更。

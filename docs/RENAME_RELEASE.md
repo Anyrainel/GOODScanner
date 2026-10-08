@@ -5,6 +5,10 @@ The editions will be `GGScanner.exe` (capture, OCR, and manager) and
 
 ## Publish the updater bridge first
 
+The bridge is commit `718a1a9`. Publish that commit separately before publishing
+the subsequent build-target rename; pushing both at once only releases the final
+commit with this repository's push-triggered workflow.
+
 Publish a release with the existing `GOODScanner.exe` and `GOODCapture.exe`
 build targets before renaming the GitHub repository or build targets. The bridge
 updater tries both `Anyrainel/GGScanner` and `Anyrainel/GOODScanner`, follows
@@ -32,7 +36,7 @@ After publishing the bridge, rename the repository in GitHub Settings and update
 local remotes to `https://github.com/Anyrainel/GGScanner.git`. Do not reuse the old
 repository name: GitHub's redirect is needed by older installed versions.
 
-Rename the build targets and update CI's manifest roles to
+The following rename commit changes the build targets and CI's manifest roles to
 `scanner: GGScannerOCR-<revision>.exe` and `capture: GGScanner-<revision>.exe`.
 Every release must continue uploading copies under both old names
 (`GOODScanner.exe`, `GOODCapture.exe`) and their revision-specific names. Users
@@ -44,6 +48,11 @@ The update replaces the executable at its existing local path and restarts that
 path. It deliberately preserves the installed filename and shortcuts; a fresh
 download uses the new names. Existing settings filenames and wire-format IDs
 are independent of the branding and should remain compatible.
+This includes the restart environment variable, `goodscanner.hsr.manager-instructions`,
+GOOD's `yas-GOODScanner` source, and Star Rail's historical `generator.name`.
+
+Publish the companion GenshinTools download-link and label changes only after
+the renamed assets and repository URL are available.
 
 Old versions whose API access fails may not handle an extra repository-rename
 redirect through a mirror. The bridge fixes this for updated installations;

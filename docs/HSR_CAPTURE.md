@@ -25,7 +25,7 @@ GIlore's normal `hsr_data reference` command generates `capture_data_cache.json`
 from the same validated source and normalized bundle. GGStarRail's normal
 `npm run data:update` copies it to `public/good/hsr_data_cache.json`; the website
 build checks its revision and catalog coverage against the website data. Publishing
-that file updates installed clients without rebuilding GOODCapture. Protocol code
+that file updates installed clients without rebuilding GGScanner. Protocol code
 changes can still require an application update. The old embedded reference API
 remains only for deterministic offline fixtures and historical build tooling.
 
@@ -43,7 +43,7 @@ an explicit diagnostic dump, separate from sanitized exports; it is not a PCAP
 or ETL transport recording. A write failure is surfaced with its full path.
 
 Each completed capture writes one file: `star_rail_capture_<timestamp>.json`.
-That file is HSR-Scanner format v4 plus GOODScanner extensions (achievements,
+That file is HSR-Scanner format v4 plus GGScanner extensions (achievements,
 Trailblazer gender and current path). See [`HSR_EXPORT.md`](HSR_EXPORT.md).
 Screenshot scans write `star_rail_scan_<timestamp>.json` instead, so the two
 flows cannot overwrite each other. Unchecked categories are omitted rather
@@ -55,7 +55,7 @@ files, packet dumps, directories, or symlinks.
 
 Fribbels currently allowlists `HSR-Scanner` as a source string. The interchange
 file uses that required v4 compatibility discriminator and its compatible
-build identifier; a separate `generator` object identifies GOODScanner and
+build identifier; a separate `generator` object keeps the historical GOODScanner name and
 its capture revision. It does not claim to have been captured by Kel-Z's tool.
 Server item IDs are replaced with local synthetic identifiers; account UID is
 null. The primary format references are

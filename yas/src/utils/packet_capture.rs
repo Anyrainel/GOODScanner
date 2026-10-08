@@ -21,8 +21,8 @@ pub fn initialization_hint(error: &io::Error) -> Option<(&'static str, &'static 
             "Capture could not start: the built-in Windows capture feature is missing a required function. Install Windows updates in Settings, then restart your computer. You can also use the Scanner to export data by reading the game screen.\nPktMonApi.dll is missing a required API function.",
         )),
         5 => Some((
-            "无法开始抓包：Windows 没有允许程序使用抓包功能。请关闭 GOODCapture，右键点击程序，选择“以管理员身份运行”，然后重试。",
-            "Capture could not start: Windows denied permission to use packet capture. Close GOODCapture, right-click the program, choose Run as administrator, and try again.",
+            "无法开始抓包：Windows 没有允许程序使用抓包功能。请关闭 GGScanner，右键点击程序，选择“以管理员身份运行”，然后重试。",
+            "Capture could not start: Windows denied permission to use packet capture. Close GGScanner, right-click the program, choose Run as administrator, and try again.",
         )),
         _ => None,
     }

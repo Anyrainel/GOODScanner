@@ -58,8 +58,8 @@ const CAPTURE_HINT: LocalizedText = LocalizedText::new(
     "HSR network data could not be read. Make sure the application is running as administrator, then capture again.",
 );
 const KEYS_HINT: LocalizedText = LocalizedText::new(
-    "内置的 HSR 协议数据无法加载。请重新下载当前版本的 GOODCapture。",
-    "The bundled HSR protocol data could not be loaded. Download the current GOODCapture build again.",
+    "内置的 HSR 协议数据无法加载。请重新下载当前版本的 GGScanner。",
+    "The bundled HSR protocol data could not be loaded. Download the current GGScanner build again.",
 );
 const WORKER_HINT: LocalizedText = LocalizedText::new(
     "HSR 抓包任务意外停止。请重新抓包；若问题再次出现，请复制完整错误。",
@@ -541,8 +541,8 @@ impl HsrCaptureMonitor {
                 LocalizedText::new("未收到星穹铁道流量。请确认游戏正在本机运行，重新抓包后再登录。",
                     "No Star Rail traffic was received. Check that the game is running on this PC, then start capture before logging in.")
             } else if state.command_count == 0 {
-                LocalizedText::new("已收到网络流量，但未能解密登录数据。请更新 GOODCapture，并在登录前开始抓包。",
-                    "Traffic was received, but login data could not be decrypted. Update GOODCapture and start capture before logging in.")
+                LocalizedText::new("已收到网络流量，但未能解密登录数据。请更新 GGScanner，并在登录前开始抓包。",
+                    "Traffic was received, but login data could not be decrypted. Update GGScanner and start capture before logging in.")
             } else {
                 LocalizedText::new("已读取游戏流量，但数据尚不完整。请重新登录抓包；若仍失败，请复制完整错误。",
                     "Game traffic was decoded, but some data is missing. Capture a new login; if it fails again, copy the full error.")

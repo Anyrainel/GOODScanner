@@ -5,11 +5,11 @@ use super::state::Lang;
 /// Which set of credits to display.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CreditSet {
-    /// GOODScanner: OCR-based scanning credits (no capture libs).
+    /// GGScannerOCR: OCR-based scanning credits (no capture libs).
     Scanner,
     /// Packet-capture credits only.
     Capture,
-    /// GOODCapture: scanner + capture attributions.
+    /// GGScanner: scanner + capture attributions.
     Full,
     /// Honkai: Star Rail scanner, capture, and manager references.
     StarRail,

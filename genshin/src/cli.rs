@@ -772,7 +772,7 @@ pub struct GoodUserConfig {
     #[serde(default, alias = "manage_recent_artifacts")]
     pub filter_involved_sets: bool,
 
-    // --- GOODCapture GUI settings ---
+    // --- GGScanner capture GUI settings ---
     #[serde(default = "default_true")]
     pub capture_include_characters: bool,
     #[serde(default = "default_true")]
@@ -1342,7 +1342,7 @@ impl GoodScannerApplication {
     pub fn run(&self) -> Result<()> {
         println!(
             "{}",
-            yas::lang::localize("正在启动扫描器... / GOOD Scanner starting...")
+            yas::lang::localize("正在启动扫描器... / GGScanner starting...")
         );
 
         init_rayon_pool();

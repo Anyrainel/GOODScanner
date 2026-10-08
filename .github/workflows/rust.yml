@@ -68,30 +68,40 @@ jobs:
             tag = $env:VERSION
             revision = [int]${{ github.run_number }}
             assets = @{
-              scanner = "GOODScanner-${{ github.run_number }}.exe"
-              capture = "GOODCapture-${{ github.run_number }}.exe"
+              scanner = "GGScannerOCR-${{ github.run_number }}.exe"
+              capture = "GGScanner-${{ github.run_number }}.exe"
             }
           } |
             ConvertTo-Json | Set-Content -Encoding utf8 update.json
 
-      - name: Build GOODScanner (Release)
-        run: cargo build --release --bin GOODScanner
+      - name: Build GGScannerOCR (Release)
+        run: cargo build --release --bin GGScannerOCR
 
-      - name: Build GOODCapture (Release)
-        run: cargo build --release --bin GOODCapture --features capture
+      - name: Build GGScanner (Release)
+        run: cargo build --release --bin GGScanner --features capture
 
-      - name: Preserve revision-specific download names
+      - name: Preserve legacy and revision-specific download names
         run: |
-          Copy-Item target/release/GOODScanner.exe target/release/GOODScanner-${{ github.run_number }}.exe
-          Copy-Item target/release/GOODCapture.exe target/release/GOODCapture-${{ github.run_number }}.exe
+          # Keep these aliases indefinitely: installed updaters may skip the
+          # bridge release. Each legacy name must stay on its original edition.
+          $editions = @(
+            @{ Canonical = 'GGScannerOCR'; Legacy = 'GOODScanner' }
+            @{ Canonical = 'GGScanner'; Legacy = 'GOODCapture' }
+          )
+          foreach ($edition in $editions) {
+            $source = "target/release/$($edition.Canonical).exe"
+            Copy-Item $source "target/release/$($edition.Canonical)-${{ github.run_number }}.exe"
+            Copy-Item $source "target/release/$($edition.Legacy).exe"
+            Copy-Item $source "target/release/$($edition.Legacy)-${{ github.run_number }}.exe"
+          }
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: GOODScanner_${{ env.VERSION }}
+          name: GGScanner_${{ env.VERSION }}
           path: |
-            target/release/GOODScanner.exe
-            target/release/GOODCapture.exe
+            target/release/GGScannerOCR.exe
+            target/release/GGScanner.exe
 
       - name: Delete existing release if any
         run: gh release delete $env:VERSION --yes --cleanup-tag 2>$null
@@ -106,6 +116,10 @@ jobs:
           name: ${{ env.VERSION }}
           body: "Build revision: ${{ github.run_number }}"
           files: |
+            target/release/GGScannerOCR.exe
+            target/release/GGScanner.exe
+            target/release/GGScannerOCR-${{ github.run_number }}.exe
+            target/release/GGScanner-${{ github.run_number }}.exe
             target/release/GOODScanner.exe
             target/release/GOODCapture.exe
             update.json

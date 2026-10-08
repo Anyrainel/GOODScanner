@@ -563,7 +563,7 @@ impl RefreshState {
     }
 }
 
-/// Debounced user-config persistence shared by GOODScanner and GOODCapture.
+/// Debounced user-config persistence shared by GGScannerOCR and GGScanner.
 pub fn save_config_debounced(
     user_config: &GoodUserConfig,
     config_snapshot: &mut String,

@@ -1,5 +1,5 @@
 //! Honkai: Star Rail capture, screenshot scanner, export, and attended
-//! reversible status manager used by the shared GOODScanner applications.
+//! reversible status manager used by the shared GGScanner applications.
 
 pub mod annotator;
 pub mod device;

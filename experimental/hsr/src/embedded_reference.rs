@@ -43,7 +43,7 @@ struct EmbeddedReferenceProvenance {
 }
 
 /// Load the audited, account-independent GIlore reference snapshot compiled
-/// into GOODScanner and GOODCapture. The bytes, provenance, normalized schema,
+/// into GGScannerOCR and GGScanner. The bytes, provenance, normalized schema,
 /// privacy boundary, live-profile completeness, and achievement set are all
 /// validated before the cache is returned.
 pub fn load_embedded_gilore_reference() -> HsrResult<ReferenceCache> {

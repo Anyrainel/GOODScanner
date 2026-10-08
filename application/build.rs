@@ -26,14 +26,14 @@ fn main() {
         let version = env!("CARGO_PKG_VERSION");
         let is_capture_scanner = std::env::var_os("CARGO_FEATURE_CAPTURE").is_some();
         let product_name = if is_capture_scanner {
-            "GOODCapture - Genshin & Star Rail"
+            "GGScanner - Genshin & Star Rail"
         } else {
-            "GOODScanner - Genshin & Star Rail"
+            "GGScannerOCR - Genshin & Star Rail"
         };
         let original_filename = if is_capture_scanner {
-            "GOODCapture.exe"
+            "GGScanner.exe"
         } else {
-            "GOODScanner.exe"
+            "GGScannerOCR.exe"
         };
         res.set("ProductName", product_name);
         res.set(
