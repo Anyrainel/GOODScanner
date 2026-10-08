@@ -31,6 +31,8 @@ rfd = "0.15"
 tokio = { version = "1", features = ["sync"], optional = true }
 rand = "0.8"
 crossbeam-queue = "0.3"
+tiny_http = "0.12"
+url = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
 version = "0.59.0"
@@ -78,6 +80,11 @@ required-features = ["dev-tools"]
 name = "set_filter_test"
 path = "src/bin/set_filter_test.rs"
 required-features = ["dev-tools"]
+
+[[test]]
+name = "hsr_server"
+path = "tests/hsr_server.rs"
+required-features = ["test-as-invoker"]
 
 [[test]]
 name = "ui_error"

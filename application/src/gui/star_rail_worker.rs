@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -9,10 +8,9 @@ use hsr_scanner::{
     data_cache::load_data_cache,
     export_observations,
     manager::{
-        apply_manager_envelope, build_manager_plan, load_manager_recovery_plan,
-        validate_manager_envelope_reference, AppendOnlyJsonJournalStore, ApplyAuthorization,
-        HsrControllerLease, ManagerInstructionsEnvelope, ManagerJournalStore, ManagerPlan,
-        MutationScope,
+        apply_manager_request, load_manager_recovery_plan, validate_manager_envelope_reference,
+        AppendOnlyJsonJournalStore, HsrControllerLease, ManagerInstructionsEnvelope,
+        ManagerJournalStore, ManagerPlan,
     },
     pipeline::write_json_create_new,
     reference::ReferenceCache,
@@ -27,8 +25,6 @@ use super::{
     state::{LogSource, TaskKind, TaskStatus, UiError, UiText},
     worker::{self, TaskHandle},
 };
-
-const MAX_MANAGER_INSTRUCTIONS_BYTES: u64 = 16 * 1024 * 1024;
 
 fn manager_scan_observer(
     progress: Arc<Mutex<super::task_progress::TaskProgress>>,
@@ -54,10 +50,6 @@ fn manager_scan_observer(
             }
         }
     })
-}
-
-pub fn settings_identity(settings: &StarRailSettings) -> String {
-    serde_json::to_string(settings).unwrap_or_default()
 }
 
 fn hsr_language() -> Language {
@@ -100,10 +92,6 @@ pub(super) fn hsr_ui_error(hint: UiText, error: HsrError) -> UiError {
             error.localized_message(language)
         ),
     )
-}
-
-fn ensure_ocr_runtime() -> Result<(), UiError> {
-    ensure_ocr_runtime_with_status(None)
 }
 
 fn ensure_ocr_runtime_with_status(status: Option<&Arc<Mutex<TaskStatus>>>) -> Result<(), UiError> {
@@ -307,6 +295,27 @@ pub fn spawn_scan(
     status: Arc<Mutex<TaskStatus>>,
     progress: Arc<Mutex<super::task_progress::TaskProgress>>,
 ) -> TaskHandle {
+    let settings = settings.clone();
+    let status_for_scan = status.clone();
+    worker::spawn_cancellable_task(
+        TaskKind::Scanner,
+        LogSource::Scanner,
+        status,
+        UiText::new("正在初始化星穹铁道扫描器", "Initializing Star Rail scanner"),
+        UiText::new(
+            "正在安全停止星穹铁道扫描",
+            "Stopping the Star Rail scan safely",
+        ),
+        move |cancel| run_scan_task(&settings, cancel, status_for_scan, progress),
+    )
+}
+
+fn run_scan_task(
+    settings: &StarRailSettings,
+    cancel: yas::cancel::CancelToken,
+    status: Arc<Mutex<TaskStatus>>,
+    progress: Arc<Mutex<super::task_progress::TaskProgress>>,
+) -> Result<TaskStatus, UiError> {
     use super::task_progress::{Step, TaskProgress};
     let mut steps = Vec::new();
     for (enabled, key, zh, en) in [
@@ -329,81 +338,64 @@ pub fn spawn_scan(
         }
     }
     *progress.lock().unwrap() = TaskProgress { steps };
-    let settings = settings.clone();
     let status_for_progress = status.clone();
-    let status_for_phases = status.clone();
-    worker::spawn_cancellable_task(
-        TaskKind::Scanner,
-        LogSource::Scanner,
-        status,
-        UiText::new(
-            "正在初始化星穹铁道扫描器...",
-            "Initializing Star Rail scanner...",
-        ),
-        UiText::new(
-            "正在安全停止星穹铁道扫描...",
-            "Stopping the Star Rail scan safely...",
-        ),
-        move |cancel| {
-            let track = progress.clone();
-            let cancel_for_observer = cancel.clone();
-            let observer = Box::new(move |category, event| {
-                use super::task_progress::StepState;
-                use hsr_scanner::scan_progress::{ScanCategory, ScanEvent};
-                let key = match category {
-                    ScanCategory::Characters => "characters",
-                    ScanCategory::LightCones => "light_cones",
-                    ScanCategory::Gear => "gear",
-                };
-                if let Some(step) = track
-                    .lock()
-                    .unwrap()
-                    .steps
-                    .iter_mut()
-                    .find(|s| s.key == key)
-                {
-                    match event {
-                        ScanEvent::Started => {
-                            step.state = StepState::Running;
-                            if !cancel_for_observer.is_cancelled() {
-                                *status_for_progress.lock().unwrap() =
-                                    TaskStatus::Running(UiText::new(
-                                        format!("正在扫描{}", step.zh),
-                                        format!("Scanning {}", step.en),
-                                    ));
-                            }
-                        },
-                        ScanEvent::Progress {
-                            recognized, total, ..
-                        } => {
-                            step.completed = recognized;
-                            step.total = total;
-                        },
-                        ScanEvent::Finished {
-                            recognized,
-                            complete,
-                        } => {
-                            step.completed = recognized;
-                            step.state = if complete {
-                                StepState::Complete
-                            } else {
-                                StepState::Interrupted
-                            };
-                        },
+    let status_for_phases = status;
+    let track = progress.clone();
+    let cancel_for_observer = cancel.clone();
+    let observer = Box::new(move |category, event| {
+        use super::task_progress::StepState;
+        use hsr_scanner::scan_progress::{ScanCategory, ScanEvent};
+        let key = match category {
+            ScanCategory::Characters => "characters",
+            ScanCategory::LightCones => "light_cones",
+            ScanCategory::Gear => "gear",
+        };
+        if let Some(step) = track
+            .lock()
+            .unwrap()
+            .steps
+            .iter_mut()
+            .find(|s| s.key == key)
+        {
+            match event {
+                ScanEvent::Started => {
+                    step.state = StepState::Running;
+                    if !cancel_for_observer.is_cancelled() {
+                        *status_for_progress.lock().unwrap() = TaskStatus::Running(UiText::new(
+                            format!("正在扫描{}", step.zh),
+                            format!("Scanning {}", step.en),
+                        ));
                     }
-                }
-            });
-            let result = run_scan_observed(
-                &settings,
-                cancel,
-                None,
-                Some(observer),
-                Some(&status_for_phases),
-            );
-            progress.lock().unwrap().interrupt_unfinished();
-            result
-        },
-    )
+                },
+                ScanEvent::Progress {
+                    recognized, total, ..
+                } => {
+                    step.completed = recognized;
+                    step.total = total;
+                },
+                ScanEvent::Finished {
+                    recognized,
+                    complete,
+                } => {
+                    step.completed = recognized;
+                    step.state = if complete {
+                        StepState::Complete
+                    } else {
+                        StepState::Interrupted
+                    };
+                },
+            }
+        }
+    });
+    let result = run_scan_observed(
+        &settings,
+        cancel,
+        None,
+        Some(observer),
+        Some(&status_for_phases),
+    );
+    progress.lock().unwrap().interrupt_unfinished();
+    result
 }
 
 /// The GUI and shipped command line use the same runtime, lease, scan, and export path.
@@ -532,50 +524,6 @@ fn run_scan_observed(
     })
 }
 
-fn load_manager_instructions(path: &Path) -> Result<ManagerInstructionsEnvelope, UiError> {
-    let metadata = fs::metadata(path).map_err(|error| {
-        UiError::from_error(
-            UiText::new(
-                "无法读取 GGStarRail 管理指令文件。",
-                "The GGStarRail manager-instructions file could not be read.",
-            ),
-            error,
-        )
-    })?;
-    if !metadata.is_file() || metadata.len() > MAX_MANAGER_INSTRUCTIONS_BYTES {
-        return Err(UiError::from_message(
-            UiText::new(
-                "GGStarRail 管理指令文件无效或过大；不会执行任何游戏操作。",
-                "The GGStarRail manager-instructions file is invalid or too large; no game action was performed.",
-            ),
-            format!(
-                "path={}; regularFile={}; bytes={}; maximum={MAX_MANAGER_INSTRUCTIONS_BYTES}",
-                path.display(),
-                metadata.is_file(),
-                metadata.len()
-            ),
-        ));
-    }
-    let json = fs::read_to_string(path).map_err(|error| {
-        UiError::from_error(
-            UiText::new(
-                "无法读取 GGStarRail 管理指令文件。",
-                "The GGStarRail manager-instructions file could not be read.",
-            ),
-            error,
-        )
-    })?;
-    ManagerInstructionsEnvelope::parse_json(&json).map_err(|error| {
-        hsr_ui_error(
-            UiText::new(
-                "GGStarRail 管理指令未通过安全校验；不会执行任何游戏操作。",
-                "The GGStarRail manager instructions did not pass safety validation; no game action was performed.",
-            ),
-            error,
-        )
-    })
-}
-
 fn build_manager_preview(
     plan: ManagerPlan,
     settings_identity: String,
@@ -620,27 +568,6 @@ pub fn load_recovery_preview<S: ManagerJournalStore>(
         .transpose()
 }
 
-fn actionable_preview_count(preview: &ManagerPreview) -> usize {
-    preview
-        .plan
-        .entries
-        .iter()
-        .filter(|entry| !entry.changes.is_empty())
-        .count()
-}
-
-fn publish_manager_preview(slot: &Mutex<Option<ManagerPreview>>, preview: ManagerPreview) -> usize {
-    let actionable = actionable_preview_count(&preview);
-    match slot.lock() {
-        Ok(mut stored) => *stored = Some(preview),
-        Err(poisoned) => {
-            slot.clear_poison();
-            *poisoned.into_inner() = Some(preview);
-        },
-    }
-    actionable
-}
-
 fn manager_scan_config(settings: &StarRailSettings) -> Result<ScanConfig, UiError> {
     let mut config = scanner_config(
         settings,
@@ -656,382 +583,255 @@ fn manager_scan_config(settings: &StarRailSettings) -> Result<ScanConfig, UiErro
     Ok(config)
 }
 
-pub fn spawn_manager_preview(
+pub fn spawn_manager_server(
     settings: &StarRailSettings,
     status: Arc<Mutex<TaskStatus>>,
-    preview: Arc<Mutex<Option<ManagerPreview>>>,
     progress: Arc<Mutex<super::task_progress::TaskProgress>>,
+    job: Arc<Mutex<crate::hsr_server::JobState>>,
 ) -> TaskHandle {
     let settings = settings.clone();
-    let identity = settings_identity(&settings);
+    let status_worker = status.clone();
+    let progress_http = progress.clone();
+    let status_http = status.clone();
+    *job.lock().unwrap() = Default::default();
+    progress.lock().unwrap().steps.clear();
     worker::spawn_cancellable_task(
         TaskKind::Manager,
         LogSource::Manager,
         status,
-        UiText::new(
-            "正在重新扫描遗器并生成精确预览...",
-            "Rescanning Relics and building an exact preview...",
-        ),
-        UiText::new(
-            "正在安全停止管理器预览...",
-            "Stopping the manager preview safely...",
-        ),
+        UiText::new("正在启动连接", "Starting connection"),
+        UiText::new("正在安全停止连接", "Stopping connection safely"),
         move |cancel| {
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Manager));
-            }
-            let instructions_path = Path::new(settings.manager_instructions_path.trim());
-            if settings.manager_journal_path.trim().is_empty() {
-                return Err(UiError::from_message(
-                    UiText::new(
-                        "请选择恢复日志路径；在确认没有需恢复的操作前，不会连接游戏。",
-                        "Choose a recovery-journal path. The game will not be accessed until recovery state is checked.",
-                    ),
-                    "starRail.managerJournalPath is empty",
-                ));
-            }
-            let references = load_references().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
-                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Manager));
-            }
-            let envelope = load_manager_instructions(instructions_path)?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Manager));
-            }
-            validate_manager_envelope_reference(&envelope, &references).map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "管理指令与当前参考数据不一致；不会执行任何游戏操作。",
-                        "The manager instructions do not match the current reference data; no game action was performed.",
-                    ),
-                    error,
-                )
-            })?;
-            let mut recovery_store = AppendOnlyJsonJournalStore::new(PathBuf::from(
-                settings.manager_journal_path.trim(),
-            ));
-            if let Some(recovered) =
-                load_recovery_preview(&envelope, &mut recovery_store, identity.clone())?
-            {
-                if user_aborted(&cancel) {
-                    return Ok(stopped(TaskKind::Manager));
-                }
-                let actionable = publish_manager_preview(&preview, recovered);
-                return Ok(UiText::new(
-                    format!(
-                        "已从恢复日志载入原始精确预览：{} 项需要重新授权。尚未连接游戏。",
-                        actionable
-                    ),
-                    format!(
-                        "Loaded the original exact preview from the recovery journal: {actionable} change(s) require renewed authorization. The game was not accessed."
-                    ),
-                ));
-            }
-
-            ensure_ocr_runtime()?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Manager));
-            }
-            let _controller_lease = HsrControllerLease::try_acquire().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "另一个星穹铁道操作正在使用游戏控制器；不会执行任何游戏操作。",
-                        "Another Star Rail operation is using the game controller; no game action was performed.",
-                    ),
-                    error,
-                )
-            })?;
-            let config = manager_scan_config(&settings)?;
-            let mut step =
-                super::task_progress::Step::new("gear", "重扫遗器库存", "Rescan Relic inventory");
-            step.state = super::task_progress::StepState::Running;
-            progress.lock().unwrap().steps = vec![step];
-            let mut scanner = match HsrScanner::live_with_cancel(references, config, cancel.clone())
-            {
-                Ok(scanner) => scanner,
-                Err(_) if user_aborted(&cancel) => return Ok(stopped(TaskKind::Manager)),
-                Err(error) => {
-                    return Err(
-                    hsr_ui_error(
-                        UiText::new(
-                            "星穹铁道管理器无法连接到游戏；不会执行任何游戏操作。",
-                            "The Star Rail manager could not connect to the game; no game action was performed.",
-                        ),
-                        error,
-                    ));
+            let server =
+                tiny_http::Server::http(("127.0.0.1", settings.manager_port)).map_err(|error| {
+                    UiError::from_message(UiText::new(
+                    "无法启动连接。端口可能已被占用，请更换端口。",
+                    "Connection could not start. The port may be in use; choose another port."
+                ), error.to_string())
+                })?;
+            *status_worker.lock().unwrap() =
+                TaskStatus::Running(UiText::new("等待网站请求", "Waiting for a website request"));
+            crate::hsr_server::serve(server, cancel, job,
+                move |request, job_cancel| {
+                    progress.lock().unwrap().steps.clear();
+                    let result = match request {
+                        crate::hsr_server::Job::Manage(envelope) => run_manager_request(
+                            &settings, &envelope, job_cancel.clone(), status_worker.clone(), progress.clone()),
+                        crate::hsr_server::Job::Scan(targets) => {
+                            let mut scan_settings = settings.clone();
+                            scan_settings.scan_characters = targets.characters;
+                            scan_settings.scan_light_cones = targets.light_cones;
+                            scan_settings.scan_relics_and_ornaments = targets.relics;
+                            run_scan_task(&scan_settings, job_cancel.clone(), status_worker.clone(), progress.clone())
+                                .and_then(|outcome| match outcome {
+                                    TaskStatus::Exported { path, partial, message } => {
+                                        let data = fs::read_to_string(&path).map_err(|error| UiError::from_error(
+                                            UiText::new("无法读取扫描结果", "Could not read scan results"), error))?;
+                                        let export: serde_json::Value = serde_json::from_str(&data).map_err(|error| UiError::from_error(
+                                            UiText::new("无法读取扫描结果", "Could not read scan results"), error))?;
+                                        *status_worker.lock().unwrap() = TaskStatus::Completed(message);
+                                        Ok(serde_json::json!({"kind":"scan", "export":export, "partial":partial}))
+                                    },
+                                    TaskStatus::Stopped(message) => Err(UiError::from_message(message, "scan cancelled")),
+                                    _ => unreachable!("scan produces export or stopped"),
+                                })
+                        },
+                    };
+                    progress.lock().unwrap().interrupt_unfinished();
+                    result.map_err(|error| {
+                        let body = serde_json::json!({
+                            "zh":error.hint_text(super::state::Lang::Zh),
+                            "en":error.hint_text(super::state::Lang::En),
+                            "details":error.copy_text(super::state::Lang::En),
+                        });
+                        *status_worker.lock().unwrap() = TaskStatus::Failed(error);
+                        body
+                    })
                 },
-            };
-            scanner = scanner.with_observer(manager_scan_observer(progress.clone()));
-            let inventory = match scanner.scan_manager_inventory() {
-                Ok(inventory) => inventory,
-                Err(_) if user_aborted(&cancel) => return Ok(stopped(TaskKind::Manager)),
-                Err(error) => {
-                    return Err(hsr_ui_error(
-                        UiText::new(
-                            "无法证明遗器库存已完整扫描；不会执行任何游戏操作。",
-                            "A complete Relic inventory scan could not be proven; no game action was performed.",
-                        ),
-                        error,
-                    ));
+                move || {
+                    let track = progress_http.lock().unwrap();
+                    let status = status_http.lock().unwrap();
+                    let message = match &*status {
+                        TaskStatus::Running(text) | TaskStatus::Completed(text) | TaskStatus::Stopped(text) =>
+                            serde_json::json!({"zh":text.text(super::state::Lang::Zh), "en":text.text(super::state::Lang::En)}),
+                        TaskStatus::Failed(error) => serde_json::json!({"zh":error.hint_text(super::state::Lang::Zh), "en":error.hint_text(super::state::Lang::En)}),
+                        _ => serde_json::Value::Null,
+                    };
+                    serde_json::json!({"message":message,"steps":track.steps.iter().map(|step|
+                        serde_json::json!({"key":step.key,"zh":step.zh,"en":step.en,"completed":step.completed,"total":step.total,
+                            "showCount":step.show_count, "state":match step.state {
+                                super::task_progress::StepState::Pending => "pending",
+                                super::task_progress::StepState::Running => "running",
+                                super::task_progress::StepState::Complete => "complete",
+                                super::task_progress::StepState::Interrupted => "interrupted",
+                            }})).collect::<Vec<_>>()})
                 },
-            };
-            if let Some(step) = progress.lock().unwrap().steps.first_mut() {
-                step.completed = inventory.len();
-                step.state = super::task_progress::StepState::Complete;
-            }
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Manager));
-            }
-            let plan = build_manager_plan(&envelope, &inventory).map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法生成安全的管理器预览；不会执行任何游戏操作。",
-                        "A safe manager preview could not be built; no game action was performed.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Ok(stopped(TaskKind::Manager));
-            }
-            let fresh_preview = build_manager_preview(plan, identity, false)?;
-            let actionable = publish_manager_preview(&preview, fresh_preview);
-            Ok(UiText::new(
-                format!("精确预览已就绪：{} 项可授权变更。", actionable),
-                format!("Exact preview ready: {actionable} authorizable change(s)."),
-            ))
+            ).map_err(|error| UiError::from_anyhow(UiText::new("连接已中断", "Connection interrupted"), &error))?;
+            Ok(stopped(TaskKind::Manager))
         },
     )
 }
 
-pub fn spawn_manager_apply(
+fn run_manager_request(
     settings: &StarRailSettings,
+    envelope: &ManagerInstructionsEnvelope,
+    cancel: yas::cancel::CancelToken,
     status: Arc<Mutex<TaskStatus>>,
-    preview: Arc<Mutex<Option<ManagerPreview>>>,
-    authorized_scopes: BTreeSet<MutationScope>,
     progress: Arc<Mutex<super::task_progress::TaskProgress>>,
-) -> TaskHandle {
-    let settings = settings.clone();
-    let expected_identity = settings_identity(&settings);
-    let status_for_progress = status.clone();
-    {
-        let mut track = progress.lock().unwrap();
-        if let Some(step) = track.steps.iter_mut().find(|s| s.key == "gear") {
-            step.completed = 0;
-            step.total = None;
-            step.state = super::task_progress::StepState::Pending;
-        } else {
-            track.steps.insert(
-                0,
-                super::task_progress::Step::new("gear", "重扫遗器库存", "Rescan Relic inventory"),
-            );
-        }
+) -> Result<serde_json::Value, UiError> {
+    *status.lock().unwrap() = TaskStatus::Running(UiText::new(
+        format!("管理请求 · {} 项操作", envelope.instructions.len()),
+        format!(
+            "Manage request · {} operations",
+            envelope.instructions.len()
+        ),
+    ));
+    let references = load_references().map_err(|error| {
+        hsr_ui_error(
+            UiText::new("无法加载游戏数据", "Could not load game data"),
+            error,
+        )
+    })?;
+    validate_manager_envelope_reference(envelope, &references).map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "管理请求与游戏数据不一致",
+                "Request does not match game data",
+            ),
+            error,
+        )
+    })?;
+    ensure_ocr_runtime_with_status(Some(&status))?;
+    if user_aborted(&cancel) {
+        return Err(UiError::from_message(
+            UiText::new("操作已停止", "Operation stopped"),
+            "cancelled before game control",
+        ));
     }
-    worker::spawn_cancellable_task(
-        TaskKind::Manager,
-        LogSource::Manager,
-        status,
-        UiText::new(
-            "正在重新验证预览并应用已授权变更...",
-            "Revalidating the preview and applying authorized changes...",
-        ),
-        UiText::new(
-            "正在安全停止星穹铁道管理器...",
-            "Stopping the Star Rail manager safely...",
-        ),
-        move |cancel| {
-            ensure_ocr_runtime()?;
-            let reviewed = match preview.lock() {
-                Ok(slot) => slot.clone(),
-                Err(poisoned) => {
-                    preview.clear_poison();
-                    poisoned.into_inner().clone()
-                },
-            }
-            .ok_or_else(|| {
-                UiError::from_message(
-                    UiText::new(
-                        "精确预览已失效。请重新预览后再确认；不会执行任何游戏操作。",
-                        "The exact preview is no longer valid. Preview again before confirming; no game action was performed.",
-                    ),
-                    "manager apply started without a retained preview",
-                )
-            })?;
-            if reviewed.settings_identity != expected_identity {
-                return Err(UiError::from_message(
-                    UiText::new(
-                        "预览后设置发生了变化。请重新预览；不会执行任何游戏操作。",
-                        "Settings changed after the preview. Preview again; no game action was performed.",
-                    ),
-                    "manager settings identity differs from reviewed preview",
-                ));
-            }
-
-            let references = load_references().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
-                        "Star Rail game data could not be loaded. Download the latest app build and retry.",
-                    ),
-                    error,
-                )
-            })?;
-            let envelope =
-                load_manager_instructions(Path::new(settings.manager_instructions_path.trim()))?;
-            validate_manager_envelope_reference(&envelope, &references).map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "管理指令与当前参考数据不一致；不会执行任何游戏操作。",
-                        "The manager instructions do not match the current reference data; no game action was performed.",
-                    ),
-                    error,
-                )
-            })?;
-            if user_aborted(&cancel) {
-                return Err(UiError::from_message(
-                    UiText::new(
-                        "已在进入游戏控制阶段前停止管理操作；未执行任何变更。",
-                        "The manager operation stopped before game control began; no changes were made.",
-                    ),
-                    "manager apply cancelled by user before controller lease acquisition",
-                ));
-            }
-            let controller_lease = HsrControllerLease::try_acquire().map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "另一个星穹铁道操作正在使用游戏控制器；不会执行任何游戏操作。",
-                        "Another Star Rail operation is using the game controller; no game action was performed.",
-                    ),
-                    error,
-                )
-            })?;
-            let journal = AppendOnlyJsonJournalStore::new(PathBuf::from(
-                settings.manager_journal_path.trim(),
-            ))
-            .try_acquire_apply_lease_with_controller(controller_lease)
-            .map_err(|error| {
-                hsr_ui_error(
-                    UiText::new(
-                        "无法取得管理恢复日志的独占权限；不会执行任何游戏操作。",
-                        "Exclusive access to the manager recovery journal could not be acquired; no game action was performed.",
-                    ),
-                    error,
-                )
-            })?;
-            let authorization =
-                ApplyAuthorization::new(reviewed.plan.digest.clone(), authorized_scopes);
-            let config = manager_scan_config(&settings)?;
-            let mut scanner = HsrScanner::live_with_cancel(references, config, cancel.clone()).map_err(
-                |error| {
-                    hsr_ui_error(
-                        UiText::new(
-                            "星穹铁道管理器无法连接到游戏；不会执行任何游戏操作。",
-                            "The Star Rail manager could not connect to the game; no game action was performed.",
-                        ),
-                        error,
-                    )
-                },
-            )?;
-            scanner = scanner.with_observer(manager_scan_observer(progress.clone()));
-            let mut journal = super::hsr_manager_progress::TrackedJournal {
-                inner: journal,
-                progress: progress.clone(),
-                status: status_for_progress,
-                cancel,
-            };
-            let expected_digest = reviewed.plan.digest.clone();
-            let report = apply_manager_envelope(
-                &envelope,
-                &authorization,
-                &mut scanner,
-                &mut journal,
-                |scanner| scanner.scan_manager_inventory(),
-                |plan| {
-                    if plan.digest != expected_digest {
-                        return Err(HsrError::new(
-                            "HSR_MANAGER_UI_PREVIEW_CHANGED",
-                            hsr_scanner::LocalizedText::new(
-                                "最新库存生成了不同的管理预览；不会执行任何游戏操作。",
-                                "The latest inventory produced a different manager preview; no game action was performed.",
-                            ),
-                            "fresh manager plan digest differs from the UI-reviewed digest",
-                        ));
-                    }
-                    if let Some(step) = progress.lock().unwrap().steps.iter_mut().find(|s| s.key == "gear") {
-                        step.state = super::task_progress::StepState::Complete;
-                    }
-                    Ok(())
-                },
+    let controller_lease = HsrControllerLease::try_acquire().map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "游戏正在被其他任务使用",
+                "Another task is controlling the game",
+            ),
+            error,
+        )
+    })?;
+    let journal_path = if settings.manager_journal_path.trim().is_empty() {
+        settings.export_directory().join("star_rail_manager.jsonl")
+    } else {
+        PathBuf::from(settings.manager_journal_path.trim())
+    };
+    let mut journal = AppendOnlyJsonJournalStore::new(&journal_path)
+        .try_acquire_apply_lease_with_controller(controller_lease)
+        .map_err(|error| {
+            hsr_ui_error(
+                UiText::new("无法打开恢复记录", "Could not open recovery journal"),
+                error,
             )
+        })?;
+    let recovered = load_manager_recovery_plan(envelope, &mut journal)
+        .map_err(|error| {
+            hsr_ui_error(
+                UiText::new("无法恢复原任务", "Could not recover the original task"),
+                error,
+            )
+        })?
+        .is_some();
+    let mut scanner =
+        HsrScanner::live_with_cancel(references, manager_scan_config(settings)?, cancel.clone())
             .map_err(|error| {
                 hsr_ui_error(
-                    UiText::new(
-                        "已授权的管理操作未能安全完成。请查看恢复日志并复制完整错误。",
-                        "The authorized manager operation could not finish safely. Review the recovery journal and copy the full error.",
-                    ),
+                    UiText::new("无法连接游戏", "Could not connect to the game"),
                     error,
                 )
-            })?;
-            match preview.lock() {
-                Ok(mut slot) => *slot = None,
-                Err(poisoned) => {
-                    preview.clear_poison();
-                    *poisoned.into_inner() = None;
-                },
+            })?
+            .with_observer(manager_scan_observer(progress.clone()));
+    let mut inventory_step = if recovered {
+        super::task_progress::Step::new("gear", "恢复中断任务", "Recover interrupted task")
+    } else {
+        super::task_progress::Step::new("gear", "重扫遗器库存", "Rescan Relic inventory")
+    };
+    inventory_step.show_count = !recovered;
+    progress.lock().unwrap().steps = vec![inventory_step];
+    *status.lock().unwrap() = TaskStatus::Running(if recovered {
+        UiText::new("正在恢复中断任务", "Recovering interrupted task")
+    } else {
+        UiText::new("正在重扫遗器库存", "Rescanning Relic inventory")
+    });
+    let mut journal = super::hsr_manager_progress::TrackedJournal {
+        inner: journal,
+        progress: progress.clone(),
+        status: status.clone(),
+        cancel,
+    };
+    let (plan, report) = apply_manager_request(
+        envelope,
+        &mut scanner,
+        &mut journal,
+        |scanner| scanner.scan_manager_inventory(),
+        |plan| {
+            let mut track = progress.lock().unwrap();
+            if let Some(step) = track.steps.iter_mut().find(|s| s.key == "gear") {
+                step.state = super::task_progress::StepState::Complete;
             }
-            if report.needs_review_actions > 0 {
-                Err(UiError::from_message(
-                    UiText::new(
-                        "管理操作已停止，仍有操作需要人工复核。请保留恢复日志，不要重复点击。",
-                        "The manager stopped with actions still requiring manual review. Keep the recovery journal and do not repeat the clicks.",
-                    ),
-                    format!(
-                        "verifiedActions={}; needsReviewActions={}; deviceToggles={}; journal={}",
-                        report.verified_actions,
-                        report.needs_review_actions,
-                        report.device_toggles,
-                        settings.manager_journal_path
-                    ),
-                ))
-            } else {
-                let journal_archive = archive_completed_manager_journal(Path::new(
-                    settings.manager_journal_path.trim(),
-                ))?;
-                Ok(UiText::new(
-                    format!(
-                        "管理操作完成：{} 项已验证；设备切换 {} 次。{}",
-                        report.verified_actions,
-                        report.device_toggles,
-                        journal_archive
-                            .as_ref()
-                            .map_or_else(String::new, |path| format!(
-                                "恢复日志已归档至 {}。",
-                                path.display()
-                            ))
-                    ),
-                    format!(
-                        "Manager operation complete: {} verified; {} device toggle(s). {}",
-                        report.verified_actions,
-                        report.device_toggles,
-                        journal_archive
-                            .as_ref()
-                            .map_or_else(String::new, |path| format!(
-                                "Recovery journal archived to {}.",
-                                path.display()
-                            ))
-                    ),
-                ))
-            }
+            super::hsr_manager_progress::plan_steps(&mut track, plan);
+            Ok(())
         },
     )
+    .map_err(|error| {
+        hsr_ui_error(
+            UiText::new(
+                "操作未完成，恢复记录已保留",
+                "Operation did not finish; recovery journal retained",
+            ),
+            error,
+        )
+    })?;
+    let entries = journal
+        .load()
+        .map_err(|error| {
+            UiError::from_message(
+                UiText::new("无法读取操作结果", "Could not read operation results"),
+                error,
+            )
+        })?
+        .map(|saved| saved.entries)
+        .unwrap_or_default();
+    let blocked = plan
+        .entries
+        .iter()
+        .filter(|entry| entry.changes.is_empty())
+        .count();
+    let message = UiText::new(
+        format!(
+            "已验证 {} 项 · 跳过 {} 项 · 待复核 {} 项",
+            report.verified_actions, blocked, report.needs_review_actions
+        ),
+        format!(
+            "{} verified · {} skipped · {} need review",
+            report.verified_actions, blocked, report.needs_review_actions
+        ),
+    );
+    if report.needs_review_actions > 0 {
+        *status.lock().unwrap() = TaskStatus::Failed(UiError::from_message(
+            UiText::new(
+                "部分操作需要人工复核，请保留恢复记录",
+                "Some operations need review; keep the recovery journal",
+            ),
+            message.text(super::state::Lang::En),
+        ));
+    } else {
+        // Release the locked journal before archiving (Windows cannot rename an open locked file).
+        drop(journal);
+        archive_completed_manager_journal(&journal_path)?;
+        *status.lock().unwrap() = TaskStatus::Completed(message);
+    }
+    Ok(serde_json::json!({
+        "kind":"manage", "verified":report.verified_actions, "needsReview":report.needs_review_actions,
+        "total":report.total_actions, "skipped":blocked, "entries":entries,
+        "instructions":plan.entries,
+    }))
 }
 #[cfg(test)]
 mod feedback_tests {

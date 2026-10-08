@@ -426,6 +426,7 @@ fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() 
             saved["starRail"]["maxLightCones"] = 0.into();
             saved["starRail"]["maxGear"] = 0.into();
             saved["starRail"]["hdrMode"] = false.into();
+            saved["starRail"]["managerPort"] = 8765.into();
             saved["starRail"]["captureMethod"] = "auto".into();
             assert_eq!(persisted, saved);
             let reloaded = ApplicationConfigStore::load(&path).unwrap();
@@ -588,6 +589,34 @@ fn star_rail_settings_and_per_game_navigation_round_trip_separately() {
     assert!(!reloaded.config.star_rail.scan_characters);
     assert_eq!(reloaded.config.star_rail.max_gear, 789);
 
+    remove_test_tree(&root);
+}
+
+#[test]
+fn manager_port_migrates_from_v3_without_overwriting_a_saved_choice() {
+    let root = temp_root("manager-port-migration");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    for port in [None, Some(8766)] {
+        let mut value = serde_json::json!({"schemaVersion":3,"starRail":{"hdrMode":true,"trailblazerName":"Player"}});
+        if let Some(port) = port {
+            value["starRail"]["managerPort"] = port.into();
+        }
+        fs::write(&path, value.to_string()).unwrap();
+        let mut store = ApplicationConfigStore::load(&path).unwrap();
+        assert_eq!(
+            store.config.schema_version,
+            APPLICATION_CONFIG_SCHEMA_VERSION
+        );
+        assert_eq!(store.config.star_rail.manager_port, port.unwrap_or(8765));
+        assert!(store.config.star_rail.hdr_mode);
+        assert_eq!(store.config.star_rail.trailblazer_name, "Player");
+        store.persist_now().unwrap();
+        assert_eq!(
+            ApplicationConfigStore::load(&path).unwrap().config,
+            store.config
+        );
+    }
     remove_test_tree(&root);
 }
 

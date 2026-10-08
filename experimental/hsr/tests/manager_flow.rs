@@ -9,15 +9,57 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hsr_scanner::localization::Language;
 use hsr_scanner::manager::{
-    apply_manager_envelope, apply_manager_plan, build_manager_plan, load_manager_recovery_plan,
-    validate_manager_envelope_reference, AppendOnlyJsonJournalStore, ApplyAuthorization,
-    JournalEntry, JournalStatus, ManagedGearObservation, ManagedState, ManagerInstructionsEnvelope,
-    ManagerJournal, ManagerJournalStore, ManagerMutationDevice, ManagerPlan, MutationScope,
-    PlanClassification, VisibleGearMatcher, MANAGER_JOURNAL_SCHEMA, MANAGER_JOURNAL_SCHEMA_VERSION,
+    apply_manager_envelope, apply_manager_plan, apply_manager_request, build_manager_plan,
+    load_manager_recovery_plan, validate_manager_envelope_reference, AppendOnlyJsonJournalStore,
+    ApplyAuthorization, JournalEntry, JournalStatus, ManagedGearObservation, ManagedState,
+    ManagerInstructionsEnvelope, ManagerJournal, ManagerJournalStore, ManagerMutationDevice,
+    ManagerPlan, MutationScope, PlanClassification, VisibleGearMatcher, MANAGER_JOURNAL_SCHEMA,
+    MANAGER_JOURNAL_SCHEMA_VERSION,
 };
 use hsr_scanner::reference::{GiloreBundleReferenceProvider, ReferenceCache};
 
 const GOLDEN_MANAGER_INSTRUCTIONS: &str = include_str!("fixtures/manager_instructions_v1.json");
+
+#[test]
+fn website_request_narrows_to_safe_matches_and_completed_retry_never_clicks_again() {
+    let envelope = envelope();
+    for (locked, equipped, copies, toggles) in [
+        (false, false, 1, 1),
+        (false, true, 1, 0),
+        (false, false, 2, 0),
+        (true, false, 1, 0),
+    ] {
+        let observation = observed(
+            envelope.instructions[0].matcher.clone(),
+            Some(locked),
+            Some(false),
+            Some(equipped),
+        );
+        let inventory = vec![observation; copies];
+        let mut device = SimulatedDevice::new(inventory.clone());
+        let mut store = MemoryJournalStore::default();
+        let (_, report) = apply_manager_request(
+            &envelope,
+            &mut device,
+            &mut store,
+            |_| Ok(inventory),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(device.toggles.len(), toggles);
+        assert_eq!(report.verified_actions, toggles);
+        let (_, retried) = apply_manager_request(
+            &envelope,
+            &mut device,
+            &mut store,
+            |_| panic!("recovery must use the original journal, not a fresh plan"),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(retried.device_toggles, 0);
+        assert_eq!(device.toggles.len(), toggles);
+    }
+}
 const GOLDEN_MANAGER_PREVIEW_EN: &str = include_str!("fixtures/manager_preview_en.txt");
 const GOLDEN_MANAGER_PREVIEW_ZH_CN: &str = include_str!("fixtures/manager_preview_zh_cn.txt");
 static APPLY_LEASE_TEST_SERIAL: Mutex<()> = Mutex::new(());

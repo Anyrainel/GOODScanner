@@ -9,7 +9,7 @@ use hsr_scanner::scan_timing::ScanTimings;
 use hsr_scanner::{TrailblazerGender, TrailblazerIdentity};
 use serde::{Deserialize, Serialize};
 
-pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 3;
+pub const APPLICATION_CONFIG_SCHEMA_VERSION: u32 = 4;
 pub const APPLICATION_CONFIG_FILE_REL: &str = "data/good_app_config.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +122,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_manager_port() -> u16 {
+    8765
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarRailSettings {
@@ -155,6 +159,8 @@ pub struct StarRailSettings {
     pub dump_images: bool,
     #[serde(default)]
     pub manager_instructions_path: String,
+    #[serde(default = "default_manager_port")]
+    pub manager_port: u16,
     #[serde(default)]
     pub manager_journal_path: String,
     #[serde(default = "default_true")]
@@ -188,6 +194,7 @@ impl Default for StarRailSettings {
             trailblazer_gender: None,
             dump_images: false,
             manager_instructions_path: String::new(),
+            manager_port: default_manager_port(),
             manager_journal_path: String::new(),
             capture_include_achievements: true,
             capture_include_characters: true,
@@ -403,8 +410,9 @@ impl ApplicationConfigStore {
         // (default bitBlt) and no HDR
         // setting. Preserve supported choices as advanced overrides; an omitted
         // method now uses Auto, which still selects BitBlt with HDR disabled.
-        // Merge into the existing unpublished v3 migration from origin's v2.
-        if matches!(config.schema_version, 1 | 2) {
+        // v3 added HDR. v4 adds the loopback manager port; the serde default
+        // preserves every existing preference and supplies port 8765.
+        if matches!(config.schema_version, 1 | 2 | 3) {
             config.schema_version = APPLICATION_CONFIG_SCHEMA_VERSION;
         }
         config.validate_version()?;

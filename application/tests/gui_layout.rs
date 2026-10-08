@@ -110,7 +110,7 @@ fn expanded_settings_fit_narrow_forms_in_both_languages() {
 }
 
 #[test]
-fn manager_file_controls_and_help_fit_with_long_windows_paths() {
+fn manager_connection_settings_fit_narrow_panels_with_legacy_paths_saved() {
     use good_tools_app::{
         config::StarRailSettings,
         gui::{star_rail_manager_tab, star_rail_state::StarRailState, state::Lang},

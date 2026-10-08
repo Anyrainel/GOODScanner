@@ -267,26 +267,3 @@ pub fn inventory_delays(ui: &mut egui::Ui, state: &mut AppState, l: Lang) {
             l.t("面板加载完成后、截图前的额外等待（通常为0）", "Extra wait after panel loaded before capturing (usually 0)")),
     ]);
 }
-
-/// Keep path fields and their picker buttons within one bounded row, including
-/// long Windows paths inside a horizontally scrollable settings pane.
-pub(super) fn path_control(ui: &mut egui::Ui, value: &mut String, button: &str) -> egui::Response {
-    let width = ui.available_width().max(180.0);
-    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::hover());
-    let picker = egui::Rect::from_min_max(egui::pos2(row.right() - 112.0, row.top()), row.max);
-    let input = egui::Rect::from_min_max(row.min, egui::pos2(picker.left() - 10.0, row.bottom()));
-    let mut field_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(input)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    field_ui.add(
-        egui::TextEdit::singleline(value)
-            .desired_width(input.width())
-            .min_size(egui::vec2(0.0, 30.0)),
-    );
-    let mut picker_ui = ui.new_child(egui::UiBuilder::new().max_rect(picker).layout(
-        egui::Layout::centered_and_justified(egui::Direction::TopDown),
-    ));
-    picker_ui.add(egui::Button::new(button).wrap_mode(egui::TextWrapMode::Extend))
-}

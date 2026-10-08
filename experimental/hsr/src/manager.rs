@@ -1338,22 +1338,58 @@ where
     F: FnOnce(&mut D) -> HsrResult<Vec<ManagedGearObservation>>,
     P: FnOnce(&ManagerPlan) -> HsrResult<()>,
 {
+    let plan = prepare_manager_request(envelope, device, journal_store, fresh_inventory)?;
+
+    // CLI confirmation still binds the exact displayed digest and scopes.
+    review_exact_plan(&plan)?;
+    let mut report = apply_manager_plan(&plan, authorization, device, journal_store)?;
+    report.submitted_request_id = envelope.request_id.clone();
+    Ok(report)
+}
+
+fn prepare_manager_request<D, S, F>(
+    envelope: &ManagerInstructionsEnvelope,
+    device: &mut D,
+    journal_store: &mut S,
+    fresh_inventory: F,
+) -> HsrResult<ManagerPlan>
+where
+    D: ManagerMutationDevice,
+    S: ManagerJournalStore,
+    F: FnOnce(&mut D) -> HsrResult<Vec<ManagedGearObservation>>,
+{
     require_exclusive_apply_lease(journal_store)?;
-    let plan = match load_manager_recovery_plan(envelope, journal_store)? {
+    Ok(match load_manager_recovery_plan(envelope, journal_store)? {
         Some(plan) => plan,
         None => {
             let inventory = fresh_inventory(device)?;
             build_manager_plan(envelope, &inventory)?
         },
-    };
+    })
+}
 
-    // Re-display the exact fresh or recovered plan before authorization can
-    // reach any mutation. CLI callers use this hook for the bilingual text and
-    // exact JSON preview; a rendering failure therefore remains fail-closed.
-    review_exact_plan(&plan)?;
-    let mut report = apply_manager_plan(&plan, authorization, device, journal_store)?;
+/// An explicit website Apply submits only the requested state changes. The
+/// fresh/recovered plan narrows these to uniquely matched, safe actions; no
+/// caller-supplied digest or broad permission can authorize extra changes.
+pub fn apply_manager_request<D, S, F, P>(
+    envelope: &ManagerInstructionsEnvelope,
+    device: &mut D,
+    journal_store: &mut S,
+    fresh_inventory: F,
+    observe_plan: P,
+) -> HsrResult<(ManagerPlan, ApplyReport)>
+where
+    D: ManagerMutationDevice,
+    S: ManagerJournalStore,
+    F: FnOnce(&mut D) -> HsrResult<Vec<ManagedGearObservation>>,
+    P: FnOnce(&ManagerPlan) -> HsrResult<()>,
+{
+    let plan = prepare_manager_request(envelope, device, journal_store, fresh_inventory)?;
+    observe_plan(&plan)?;
+    let authorization = ApplyAuthorization::new(plan.digest.clone(), plan.required_scopes());
+    let mut report = apply_manager_plan(&plan, &authorization, device, journal_store)?;
     report.submitted_request_id = envelope.request_id.clone();
-    Ok(report)
+    Ok((plan, report))
 }
 
 /// Apply a confirmed plan. A journal snapshot is durably saved immediately
