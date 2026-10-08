@@ -125,6 +125,12 @@ fn visible_grid_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<u8> {
 }
 
 fn visible_grid_cell_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<Vec<u8>> {
+    annotator::record_region(
+        "visible_grid_samples",
+        image,
+        (0.0, 100.0, 1310.0, 980.0),
+        scaler,
+    );
     let mut samples = Vec::with_capacity(GRID_ROWS * GRID_COLS);
     for row in 0..GRID_ROWS {
         for col in 0..GRID_COLS {
@@ -147,6 +153,7 @@ fn scrollbar_band_samples(image: &RgbImage, scaler: &CoordScaler) -> Vec<Vec<u8>
     // x=1265) and the detail panel (starting near x=1310). Cover the complete
     // vertical travel: the thumb can be near y=1000 late in a large inventory.
     const BAND_RECT: (f64, f64, f64, f64) = (1278.0, 80.0, 22.0, 950.0);
+    annotator::record_region("scrollbar_band", image, BAND_RECT, scaler);
     let (x, y, width, height) = BAND_RECT;
     let x0 = scaler.x(x).max(0) as u32;
     let y0 = scaler.y(y).max(0) as u32;
@@ -362,6 +369,12 @@ fn sample_grid_cells(
     scanned_row: usize,
     last_row_col: usize,
 ) -> Vec<Vec<u8>> {
+    annotator::record_region(
+        "grid_cell_samples",
+        image,
+        (0.0, 100.0, 1310.0, 980.0),
+        scaler,
+    );
     let mut samples = Vec::new();
     for r in start_row..start_row + visible_rows {
         let cum_row = scanned_row + (r - start_row);

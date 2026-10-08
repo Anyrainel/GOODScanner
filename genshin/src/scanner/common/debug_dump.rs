@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -8,6 +8,7 @@ use image::{GenericImageView, Rgb, RgbImage};
 
 use super::capture_frame::CaptureFrame;
 use super::coord_scaler::CoordScaler;
+use super::dump_paths;
 use super::grid_icon_detector::GridCellAnnotation;
 use super::pixel_utils::ConstellationResult;
 
@@ -489,6 +490,13 @@ pub enum DumpEntry {
 
 pub struct DumpCollector {
     dir: PathBuf,
+    game: String,
+    category: String,
+    index: usize,
+    input_crops: HashMap<usize, RgbImage>,
+    detection_entries: HashSet<usize>,
+    pending_inferences: Vec<usize>,
+    image_names: Vec<(String, String)>,
     images: Vec<(String, RgbImage)>,
     /// Window-space origin of each image (parallel to `images`).
     image_origins: Vec<(f64, f64)>,
@@ -501,15 +509,26 @@ pub struct DumpCollector {
 impl DumpCollector {
     /// Create a new dump collector. Creates the output directory.
     pub fn new(base_dir: &str, category: &str, index: usize, scaler: &CoordScaler) -> Self {
-        let folder = format!("{:04}", index);
-        let dir = Path::new(base_dir).join(category).join(folder);
-        // Clear any stale files from a previous scan of this index before writing new output.
-        if dir.exists() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        let _ = std::fs::create_dir_all(&dir);
+        Self::new_for(base_dir, "genshin", category, index, scaler)
+    }
+
+    pub fn new_for(
+        base_dir: &str,
+        game: &str,
+        category: &str,
+        index: usize,
+        scaler: &CoordScaler,
+    ) -> Self {
+        let dir = dump_paths::item_dir(base_dir, game, category, index);
         Self {
             dir,
+            game: game.into(),
+            category: category.into(),
+            index,
+            input_crops: HashMap::new(),
+            detection_entries: HashSet::new(),
+            pending_inferences: Vec::new(),
+            image_names: Vec::new(),
             images: Vec::new(),
             image_origins: Vec::new(),
             entries: Vec::new(),
@@ -539,7 +558,38 @@ impl DumpCollector {
         let idx = self.images.len();
         self.images.push((label.to_string(), image.clone()));
         self.image_origins.push(origin);
+        let mut used: HashSet<_> = self
+            .image_names
+            .iter()
+            .flat_map(|(full, ann)| [full.to_lowercase(), ann.to_lowercase()])
+            .collect();
+        // Always reserve plain names too: field names must not overwrite context images.
+        used.extend(["full.png".into(), "annotated.png".into()]);
+        self.image_names.push((
+            dump_paths::unique_name(&mut used, &format!("full_{label}"), "png"),
+            dump_paths::unique_name(&mut used, &format!("annotated_{label}"), "png"),
+        ));
         idx
+    }
+
+    /// Preserve exactly the input to inference/detection, including preprocessing.
+    /// Domain record_ocr calls subsequently attach field names and window coordinates.
+    pub fn record_input(
+        &mut self,
+        img_idx: usize,
+        field: &str,
+        image: &RgbImage,
+        text: &str,
+        ocr: bool,
+    ) {
+        let index = self.entries.len();
+        self.push_ocr(img_idx, field, (0.0, 0.0, 0.0, 0.0), text);
+        self.input_crops.insert(index, image.clone());
+        if ocr {
+            self.pending_inferences.push(index);
+        } else {
+            self.detection_entries.insert(index);
+        }
     }
 
     fn to_image_pos(&self, img_idx: usize, pos: (f64, f64)) -> (f64, f64) {
@@ -565,6 +615,63 @@ impl DumpCollector {
         raw_text: &str,
     ) {
         let rect = self.to_image_rect(img_idx, rect);
+        // A parser may record fields after several reads, or leave a probe
+        // unlabelled. Bind only a known field or an exact match of the source
+        // pixels; never assign every preceding inference to the next field.
+        let expected = self.images.get(img_idx).and_then(|(_, image)| {
+            let (x, y, w, h) = (
+                self.scaler.x(rect.0),
+                self.scaler.y(rect.1),
+                self.scaler.x(rect.2),
+                self.scaler.y(rect.3),
+            );
+            (x >= 0
+                && y >= 0
+                && w > 0
+                && h > 0
+                && x + w <= image.width() as i32
+                && y + h <= image.height() as i32)
+                .then(|| {
+                    image
+                        .view(x as u32, y as u32, w as u32, h as u32)
+                        .to_image()
+                })
+        });
+        let mut matched = false;
+        self.pending_inferences.retain(|index| {
+            if let DumpEntry::OcrRegion {
+                field_name: field,
+                rect: region,
+                ..
+            } = &mut self.entries[*index].1
+            {
+                let named = field == field_name;
+                let same_pixels = expected
+                    .as_ref()
+                    .is_some_and(|crop| self.input_crops.get(index) == Some(crop));
+                if named || same_pixels {
+                    *field = field_name.into();
+                    *region = rect;
+                    self.entries[*index].0 = img_idx;
+                    matched = true;
+                    return false;
+                }
+            }
+            true
+        });
+        if matched {
+            return;
+        }
+        self.push_ocr(img_idx, field_name, rect, raw_text);
+    }
+
+    fn push_ocr(
+        &mut self,
+        img_idx: usize,
+        field_name: &str,
+        rect: (f64, f64, f64, f64),
+        raw_text: &str,
+    ) {
         self.entries.push((
             img_idx,
             DumpEntry::OcrRegion {
@@ -733,9 +840,10 @@ impl DumpCollector {
     /// Write output files for a skipped item.
     pub fn finalize_skip(mut self, reason: &str) {
         self.finalized = true;
-        // Minimal output — just error.txt with the skip reason
-        let path = self.dir.join("error.txt");
-        let _ = std::fs::write(&path, format!("SKIPPED: {}\n", reason));
+        let names = self.crop_file_names();
+        self.write_images(&names);
+        self.write_result_txt(None, Some(&format!("SKIPPED: {reason}")));
+        self.write_ocr_manifest(&names, None, Some(reason));
     }
 
     // ── Private helpers ─────────────────────────────────────────────────
@@ -744,15 +852,23 @@ impl DumpCollector {
     /// repeat across images, so later duplicates get a numeric suffix instead
     /// of overwriting an earlier crop.
     fn crop_file_names(&self) -> Vec<Option<String>> {
-        let mut used = HashSet::new();
+        let mut used: HashSet<_> = self
+            .image_names
+            .iter()
+            .flat_map(|(full, ann)| [full.to_lowercase(), ann.to_lowercase()])
+            .collect();
+        used.extend(["full.png".into(), "annotated.png".into()]);
         self.entries
             .iter()
-            .map(|(_, entry)| {
+            .enumerate()
+            .map(|(index, (_, entry))| {
                 let field_name = match entry {
                     DumpEntry::OcrRegion {
                         field_name, rect, ..
                     } => {
-                        if self.scaler.x(rect.2) <= 0 || self.scaler.y(rect.3) <= 0 {
+                        if !self.input_crops.contains_key(&index)
+                            && (self.scaler.x(rect.2) <= 0 || self.scaler.y(rect.3) <= 0)
+                        {
                             return None;
                         }
                         field_name
@@ -762,13 +878,7 @@ impl DumpCollector {
                         return None;
                     },
                 };
-                let mut name = field_name.clone();
-                let mut n = 1;
-                while !used.insert(name.clone()) {
-                    n += 1;
-                    name = format!("{}_{}", field_name, n);
-                }
-                Some(format!("{}.png", name))
+                Some(dump_paths::unique_name(&mut used, field_name, "png"))
             })
             .collect()
     }
@@ -776,12 +886,12 @@ impl DumpCollector {
     fn write_images(&self, crop_names: &[Option<String>]) {
         let single = self.images.len() == 1;
 
-        for (img_idx, (label, image)) in self.images.iter().enumerate() {
+        for (img_idx, (_label, image)) in self.images.iter().enumerate() {
             // Save the original full image
             let full_name = if single {
                 "full.png".to_string()
             } else {
-                format!("full_{}.png", label)
+                self.image_names[img_idx].0.clone()
             };
             let _ = image.save(self.dir.join(&full_name));
 
@@ -796,7 +906,9 @@ impl DumpCollector {
 
             // Build annotated image
             let mut annotated = image.clone();
-            for ((entry_img_idx, entry), crop_name) in self.entries.iter().zip(crop_names) {
+            for (entry_idx, ((entry_img_idx, entry), crop_name)) in
+                self.entries.iter().zip(crop_names).enumerate()
+            {
                 if *entry_img_idx != img_idx {
                     continue;
                 }
@@ -817,9 +929,14 @@ impl DumpCollector {
                         let y = self.scaler.y(by);
                         let w = self.scaler.x(bw);
                         let h = self.scaler.y(bh);
+                        if w <= 0 || h <= 0 {
+                            continue;
+                        }
 
                         // Saved before labeling so empty-OCR regions still yield a crop
-                        self.save_crop(image, crop_name, *rect);
+                        if !self.input_crops.contains_key(&entry_idx) {
+                            self.save_crop(image, crop_name, *rect);
+                        }
 
                         // Expand outward so floor(t/2) pixels sit on/inside the region
                         draw_rect(
@@ -1056,9 +1173,14 @@ impl DumpCollector {
             let ann_name = if single {
                 "annotated.png".to_string()
             } else {
-                format!("annotated_{}.png", label)
+                self.image_names[img_idx].1.clone()
             };
             let _ = annotated.save(self.dir.join(&ann_name));
+        }
+        for (index, image) in &self.input_crops {
+            if let Some(name) = &crop_names[*index] {
+                let _ = image.save(self.dir.join(name));
+            }
         }
     }
 
@@ -1087,7 +1209,8 @@ impl DumpCollector {
             .entries
             .iter()
             .zip(crop_names)
-            .filter_map(|((img_idx, entry), crop_name)| match entry {
+            .enumerate()
+            .filter_map(|(index, ((img_idx, entry), crop_name))| match entry {
                 DumpEntry::OcrRegion {
                     field_name,
                     rect,
@@ -1095,7 +1218,7 @@ impl DumpCollector {
                     final_result,
                     display_result,
                     ..
-                } => Some(serde_json::json!({
+                } if !self.detection_entries.contains(&index) => Some(serde_json::json!({
                     "field": field_name,
                     "image": self.images.get(*img_idx).map(|(label, _)| label.as_str()),
                     "crop": crop_name,
@@ -1103,15 +1226,28 @@ impl DumpCollector {
                     "raw": raw_text.trim(),
                     "final": final_result,
                     "display": display_result,
+                    "exact_input": self.input_crops.contains_key(&index),
+                    "inference_error": self.input_crops.contains_key(&index) && raw_text.starts_with("ERROR: "),
+                    "input_dimensions": self.input_crops.get(&index).map(|image| image.dimensions()),
                 })),
                 _ => None,
             })
             .collect();
         let final_object = result_json
             .map(|s| serde_json::from_str(s).unwrap_or_else(|_| serde_json::Value::from(s)));
+        let detections: Vec<_> = self.entries.iter().enumerate().filter(|(index, _)| self.detection_entries.contains(index)).map(|(index, (_, entry))| {
+            match entry {
+                DumpEntry::OcrRegion { field_name, raw_text, final_result, .. } => serde_json::json!({"field": field_name, "crop": crop_names[index], "result": if final_result.is_empty() { raw_text } else { final_result }}),
+                _ => unreachable!(),
+            }
+        }).collect();
         let manifest = serde_json::json!({
+            "game": self.game,
+            "category": self.category,
+            "index": self.index,
             "error": error,
             "fields": fields,
+            "detections": detections,
             "final_object": final_object,
         });
         if let Ok(text) = serde_json::to_string_pretty(&manifest) {
@@ -1144,7 +1280,15 @@ impl DumpCollector {
         let multi_image = self.images.len() > 1;
 
         // Group entries by image, writing OCR and pixel results per section
-        for (img_idx, (label, _)) in self.images.iter().enumerate() {
+        let labels: Vec<_> = if self.images.is_empty() {
+            vec!["input"]
+        } else {
+            self.images
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect()
+        };
+        for (img_idx, label) in labels.iter().enumerate() {
             if multi_image {
                 out.push_str(&format!("--- {} Screen ---\n", capitalize(label)));
             } else {
@@ -1262,6 +1406,9 @@ impl Drop for DumpCollector {
         if !self.finalized {
             // Write a minimal error.txt so debug output is never silently lost
             // (e.g., when a ? operator propagates an error before finalize is called)
+            let names = self.crop_file_names();
+            self.write_images(&names);
+            self.write_ocr_manifest(&names, None, Some("item not finalized"));
             let path = self.dir.join("error.txt");
             let _ = std::fs::write(
                 &path,
@@ -1290,18 +1437,12 @@ pub struct DumpCtx {
 
 impl DumpCtx {
     pub fn new(base_dir: &str, category: &str, index: usize, _entity_name: &str) -> Self {
-        let folder = format!("{:04}", index);
-        let dir = Path::new(base_dir).join(category).join(folder);
-        if dir.exists() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = dump_paths::item_dir(base_dir, "genshin", category, index);
         Self { dir }
     }
 
     pub fn dump_full(&self, image: &RgbImage) {
-        let path = self.dir.join("full.png");
-        let _ = image.save(&path);
+        let _ = dump_paths::save_image_unique(&self.dir, "full.png", image);
     }
 
     pub fn dump_region(
@@ -1344,7 +1485,7 @@ impl DumpCtx {
             return;
         }
         let sub = image.view(x, y, w, h).to_image();
-        let _ = sub.save(self.dir.join(format!("{}.png", field_name)));
+        let _ = dump_paths::save_image_unique(&self.dir, &format!("{}.png", field_name), &sub);
     }
 }
 
@@ -1364,7 +1505,7 @@ fn save_region(
         return;
     }
     let sub = image.view(x, y, w, h).to_image();
-    let _ = sub.save(dir.join(format!("{}.png", name)));
+    let _ = dump_paths::save_image_unique(dir, &format!("{}.png", name), &sub);
 }
 
 #[cfg(test)]
@@ -1390,16 +1531,118 @@ mod tests {
         // Act
         let mut collector = DumpCollector::new(&base.to_string_lossy(), "artifacts", 0, &scaler);
         let img_idx = collector.add_frame("panel", &frame);
+        let dir = collector.dir.clone();
         collector.record_ocr(img_idx, "sub[0]", rect, "text");
         collector.finalize_success("{}");
 
         // Assert
-        let saved = image::open(base.join("artifacts").join("0000").join("sub[0].png"))
-            .unwrap()
-            .to_rgb8();
+        let saved = image::open(dir.join("sub[0].png")).unwrap().to_rgb8();
         let _ = std::fs::remove_dir_all(&base);
         let expected = frame.crop(rect, 0.0, &scaler).unwrap();
         assert_eq!(saved.dimensions(), expected.dimensions());
         assert_eq!(saved.as_raw(), expected.as_raw());
+    }
+
+    #[test]
+    fn repeated_inputs_and_context_labels_never_overwrite_and_match_manifest() {
+        let base = std::env::temp_dir().join(format!("scanner_inputs_test_{}", std::process::id()));
+        let mut collector = DumpCollector::new_for(
+            &base.to_string_lossy(),
+            "hsr",
+            "characters",
+            0,
+            &CoordScaler::new(1920, 1080),
+        );
+        let dir = collector.dir.clone();
+        let frame = RgbImage::from_pixel(100, 60, Rgb([10, 20, 30]));
+        let first = collector.add_image("details", &frame);
+        collector.add_image("DETAILS", &frame);
+        let crop1 = RgbImage::from_pixel(7, 4, Rgb([20, 30, 40]));
+        let crop2 = RgbImage::from_pixel(9, 5, Rgb([250, 240, 230]));
+        collector.record_input(first, "FULL_details", &crop1, "", true);
+        collector.record_input(first, "FULL_details", &crop2, "name", true);
+        collector.record_ocr(first, "FULL_details", (4.0, 5.0, 9.0, 5.0), "combined");
+        collector.record_input(first, "full", &crop1, "locked", false);
+        collector.record_pixel(first, "FULL", (20.0, 20.0), [10, 20, 30], "pixel");
+        collector.finalize_success("{}");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("ocr_fields.json")).unwrap())
+                .unwrap();
+        let fields = manifest["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 2);
+        for (field, expected) in fields.iter().zip([crop1, crop2]) {
+            let saved = image::open(dir.join(field["crop"].as_str().unwrap()))
+                .unwrap()
+                .to_rgb8();
+            assert_eq!(saved, expected);
+            assert!(field["exact_input"].as_bool().unwrap());
+        }
+        assert_eq!(fields[0]["raw"], "");
+        assert_eq!(manifest["detections"].as_array().unwrap().len(), 1);
+        let pngs: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "png"))
+            .collect();
+        assert_eq!(pngs.len(), 8); // 2 context pairs + 2 OCR + detection + pixel.
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn skipped_and_unfinished_items_preserve_inference_evidence() {
+        let base =
+            std::env::temp_dir().join(format!("scanner_failure_test_{}", std::process::id()));
+        for skip in [false, true] {
+            let mut collector = DumpCollector::new(
+                &base.to_string_lossy(),
+                "failures",
+                0,
+                &CoordScaler::new(1920, 1080),
+            );
+            let dir = collector.dir.clone();
+            collector.record_input(
+                0,
+                "level",
+                &RgbImage::from_pixel(7, 4, Rgb([1, 2, 3])),
+                "ERROR: model failed",
+                true,
+            );
+            if skip {
+                collector.finalize_skip("below threshold");
+            } else {
+                drop(collector);
+            }
+            assert!(dir.join("level.png").exists());
+            assert!(dir.join("error.txt").exists());
+            assert!(dir.join("ocr_fields.json").exists());
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn unrelated_probes_are_not_assigned_to_the_next_domain_field() {
+        let base = std::env::temp_dir().join(format!("scanner_probe_test_{}", std::process::id()));
+        let mut collector = DumpCollector::new(
+            &base.to_string_lossy(),
+            "probes",
+            0,
+            &CoordScaler::new(1920, 1080),
+        );
+        let dir = collector.dir.clone();
+        let frame = RgbImage::from_pixel(60, 30, Rgb([1, 2, 3]));
+        let image_index = collector.add_image("panel", &frame);
+        let probe = RgbImage::from_pixel(7, 4, Rgb([9, 8, 7]));
+        let crop = image::imageops::crop_imm(&frame, 3, 2, 11, 6).to_image();
+        collector.record_input(image_index, "ocr_ppocrv4", &probe, "probe", true);
+        collector.record_input(image_index, "ocr_ppocrv4", &crop, "name", true);
+        collector.record_ocr(image_index, "name", (3.0, 2.0, 11.0, 6.0), "name");
+        collector.finalize_success("{}");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("ocr_fields.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["fields"][0]["field"], "ocr_ppocrv4");
+        assert_eq!(manifest["fields"][1]["field"], "name");
+        assert_eq!(manifest["fields"].as_array().unwrap().len(), 2);
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

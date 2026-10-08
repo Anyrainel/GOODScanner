@@ -729,9 +729,12 @@ impl GoodWeaponScanner {
 
         // Write index map for debug image correlation (output position → folder name)
         if self.config.dump_images {
-            let map_path = std::path::Path::new("debug_images")
-                .join("weapons")
-                .join("index_map.json");
+            let map_path = crate::scanner::common::dump_paths::category_dir(
+                "debug_images",
+                "genshin",
+                "weapons",
+            )
+            .join("index_map.json");
             let _ = std::fs::write(
                 &map_path,
                 serde_json::to_string(&index_map).unwrap_or_default(),

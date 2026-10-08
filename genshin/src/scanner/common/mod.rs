@@ -5,6 +5,7 @@ pub mod character_element;
 pub mod constants;
 pub mod coord_scaler;
 pub mod debug_dump;
+pub mod dump_paths;
 pub mod equip_parser;
 pub mod fuzzy_match;
 pub mod game_controller;

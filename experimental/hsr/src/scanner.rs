@@ -1423,18 +1423,13 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         self.issue_input(InputCommand::Click(layout::EIDOLONS_BUTTON))?;
         self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
         let frame = self.capture_stable()?;
-        if crate::annotator::is_enabled() {
-            let path =
-                std::path::PathBuf::from(format!("debug_images/character_eidolons/{index:04}.png"));
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = frame.save(&path);
-        }
+        annotator::begin_item("character_eidolons", index, &frame);
+        annotator::add_image("eidolons", &frame);
         let unlocked = layout::EIDOLON_NODES
             .iter()
             .take_while(|&&node| eidolon_node_unlocked(&frame, node))
             .count();
+        annotator::finalize_success(&format!("eidolon={unlocked}"));
         Ok((unlocked as u8, frame))
     }
 
@@ -1588,7 +1583,7 @@ fn dump_inventory_setup(kind: InventoryKind, frame: &RgbImage) {
         InventoryKind::LightCone => "inventory_light_cones",
         InventoryKind::Gear => "inventory_gear",
     };
-    annotator::begin_item(category, 0);
+    annotator::begin_item(category, 0, frame);
     annotator::add_image("full", frame);
 }
 
@@ -1598,7 +1593,7 @@ fn dump_parsed_item<T: std::fmt::Debug>(
     frame: &RgbImage,
     parse: impl FnOnce() -> HsrResult<T>,
 ) -> HsrResult<T> {
-    annotator::begin_item(category, index);
+    annotator::begin_item(category, index, frame);
     annotator::add_image("full", frame);
     match parse() {
         Ok(item) => {
@@ -2272,6 +2267,13 @@ fn unrequested_known_field_unchanged(
 /// disk glows orange (mean red−blue ≈+40 vs +2..+21 for activated art), so
 /// warm disks are rejected.
 fn eidolon_node_unlocked(frame: &RgbImage, node: Point) -> bool {
+    annotator::record_node(
+        "eidolon_node",
+        frame,
+        node.x,
+        node.y,
+        layout::EIDOLON_RING_RADIUS + 5.0 / 1080.0,
+    );
     const RING_SAMPLES: usize = 72;
     const MIN_RING_FRACTION: f64 = 0.5;
     const MAX_DISK_WARMTH: f64 = 30.0;

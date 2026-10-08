@@ -815,8 +815,16 @@ pub fn find_set_in_filter_panel_debug(
         let (found, hits) = detect_set_in_visible_rows_debug(ctrl, ocr, set_key, mappings)?;
         annotate_filter_screenshot(&mut img, &hits, &ctrl.scaler, set_key);
         let path = format!("{}_{}.png", prefix, idx);
-        img.save(&path)
-            .with_context(|| format!("filter-panel debug image could not be saved: {path}"))?;
+        let output = std::path::Path::new(&path);
+        crate::scanner::common::dump_paths::save_image_unique(
+            output.parent().unwrap_or_else(|| std::path::Path::new(".")),
+            output
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("filter.png"),
+            &img,
+        )
+        .with_context(|| format!("filter-panel debug image could not be saved: {path}"))?;
         Ok(found)
     };
 
@@ -2173,8 +2181,12 @@ fn click_equip_button_safe_at(
         btn_clean,
         pos_msg
     );
-    let dir = std::path::Path::new("debug_images/grid_scan");
-    let _ = std::fs::create_dir_all(dir);
+    let dir = crate::scanner::common::dump_paths::item_dir(
+        "debug_images",
+        "genshin",
+        "equip_button_failure",
+        0,
+    );
     let suffix = grid_pos
         .map(|(page, row, col)| format!("p{}_r{}_c{}", page, row, col))
         .unwrap_or_else(|| "selected".to_string());
@@ -2199,8 +2211,12 @@ fn click_equip_button_safe_at(
 /// Filenames use `p{page}_r{row}_c{col}_{field}.png` to correlate with
 /// log lines like `[grid_scan] retry failed (row,col): ...`.
 fn dump_panel_crops(panel: &RgbImage, page: usize, row: usize, col: usize) {
-    let dir = std::path::Path::new("debug_images/grid_scan");
-    let _ = std::fs::create_dir_all(dir);
+    let dir = crate::scanner::common::dump_paths::item_dir(
+        "debug_images",
+        "genshin",
+        "equip_panel_failure",
+        0,
+    );
     let prefix = format!("p{}_r{}_c{}", page, row, col);
 
     let fields: &[(&str, (f64, f64, f64, f64))] = &[
@@ -2222,6 +2238,12 @@ fn dump_panel_crops(panel: &RgbImage, page: usize, row: usize, col: usize) {
 /// Detect artifact rarity from star pixel colors in the selection view panel.
 /// Returns 5, 4, or 3.
 fn detect_sel_rarity(panel: &RgbImage) -> i32 {
+    crate::scanner::common::annotator::record_input(
+        "selection_rarity",
+        panel,
+        "rarity detection",
+        false,
+    );
     let is_star = |pos: (f64, f64)| -> bool {
         let scale_x = panel.width() as f64 / SEL_PANEL_W;
         let scale_y = panel.height() as f64 / SEL_PANEL_H;

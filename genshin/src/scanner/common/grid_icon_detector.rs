@@ -173,6 +173,7 @@ impl GridPageDetection {
     /// (which has an animated border — its detection is less reliable, but we
     /// still include it since the crop area is tolerant enough).
     pub fn detect_pass(&mut self, image: &RgbImage, scaler: &CoordScaler, _selected_item: usize) {
+        super::annotator::record_region("grid_icons", image, (0.0, 100.0, 1310.0, 980.0), scaler);
         // Calibrate on first pass, reuse for subsequent passes
         let (off_x, off_y) = match self.cached_offset {
             Some(offset) => offset,
@@ -336,6 +337,12 @@ impl LightnessSat {
 /// at top of inventory; scroll causes ±12 px gy variation. For weapons: the
 /// expected center is shifted by `WEAPON_CY_OFFSET`.
 pub fn calibrate_grid(image: &RgbImage, scaler: &CoordScaler, mode: GridMode) -> (f64, f64) {
+    super::annotator::record_region(
+        "grid_calibration",
+        image,
+        (0.0, 100.0, 1310.0, 980.0),
+        scaler,
+    );
     let sat = LightnessSat::new(image);
 
     // Scale all constants to actual resolution

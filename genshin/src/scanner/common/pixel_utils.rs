@@ -21,6 +21,12 @@ fn read_pixel_rgb(image: &RgbImage, scaler: &CoordScaler, bx: f64, by: f64) -> [
 ///
 /// Port of `isStarYellow()` from GOODScanner/lib/ocr_utils.js
 pub fn is_star_yellow(image: &RgbImage, scaler: &CoordScaler, base_x: f64, base_y: f64) -> bool {
+    super::annotator::record_region(
+        "star_yellow",
+        image,
+        (base_x - 10.0, base_y - 10.0, 21.0, 21.0),
+        scaler,
+    );
     let x = scaler.x(base_x) as u32;
     let y = scaler.y(base_y) as u32;
 
@@ -67,6 +73,12 @@ pub fn get_pixel_brightness(
     base_x: f64,
     base_y: f64,
 ) -> u32 {
+    super::annotator::record_region(
+        "pixel_brightness",
+        image,
+        (base_x - 10.0, base_y - 10.0, 21.0, 21.0),
+        scaler,
+    );
     let x = scaler.x(base_x) as u32;
     let y = scaler.y(base_y) as u32;
     if x >= image.width() || y >= image.height() {
@@ -152,6 +164,12 @@ pub fn is_weapon_icon_ambiguous(image: &RgbImage, scaler: &CoordScaler) -> bool 
 ///
 /// Port of `isPixelDark()` from GOODScanner/lib/ocr_utils.js
 pub fn is_pixel_dark(image: &RgbImage, scaler: &CoordScaler, base_x: f64, base_y: f64) -> bool {
+    super::annotator::record_region(
+        "pixel_dark",
+        image,
+        (base_x - 10.0, base_y - 10.0, 21.0, 21.0),
+        scaler,
+    );
     let x = scaler.x(base_x) as u32;
     let y = scaler.y(base_y) as u32;
 
@@ -424,6 +442,12 @@ pub fn is_substat_dimmed(
     rect: (f64, f64, f64, f64),
     y_shift: f64,
 ) -> bool {
+    super::annotator::record_region(
+        "substat_dimmed",
+        image,
+        (rect.0, rect.1 + y_shift, rect.2, rect.3),
+        scaler,
+    );
     let (bx, by, bw, bh) = rect;
     let x = scaler.x(bx) as u32;
     let y = scaler.y(by + y_shift) as u32;

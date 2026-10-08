@@ -155,7 +155,12 @@ impl<M: OcrModels> OcrReader for PaddleOcrReader<M> {
     fn read(&mut self, field: OcrField, image: &RgbImage) -> HsrResult<String> {
         let model = self.models.model(field);
         let infer = |image: &RgbImage| {
-            model.image_to_text(image, false).map_err(|error| {
+            genshin_scanner::scanner::common::annotator::observe_ocr(
+                &field.dump_name(),
+                image,
+                || model.image_to_text(image, false),
+            )
+            .map_err(|error| {
                 HsrError::new(
                     "HSR-OCR-INFERENCE",
                     hints::OCR_FAILED,
@@ -369,14 +374,12 @@ impl<R: OcrReader> PanelParser<R> {
         let name_color_crop = layout.crop(frame, layout::RELIC_NAME)?;
         let rarity =
             detect_rarity(&rarity_crop).or_else(|| detect_rarity_from_name_color(&name_color_crop));
-        annotator::record_ocr(
-            "gear_rarity",
-            rarity_rect,
+        annotator::set_final(
+            "rarity_stars",
             &rarity.map(|value| value.to_string()).unwrap_or_default(),
         );
         let rarity = rarity.ok_or_else(|| ocr_semantic("gear rarity unreadable"))?;
-        let level_text =
-            self.read_crop(OcrField::GearLevel, frame, layout, layout::RELIC_LEVEL)?;
+        let level_text = self.read_crop(OcrField::GearLevel, frame, layout, layout::RELIC_LEVEL)?;
         // "+0" is white on the card. The recognizer often turns the plus into a
         // leading 4 ("40") or returns nothing. Enhanced pieces ("+15") already
         // parse, so the second read only runs when the first text is unusable.
@@ -385,6 +388,11 @@ impl<R: OcrReader> PanelParser<R> {
             None => {
                 let boosted = dark_glyphs_on_white(&layout.crop(frame, layout::RELIC_LEVEL)?);
                 let retry = self.reader.read(OcrField::GearLevel, &boosted)?;
+                annotator::record_ocr(
+                    "gear_level",
+                    layout.panel.relative(layout::RELIC_LEVEL),
+                    &retry,
+                );
                 parse_gear_level(&retry).ok_or_else(|| {
                     ocr_semantic(format!(
                         "gear level was missing or outside 0..=15; text={level_text:?}; retry={retry:?}"
@@ -518,17 +526,9 @@ impl<R: OcrReader> PanelParser<R> {
         let lock_rect = layout.lock_button(InventoryKind::Gear);
         let lock_crop = lock_rect.crop(frame)?;
         let (lock, lock_confidence) = detect_icon_state(&lock_crop);
-        record_icon("gear_lock", lock_rect, &lock_crop, lock, lock_confidence);
         let discard_rect = layout.discard_button();
         let discard_crop = discard_rect.crop(frame)?;
         let (discard, discard_confidence) = detect_discard_state(&discard_crop);
-        record_icon(
-            "gear_discard",
-            discard_rect,
-            &discard_crop,
-            discard,
-            discard_confidence,
-        );
 
         Ok(ParsedGearPanel {
             observation: ObservedGear {
@@ -562,13 +562,11 @@ impl<R: OcrReader> PanelParser<R> {
             layout,
             layout::LIGHT_CONE_NAME,
         )?;
-        let reference = references
-            .resolve_light_cone_name(&name)
-            .ok_or_else(|| {
-                ocr_semantic(format!(
-                    "Light Cone name did not resolve uniquely; text={name}"
-                ))
-            })?;
+        let reference = references.resolve_light_cone_name(&name).ok_or_else(|| {
+            ocr_semantic(format!(
+                "Light Cone name did not resolve uniquely; text={name}"
+            ))
+        })?;
         annotator::set_final(
             OcrField::LightConeName.dump_name().as_str(),
             &reference.game_id.to_string(),
@@ -598,13 +596,6 @@ impl<R: OcrReader> PanelParser<R> {
         let lock_rect = layout.lock_button(InventoryKind::LightCone);
         let lock_crop = lock_rect.crop(frame)?;
         let (lock, icon_confidence) = detect_icon_state(&lock_crop);
-        record_icon(
-            "light_cone_lock",
-            lock_rect,
-            &lock_crop,
-            lock,
-            icon_confidence,
-        );
         Ok(ParsedLightConePanel {
             observation: ObservedLightCone {
                 light_cone_id: reference.game_id,
@@ -674,7 +665,11 @@ impl<R: OcrReader> PanelParser<R> {
         let text = self
             .reader
             .read(OcrField::MenuTitle, &layout::MENU_TITLE.crop(frame)?)?;
-        annotator::record_ocr(OcrField::MenuTitle.dump_name().as_str(), layout::MENU_TITLE, &text);
+        annotator::record_ocr(
+            OcrField::MenuTitle.dump_name().as_str(),
+            layout::MENU_TITLE,
+            &text,
+        );
         let text = text.to_lowercase();
         Ok(needles.iter().any(|needle| text.contains(needle)))
     }
@@ -781,15 +776,16 @@ fn parse_trace_level(text: &str, key: &str) -> HsrResult<u8> {
             .char_indices()
             .filter(|&(index, c)| c == '1' && index > 0 && index + 1 < compact.len())
             .filter_map(|(index, _)| {
-                Some((compact[..index].parse().ok()?, compact[index + 1..].parse().ok()?))
+                Some((
+                    compact[..index].parse().ok()?,
+                    compact[index + 1..].parse().ok()?,
+                ))
             })
             .filter(|&(shown, shown_max)| legal(shown, shown_max))
             .collect(),
     };
     match pairs.as_slice() {
-        [(shown, shown_max)] if legal(*shown, *shown_max) => {
-            Ok(shown - (shown_max - base_max))
-        },
+        [(shown, shown_max)] if legal(*shown, *shown_max) => Ok(shown - (shown_max - base_max)),
         _ => Err(ocr_semantic(format!(
             "trace level for {key} is not a legal level/max pair; got {text:?}"
         ))),
@@ -801,6 +797,7 @@ fn parse_trace_level(text: &str, key: &str) -> HsrResult<u8> {
 /// is unreliable. Within 20px, 623 live unlocked nodes were ≥35% white pixels
 /// and 157 locked (gray) ones ≤16%.
 fn stat_node_unlocked(image: &RgbImage, x: f64, y: f64) -> bool {
+    annotator::record_node("trace_stat_node", image, x, y, 21.0 / 1080.0);
     const RADIUS: f64 = 20.0 / 1080.0;
     const MIN_WHITE_FRACTION: f64 = 0.25;
     let height = f64::from(image.height());
@@ -825,6 +822,7 @@ fn stat_node_unlocked(image: &RgbImage, x: f64, y: f64) -> bool {
 /// Unlocked ones carry a white ring at r≈18px: across 78 live Characters the
 /// best white fraction was ≥0.35 when unlocked and ≤0.19 when locked.
 fn ability_node_unlocked(image: &RgbImage, x: f64, y: f64) -> bool {
+    annotator::record_node("trace_ability_node", image, x, y, 23.0 / 1080.0);
     const RADIUS: f64 = 18.0 / 1080.0;
     const MIN_WHITE_FRACTION: f64 = 0.3;
     const SAMPLES: usize = 72;
@@ -863,6 +861,7 @@ fn pixel_at(image: &RgbImage, x: f64, y: f64) -> Option<[u8; 3]> {
 /// Relic levels are `+0` through `+15`. A leading plus is often read as `4`,
 /// so `+0` arrives as `40` and `+12` as `412`.
 fn substat_value_ink(image: &RgbImage) -> bool {
+    annotator::record_detection("substat_value_ink", image);
     let ink = image
         .pixels()
         .filter(|pixel| {
@@ -933,8 +932,13 @@ fn parse_first_u8(text: &str, maximum: u8, label: &str) -> HsrResult<u8> {
 
 fn parse_level_and_cap(text: &str) -> HsrResult<(u8, u8)> {
     let regex = Regex::new(r"\d+").expect("static regex");
-    let runs: Vec<&str> = regex.find_iter(text).map(|capture| capture.as_str()).collect();
-    let first = runs.first().ok_or_else(|| ocr_semantic("level was unreadable"))?;
+    let runs: Vec<&str> = regex
+        .find_iter(text)
+        .map(|capture| capture.as_str())
+        .collect();
+    let first = runs
+        .first()
+        .ok_or_else(|| ocr_semantic("level was unreadable"))?;
     let (level, cap) = match first.parse::<u8>().ok().filter(|level| *level <= 100) {
         Some(level) => (
             level,
@@ -942,8 +946,9 @@ fn parse_level_and_cap(text: &str) -> HsrResult<(u8, u8)> {
                 .and_then(|cap| cap.parse().ok())
                 .unwrap_or_else(|| infer_cap(level)),
         ),
-        None => split_misread_level_slash(first)
-            .ok_or_else(|| ocr_semantic("level was unreadable"))?,
+        None => {
+            split_misread_level_slash(first).ok_or_else(|| ocr_semantic("level was unreadable"))?
+        },
     };
     if !(1..=100).contains(&level) || !(20..=100).contains(&cap) || level > cap {
         return Err(ocr_semantic("level/cap values are mechanically invalid"));
@@ -1128,6 +1133,12 @@ fn parse_equipped(
 /// white glyph on a black disk; the closed body fills about three times as
 /// many pixels as the open outline. Gold from the relic card is not a lock.
 pub fn detect_icon_state(image: &RgbImage) -> (Option<bool>, f64) {
+    genshin_scanner::scanner::common::annotator::observe_detection("lock_icon", image, || {
+        detect_icon_pixels(image)
+    })
+}
+
+fn detect_icon_pixels(image: &RgbImage) -> (Option<bool>, f64) {
     if image.as_raw().is_empty() {
         return (None, 0.0);
     }
@@ -1171,6 +1182,12 @@ pub fn detect_icon_state(image: &RgbImage) -> (Option<bool>, f64) {
 /// the button is available. A red can on a white disk is the marked state.
 /// The gold card around the can is not a mark.
 pub fn detect_discard_state(image: &RgbImage) -> (Option<bool>, f64) {
+    genshin_scanner::scanner::common::annotator::observe_detection("discard_icon", image, || {
+        detect_discard_pixels(image)
+    })
+}
+
+fn detect_discard_pixels(image: &RgbImage) -> (Option<bool>, f64) {
     if image.as_raw().is_empty() {
         return (None, 0.0);
     }
@@ -1205,6 +1222,7 @@ pub fn detect_discard_state(image: &RgbImage) -> (Option<bool>, f64) {
 }
 
 fn edge_density(image: &RgbImage) -> f64 {
+    annotator::record_detection("glyph_edge_density", image);
     if image.width() < 2 || image.height() < 2 {
         return 0.0;
     }
@@ -1229,6 +1247,7 @@ fn edge_density(image: &RgbImage) -> f64 {
 }
 
 fn detect_rarity(image: &RgbImage) -> Option<u8> {
+    annotator::record_detection("rarity_stars", image);
     // Count separated bright/gold runs along the horizontal star strip. This
     // intentionally ignores exact RGB constants and scales with the crop.
     let mut active_columns = Vec::with_capacity(image.width() as usize);
@@ -1264,6 +1283,7 @@ fn detect_rarity(image: &RgbImage) -> Option<u8> {
 /// gold/purple/blue. This is a fallback only after the star-run detector
 /// returns nothing, so a real star crop is never overridden.
 fn detect_rarity_from_name_color(image: &RgbImage) -> Option<u8> {
+    annotator::record_detection("rarity_name_color", image);
     let mut gold = 0_u32;
     let mut purple = 0_u32;
     let mut blue = 0_u32;
@@ -1288,13 +1308,6 @@ fn detect_rarity_from_name_color(image: &RgbImage) -> Option<u8> {
     } else {
         Some(3)
     }
-}
-
-fn record_icon(field: &str, rect: NormRect, crop: &RgbImage, state: Option<bool>, confidence: f64) {
-    let summary = format!("state={state:?} confidence={confidence:.2}");
-    annotator::record_ocr(field, rect, &summary);
-    let pixel = crop.get_pixel(crop.width() / 2, crop.height() / 2).0;
-    annotator::record_pixel(field, rect.center(), pixel, &summary);
 }
 
 fn ocr_semantic(detail: impl Into<String>) -> HsrError {
@@ -1526,9 +1539,7 @@ mod tests {
         for index in 0..4 {
             paint_text_evidence(
                 &mut frame,
-                layout
-                    .panel
-                    .relative(layout::relic_sub_value(index)),
+                layout.panel.relative(layout::relic_sub_value(index)),
             );
         }
         frame
@@ -1801,10 +1812,7 @@ mod tests {
     fn generated_light_cone_screenshot_parses_fields_without_full_frame_ocr() {
         let layout = StatsPanelLayout::MAINTAINED_SEED;
         let mut frame = RgbImage::from_pixel(1920, 1080, Rgb([24, 28, 35]));
-        paint_open_padlock(
-            &mut frame,
-            layout.lock_button(InventoryKind::LightCone),
-        );
+        paint_open_padlock(&mut frame, layout.lock_button(InventoryKind::LightCone));
         paint_text_evidence(&mut frame, layout.panel.relative(layout::RELIC_EQUIPPED));
         let reader = ScriptedOcrReader::default()
             .with(OcrField::LightConeName, ["制胜的瞬间"])

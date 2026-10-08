@@ -133,6 +133,7 @@ pub enum ScrollEvidence {
 /// bound plausible spacing; the selected origin, stride, row/column counts,
 /// and confidence are derived from the current frame.
 pub fn discover_inventory_grid(image: &RgbImage) -> HsrResult<GridGeometry> {
+    crate::annotator::record_detection("inventory_grid", image);
     let width = image.width() as usize;
     let height = image.height() as usize;
     let luma = luma_plane(image);
@@ -255,6 +256,7 @@ fn sample_peak(values: &[f64], index: isize) -> f64 {
 }
 
 pub fn selected_cell(grid: &GridGeometry, image: &RgbImage) -> Option<(usize, f64)> {
+    crate::annotator::record_region("selected_cell", image, NormRect::new(0.0, 0.0, 0.75, 1.0));
     let mut scores: Vec<(usize, f64)> = grid
         .flattened()
         .enumerate()
@@ -287,6 +289,7 @@ pub struct SelectedCard {
 /// window counts white rows on each edge (the portrait badge interrupts the
 /// top of the right edge, hence a count rather than one unbroken run).
 pub fn selected_card(grid: &GridGeometry, image: &RgbImage) -> Option<SelectedCard> {
+    crate::annotator::record_region("selected_card", image, NormRect::new(0.0, 0.0, 0.75, 1.0));
     let row = grid.centers.first()?;
     let width = image.width();
     let height = image.height();
@@ -350,6 +353,8 @@ pub fn classify_inventory_scroll(
     grid: &GridGeometry,
     requested_rows: usize,
 ) -> HsrResult<ScrollEvidence> {
+    crate::annotator::record_region("scroll_before", before, NormRect::new(0.0, 0.0, 0.75, 1.0));
+    crate::annotator::record_region("scroll_after", after, NormRect::new(0.0, 0.0, 0.75, 1.0));
     if before.dimensions() != after.dimensions() {
         return Err(HsrError::new(
             "HSR-SCROLL-GEOMETRY",
@@ -453,6 +458,13 @@ pub fn classify_inventory_scroll(
 /// that a wheel event reached the inventory; this independent spatial signal
 /// is therefore required before complete inventory coverage is claimed.
 pub fn inventory_scrollbar_bottom_confidence(image: &RgbImage, grid: &GridGeometry) -> Option<f64> {
+    if let Some((x0, x1, y0, y1)) = scroll_gutter_bounds(grid) {
+        crate::annotator::record_region(
+            "scrollbar_bottom",
+            image,
+            NormRect::new(x0, y0, x1 - x0, y1 - y0),
+        );
+    }
     let (x0, x1, y0, y1) = scroll_gutter_bounds(grid)?;
     let left = (x0 * image.width() as f64).floor() as u32;
     let right = ((x1 * image.width() as f64).ceil() as u32).min(image.width());
@@ -614,6 +626,7 @@ fn ring_brightness(image: &RgbImage, center: Point, width: f64, height: f64) -> 
 }
 
 pub fn frame_fingerprint(image: &RgbImage, rect: NormRect) -> HsrResult<String> {
+    crate::annotator::record_region("frame_fingerprint", image, rect);
     let crop = rect.crop(image)?;
     let mut hasher = Sha256::new();
     hasher.update(crop.width().to_le_bytes());
@@ -623,6 +636,8 @@ pub fn frame_fingerprint(image: &RgbImage, rect: NormRect) -> HsrResult<String> 
 }
 
 pub fn frames_similar(left: &RgbImage, right: &RgbImage) -> bool {
+    crate::annotator::record_detection("frames_similar_left", left);
+    crate::annotator::record_detection("frames_similar_right", right);
     if left.dimensions() != right.dimensions() || left.as_raw().is_empty() {
         return false;
     }
@@ -643,6 +658,8 @@ pub fn frames_similar(left: &RgbImage, right: &RgbImage) -> bool {
 /// of one Character overlap ≥0.95; adjacent Characters ≤0.54. Crops with no
 /// glyphs at all carry no evidence of a change.
 pub fn glyphs_match(left: &RgbImage, right: &RgbImage) -> bool {
+    crate::annotator::record_detection("glyphs_match_left", left);
+    crate::annotator::record_detection("glyphs_match_right", right);
     const MIN_OVERLAP: f64 = 0.8;
     if left.dimensions() != right.dimensions() {
         return false;
@@ -714,6 +731,7 @@ pub fn last_visible_character_selected(frame: &RgbImage) -> Option<bool> {
 /// Star or clipped ring of a character that is only partly on screen, to the
 /// right of the selected portrait and left of the guide button.
 pub fn trailing_header_glint(frame: &RgbImage) -> Option<Point> {
+    crate::annotator::record_region("header_glint", frame, NormRect::new(0.0, 0.0, 1.0, 0.15));
     let (selected, _) = character_portraits(frame)?;
     let width = frame.width() as usize;
     let height = frame.height() as usize;
@@ -775,6 +793,11 @@ pub fn trailing_header_glint(frame: &RgbImage) -> Option<Point> {
 }
 
 fn character_portraits(frame: &RgbImage) -> Option<(Point, Vec<Point>)> {
+    crate::annotator::record_region(
+        "character_portraits",
+        frame,
+        NormRect::new(0.0, 0.0, 1.0, 0.15),
+    );
     let width = frame.width() as usize;
     let height = frame.height() as usize;
     if width < 32 || height < 32 {
@@ -866,10 +889,7 @@ fn character_portraits(frame: &RgbImage) -> Option<(Point, Vec<Point>)> {
     let point = |x: usize| Point::new(x as f64 / width as f64, y);
     Some((
         point(selected_x),
-        portraits
-            .into_iter()
-            .map(|(x, _)| point(x))
-            .collect(),
+        portraits.into_iter().map(|(x, _)| point(x)).collect(),
     ))
 }
 

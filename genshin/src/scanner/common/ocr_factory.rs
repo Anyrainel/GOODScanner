@@ -32,7 +32,9 @@ struct IdentifiedModel {
 
 impl ImageToText<RgbImage> for IdentifiedModel {
     fn image_to_text(&self, image: &RgbImage, is_preprocessed: bool) -> Result<String> {
-        self.inner.image_to_text(image, is_preprocessed)
+        super::annotator::observe_ocr(&format!("ocr_{}", self.id), image, || {
+            self.inner.image_to_text(image, is_preprocessed)
+        })
     }
 
     fn get_average_inference_time(&self) -> Option<Duration> {

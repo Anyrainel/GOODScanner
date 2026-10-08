@@ -55,9 +55,54 @@ use super::pixel_utils::ConstellationResult;
 static PENDING_WRITES: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static HSR: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static CONTEXT: RefCell<Option<AnnotationContext>> = RefCell::new(None);
+    static OBSERVING_OCR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The shared inference boundary for real models and domain reader adapters.
+/// Nested adapters preserve one crop per actual inference, even on failure.
+pub fn observe_ocr<E: std::fmt::Display>(
+    field: &str,
+    image: &RgbImage,
+    infer: impl FnOnce() -> Result<String, E>,
+) -> Result<String, E> {
+    if !is_enabled() {
+        return infer();
+    }
+    OBSERVING_OCR.with(|observing| {
+        if observing.replace(true) {
+            return infer();
+        }
+        struct Reset<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _reset = Reset(observing);
+        let result = infer();
+        let text = match &result {
+            Ok(text) => text.clone(),
+            Err(error) => format!("ERROR: {error}"),
+        };
+        record_input(field, image, &text, true);
+        result
+    })
+}
+
+pub fn observe_detection<T: std::fmt::Debug>(
+    field: &str,
+    image: &RgbImage,
+    detect: impl FnOnce() -> T,
+) -> T {
+    let result = detect();
+    if is_enabled() {
+        record_input(field, image, &format!("{result:?}"), false);
+    }
+    result
 }
 
 struct AnnotationContext {
@@ -83,6 +128,16 @@ fn with_ctx(f: impl FnOnce(&mut AnnotationContext)) {
 
 /// Enable or disable annotation globally. Call once at startup.
 pub fn init(enabled: bool) {
+    init_for("genshin", enabled);
+}
+
+pub fn init_for(game: &str, enabled: bool) {
+    assert!(matches!(game, "genshin" | "hsr"));
+    flush();
+    if enabled {
+        super::dump_paths::start_run("debug_images", game);
+    }
+    HSR.store(game == "hsr", Ordering::Relaxed);
     ENABLED.store(enabled, Ordering::Relaxed);
 }
 
@@ -98,15 +153,74 @@ pub fn is_enabled() -> bool {
 /// If a previous item was not finalized, its Drop handler writes an error file.
 /// Call this at the start of processing each scannable item.
 pub fn begin_item(category: &str, index: usize, scaler: &CoordScaler) {
+    begin_item_for("genshin", category, index, scaler);
+}
+
+pub fn begin_item_for(game: &str, category: &str, index: usize, scaler: &CoordScaler) {
     if !is_enabled() {
         return;
     }
     CONTEXT.with(|c| {
         *c.borrow_mut() = Some(AnnotationContext {
-            collector: DumpCollector::new("debug_images", category, index, scaler),
+            collector: DumpCollector::new_for("debug_images", game, category, index, scaler),
             current_img: 0,
         });
     });
+}
+
+/// Called at the inference boundary so errors, retries, and transformed inputs
+/// cannot bypass capture. Observations outside an item get a small standalone dump.
+pub fn record_input(field: &str, image: &RgbImage, text: &str, ocr: bool) {
+    if !is_enabled() {
+        return;
+    }
+    CONTEXT.with(|c| {
+        let mut context = c.borrow_mut();
+        if let Some(ctx) = context.as_mut() {
+            ctx.collector
+                .record_input(ctx.current_img, field, image, text, ocr);
+        } else {
+            let game = if HSR.load(Ordering::Relaxed) {
+                "hsr"
+            } else {
+                "genshin"
+            };
+            let mut collector = DumpCollector::new_for(
+                "debug_images",
+                game,
+                &format!("observation_{field}"),
+                0,
+                &CoordScaler::new(image.width(), image.height()),
+            );
+            collector.record_input(0, field, image, text, ocr);
+            spawn_write(move || collector.finalize_success("{}"));
+        }
+    });
+}
+
+/// Capture a detection's image-local base-coordinate region from its actual source.
+pub fn record_region(
+    field: &str,
+    image: &RgbImage,
+    rect: (f64, f64, f64, f64),
+    scaler: &CoordScaler,
+) {
+    if !is_enabled() {
+        return;
+    }
+    let (x, y, w, h) = rect;
+    let x0 = scaler.x(x).max(0) as u32;
+    let y0 = scaler.y(y).max(0) as u32;
+    let x1 = (scaler.x(x + w).max(0) as u32).min(image.width());
+    let y1 = (scaler.y(y + h).max(0) as u32).min(image.height());
+    if x1 > x0 && y1 > y0 {
+        record_input(
+            field,
+            &image::imageops::crop_imm(image, x0, y0, x1 - x0, y1 - y0).to_image(),
+            &format!("pixel region {rect:?}"),
+            false,
+        );
+    }
 }
 
 /// Register a captured image for annotation. Returns image index.
@@ -261,6 +375,10 @@ pub fn finalize_skip(reason: &str) {
 /// Wait for all background file writes to complete.
 /// Call at the end of scanning to ensure all debug images are flushed.
 pub fn flush() {
+    // Preserve an unfinished current-thread item before joining its write jobs.
+    CONTEXT.with(|c| {
+        c.borrow_mut().take();
+    });
     if let Ok(mut pending) = PENDING_WRITES.lock() {
         for handle in pending.drain(..) {
             let _ = handle.join();

@@ -28,7 +28,9 @@ use crate::scanner::common::ocr_factory;
 use crate::scanner::common::ocr_pool::{OcrPool, SharedOcrPools};
 use crate::scanner::common::progress::ProgressFn;
 
-const DUMP_DIR: &str = "debug_images/achievement";
+fn dump_dir() -> std::path::PathBuf {
+    crate::scanner::common::dump_paths::category_dir("debug_images", "genshin", "achievement")
+}
 
 pub struct GoodAchievementScanner {
     config: GoodAchievementScannerConfig,
@@ -175,7 +177,10 @@ impl GoodAchievementScanner {
                 .unwrap_or_else(|| format!("{}", category_index + 1));
             if self.config.dump_images {
                 if let Some(crop) = self.capture_selected_category(ctrl) {
-                    save_dump(&format!("c{category_index:02}_{category_label}_sel.png"), &crop);
+                    save_dump(
+                        &format!("c{category_index:02}_{category_label}_sel.png"),
+                        &crop,
+                    );
                 }
             }
 
@@ -494,8 +499,7 @@ impl GoodAchievementScanner {
                     continue;
                 }
 
-                let done = !progress_is_open(&recognized.status)
-                    && (recognized.done || force_done);
+                let done = !progress_is_open(&recognized.status) && (recognized.done || force_done);
                 let credited = self
                     .catalog
                     .completed_ids_for_shown(&recognized.title, done);
@@ -710,11 +714,7 @@ impl GoodAchievementScanner {
     }
 
     /// One-tick capture/OCR loop so we can measure pixels and titles per detent.
-    fn calibrate_list_scroll(
-        &self,
-        ctrl: &mut GenshinGameController,
-        rec: &OcrPool,
-    ) -> Result<()> {
+    fn calibrate_list_scroll(&self, ctrl: &mut GenshinGameController, rec: &OcrPool) -> Result<()> {
         const NOTCH_FRAMES: u32 = 24;
         const MICRO_FRAMES: u32 = 8;
         log_info!(
@@ -858,11 +858,8 @@ impl GoodAchievementScanner {
                 save_dump(&format!("c{category_index:02}_before_click.png"), &frame);
             }
             if let Some(rect) = detect_selected_category_rect(&frame) {
-                let (_bx, cy) = pixel_to_base(
-                    rect.x + rect.w / 2,
-                    rect.y + rect.h / 2,
-                    &ctrl.scaler,
-                );
+                let (_bx, cy) =
+                    pixel_to_base(rect.x + rect.w / 2, rect.y + rect.h / 2, &ctrl.scaler);
                 // One row below the selected card. The inset crop is shorter
                 // than the real row, so adding STEP from the center is required.
                 y = (cy + CATEGORY_STEP_Y).clamp(CATEGORY_FIRST_Y, 1030.0);
@@ -967,6 +964,12 @@ fn category_looks_complete(text: &str) -> bool {
 }
 
 fn is_progress_banner(row: &RgbImage) -> bool {
+    crate::scanner::common::annotator::record_input(
+        "achievement_progress_banner",
+        row,
+        "progress banner detection",
+        false,
+    );
     if row.width() < 32 || row.height() < 16 {
         return false;
     }
@@ -1021,6 +1024,18 @@ fn row_key(title: &str, subtitle: &str) -> String {
 }
 
 fn vertical_shift_hint(a: &RgbImage, b: &RgbImage) -> Option<i32> {
+    crate::scanner::common::annotator::record_input(
+        "achievement_vertical_shift_left",
+        a,
+        "vertical shift comparison",
+        false,
+    );
+    crate::scanner::common::annotator::record_input(
+        "achievement_vertical_shift_right",
+        b,
+        "vertical shift comparison",
+        false,
+    );
     if a.dimensions() != b.dimensions() {
         return None;
     }
@@ -1080,21 +1095,20 @@ fn dump_slug(name: &str) -> String {
 }
 
 fn save_dump(name: &str, image: &RgbImage) {
-    let _ = std::fs::create_dir_all(DUMP_DIR);
-    let path = format!("{DUMP_DIR}/{name}");
-    if let Err(error) = image.save(&path) {
+    let dir = dump_dir();
+    let path = dir.join(name);
+    if let Err(error) = crate::scanner::common::dump_paths::save_image_unique(&dir, name, image) {
         log_debug!(
             "[achievement] 无法保存调试图 {}: {:#}",
             "[achievement] could not save dump {}: {:#}",
-            path,
+            path.display(),
             error
         );
     }
 }
 
 fn progress_log(line: &str) {
-    let _ = std::fs::create_dir_all(DUMP_DIR);
-    let path = format!("{DUMP_DIR}/progress.log");
+    let path = dump_dir().join("progress.log");
     let ts_ms = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())

@@ -8,10 +8,10 @@ use image::{GenericImageView, Rgb, RgbImage};
 
 use super::layout::{
     CARD_HEIGHT, CATEGORY_NAME_SHIFT_X, CATEGORY_PROBE_X0, CATEGORY_PROBE_X1, CATEGORY_ROW_H,
-    CATEGORY_SELECTED_MAX_H, CATEGORY_SELECTED_MIN_H, LIST_DIVIDER_DARK_RATIO, LIST_MIN_HEIGHT_RATIO,
-    LIST_MIN_WIDTH_RATIO, LIST_PANEL_GRAY, LIST_PROBE_X0, LIST_PROBE_X1, LIST_ROW_BRIGHT_RATIO,
-    LIST_RUN_GAP, LIST_UNCHANGED_MEAN_DELTA, LIST_X_GAP, MIN_CARD_HEIGHT, MIN_ROW_HEIGHT,
-    PARTIAL_ROW_HEIGHT_RATIO, ROW_DIVIDER_MAX, TITLE_BAND, TRAILING_MAX_RATIO,
+    CATEGORY_SELECTED_MAX_H, CATEGORY_SELECTED_MIN_H, LIST_DIVIDER_DARK_RATIO,
+    LIST_MIN_HEIGHT_RATIO, LIST_MIN_WIDTH_RATIO, LIST_PANEL_GRAY, LIST_PROBE_X0, LIST_PROBE_X1,
+    LIST_ROW_BRIGHT_RATIO, LIST_RUN_GAP, LIST_UNCHANGED_MEAN_DELTA, LIST_X_GAP, MIN_CARD_HEIGHT,
+    MIN_ROW_HEIGHT, PARTIAL_ROW_HEIGHT_RATIO, ROW_DIVIDER_MAX, TITLE_BAND, TRAILING_MAX_RATIO,
     TRAILING_PARTIAL_RATIO,
 };
 
@@ -37,6 +37,12 @@ pub struct RowBand {
 /// window, allow short gaps, then take the longest cream span on a mid row
 /// (that excludes the dark left-hand category sidebar).
 pub fn detect_list_rect(image: &RgbImage) -> Option<PixelRect> {
+    super::super::common::annotator::record_input(
+        "achievement_list_rect",
+        image,
+        "list rectangle detection",
+        false,
+    );
     let width = image.width();
     let height = image.height();
     if width < 32 || height < 32 {
@@ -98,6 +104,12 @@ pub fn detect_list_rect(image: &RgbImage) -> Option<PixelRect> {
 /// glyphs and slices the title off the card, so we require most of the title
 /// column to be dark. Fragments shorter than a real card are then merged.
 pub fn split_row_bands(list: &RgbImage, keep_last: bool) -> Vec<RowBand> {
+    super::super::common::annotator::record_input(
+        "achievement_row_bands",
+        list,
+        "row band detection",
+        false,
+    );
     let width = list.width();
     let height = list.height();
     if width < 16 || height < 16 {
@@ -205,6 +217,14 @@ pub fn detect_scrollbar_thumb(image: &RgbImage, list: PixelRect) -> Option<(u32,
     if x0 >= x1 || y0 >= y1 {
         return None;
     }
+    if super::super::common::annotator::is_enabled() {
+        super::super::common::annotator::record_input(
+            "achievement_scrollbar",
+            &image.view(x0, y0, x1 - x0, y1 - y0).to_image(),
+            "scrollbar thumb detection",
+            false,
+        );
+    }
     let col_h = y1.saturating_sub(y0).max(1);
 
     let mut best: Option<(u32, u32, u32)> = None;
@@ -293,6 +313,12 @@ fn longest_cream_x_span(image: &RgbImage, y: u32, gap: u32) -> Option<(u32, u32)
 
 /// Cream selected row in the left category column.
 pub fn detect_selected_category_rect(image: &RgbImage) -> Option<PixelRect> {
+    super::super::common::annotator::record_input(
+        "achievement_selected_category",
+        image,
+        "selected category detection",
+        false,
+    );
     let width = image.width();
     let height = image.height();
     if width < 32 || height < 32 {
@@ -334,19 +360,17 @@ pub fn detect_selected_category_rect(image: &RgbImage) -> Option<PixelRect> {
         return None;
     }
 
-    let (min_x, panel_w) = longest_cream_x_span_between(
-        image,
-        cream_mid_y.min(height.saturating_sub(1)),
-        x0,
-        x1,
-        8,
-    )?;
+    let (min_x, panel_w) =
+        longest_cream_x_span_between(image, cream_mid_y.min(height.saturating_sub(1)), x0, x1, 8)?;
     let inset_y = 6u32;
     // Name starts right of the icon. Keep the right edge of the cream row
     // so a long category name is not cut off.
     let x = min_x.saturating_add(CATEGORY_NAME_SHIFT_X);
     let y = y0.saturating_add(inset_y);
-    let w = panel_w.saturating_sub(CATEGORY_NAME_SHIFT_X).saturating_sub(2).max(8);
+    let w = panel_w
+        .saturating_sub(CATEGORY_NAME_SHIFT_X)
+        .saturating_sub(2)
+        .max(8);
     let h = panel_h.saturating_sub(inset_y * 2).max(8);
     Some(PixelRect {
         x,
@@ -459,6 +483,12 @@ pub fn crop_card(row: &RgbImage) -> Option<RgbImage> {
 }
 
 fn title_ink_top(row: &RgbImage) -> Option<u32> {
+    super::super::common::annotator::record_input(
+        "achievement_title_ink",
+        row,
+        "title ink detection",
+        false,
+    );
     let width = row.width();
     let height = row.height();
     if width < 16 || height < 16 {
@@ -495,6 +525,18 @@ fn title_ink_top(row: &RgbImage) -> Option<u32> {
 /// shimmers and would otherwise keep the controller scrolling after the list
 /// has already stopped moving.
 pub fn list_nearly_equal(a: &RgbImage, b: &RgbImage) -> bool {
+    super::super::common::annotator::record_input(
+        "achievement_list_compare_left",
+        a,
+        "list comparison",
+        false,
+    );
+    super::super::common::annotator::record_input(
+        "achievement_list_compare_right",
+        b,
+        "list comparison",
+        false,
+    );
     if a.dimensions() != b.dimensions() {
         return false;
     }
@@ -604,7 +646,11 @@ mod tests {
         let rect = detect_list_rect(&img).expect("bright panel");
         assert!(rect.w > 800, "w={}", rect.w);
         assert!(rect.h > 700, "h={}", rect.h);
-        assert!(rect.x >= 500, "x={} should sit on the right-hand list", rect.x);
+        assert!(
+            rect.x >= 500,
+            "x={} should sit on the right-hand list",
+            rect.x
+        );
     }
 
     #[test]
@@ -738,7 +784,11 @@ mod tests {
             fill_rect(&mut img, 720, y, 80, 50, Rgb([90, 90, 90]));
         }
         let rect = detect_list_rect(&img).expect("gapped cream panel");
-        assert!(rect.x >= 680, "x={} should sit on the right-hand list", rect.x);
+        assert!(
+            rect.x >= 680,
+            "x={} should sit on the right-hand list",
+            rect.x
+        );
         assert!(rect.w > 900, "w={}", rect.w);
         assert!(rect.h > 700, "h={}", rect.h);
     }

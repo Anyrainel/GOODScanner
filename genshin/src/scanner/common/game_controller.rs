@@ -324,6 +324,12 @@ impl GenshinGameController {
             Err(_) => return false,
         };
 
+        super::annotator::record_region(
+            "main_world",
+            &image,
+            (30.0, 20.0, 60.0, 70.0),
+            &self.scaler,
+        );
         // The Paimon icon at 1920x1080 is a bright white/cream circular button
         // centered around (58, 50) with radius ~25px.
         // Sample several points across the icon face area.
@@ -610,6 +616,7 @@ impl GenshinGameController {
                 .capturer
                 .capture_relative_to(rect, self.game_info.window.origin())?;
             capture_count += 1;
+            super::annotator::record_input("panel_stability", &im, "panel comparison input", false);
             let raw = im.into_raw();
 
             if panel_frames_similar(&raw, &last_capture) && capture_count > 1 {
@@ -693,6 +700,7 @@ impl GenshinGameController {
                 .capturer
                 .capture_relative_to(rect, self.game_info.window.origin())?;
             capture_count += 1;
+            super::annotator::record_input("panel_change", &im, "panel comparison input", false);
             let raw = im.into_raw();
 
             if !panel_frames_similar(&raw, &self.panel_snapshot) {
@@ -739,7 +747,18 @@ impl GenshinGameController {
             x: self.game_info.window.left + self.scaler.scale_x(flag_x) as i32,
             y: self.game_info.window.top + self.scaler.scale_y(flag_y) as i32,
         };
-        self.capturer.capture_color(pos)
+        let result = self.capturer.capture_color(pos);
+        if super::annotator::is_enabled() {
+            if let Ok(color) = &result {
+                super::annotator::record_input(
+                    "scroll_flag",
+                    &RgbImage::from_pixel(1, 1, *color),
+                    &format!("({flag_x}, {flag_y}): {color:?}"),
+                    false,
+                );
+            }
+        }
+        result
     }
 }
 
