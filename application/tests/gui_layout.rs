@@ -10,6 +10,34 @@ use hsr_scanner::manager::{JournalEntry, JournalStatus, ManagerJournal, ManagerJ
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn single_line_input_text_is_centered_at_every_control_height_and_scale() {
+    use good_tools_app::gui::widgets;
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(scale);
+        theme::setup(&ctx);
+        for height in [26.0, 40.0] {
+            for value in ["Traveler", "无星夜空", ""] {
+                let mut text = value.to_owned();
+                let _ = ctx.run(Default::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        widgets::section(ui, "Character names", |ui| {
+                            let output = widgets::singleline_input(&mut text)
+                                .min_size(egui::vec2(0.0, height))
+                                .desired_width(180.0)
+                                .show(ui);
+                            let text_center = output.galley_pos.y + output.galley.size().y / 2.0;
+                            assert!((text_center - output.response.rect.center().y).abs() <= 1.0 / scale,
+                                "input text is not centered: {value:?}, height {height}, scale {scale}, text y {text_center}, box {:?}", output.response.rect);
+                        });
+                    });
+                });
+            }
+        }
+    }
+}
+
+#[test]
 fn progress_rows_keep_the_same_height_at_narrow_and_wide_widths() {
     use good_tools_app::gui::{
         state::Lang,

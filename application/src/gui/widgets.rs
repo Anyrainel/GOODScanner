@@ -75,6 +75,11 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+/// Keep text, selection and caret centered when a form gives the input extra height.
+pub fn singleline_input(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
+}
+
 /// Render every user-visible failure with the same information hierarchy:
 /// a localized hint first, then copyable diagnostics behind a native disclosure.
 pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {
@@ -120,7 +125,7 @@ pub fn export_file(ui: &mut egui::Ui, l: Lang, path: &str) {
         }
     });
     ui.add(
-        egui::TextEdit::singleline(&mut path.as_ref())
+        singleline_input(&mut path.as_ref())
             .font(egui::TextStyle::Small)
             .desired_width(ui.available_width()),
     );
@@ -209,7 +214,7 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
         }
         field_row(ui, l.t("旅行者*", "Traveler*"), |ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut state.user_config.traveler_name)
+                singleline_input(&mut state.user_config.traveler_name)
                     .desired_width(ui.available_width())
                     .min_size(egui::vec2(0.0, 26.0)),
             );
@@ -232,7 +237,7 @@ pub fn character_names_section(ui: &mut egui::Ui, state: &mut AppState, enabled:
                 ] {
                     field_row(ui, label, |ui| {
                         ui.add(
-                            egui::TextEdit::singleline(name)
+                            singleline_input(name)
                                 .desired_width(ui.available_width())
                                 .min_size(egui::vec2(0.0, 26.0)),
                         );

@@ -204,7 +204,7 @@ pub(super) fn trailblazer_row(
         },
         |ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut settings.trailblazer_name)
+                widgets::singleline_input(&mut settings.trailblazer_name)
                     .desired_width(ui.available_width())
                     .min_size(egui::vec2(0.0, 26.0)),
             );
