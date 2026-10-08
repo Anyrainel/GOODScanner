@@ -107,10 +107,13 @@ pub fn split(
 }
 
 pub fn region(ui: &mut egui::Ui, rect: egui::Rect, id: &str, render: impl FnOnce(&mut egui::Ui)) {
+    // Strokes straddle widget bounds. Reserve paint space on every pane edge,
+    // while retaining the outer clip so overflow cannot leak into adjacent panes.
+    let paint_inset = 2.0_f32.min(rect.width().min(rect.height()).max(0.0) / 2.0);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(id)
-            .max_rect(rect)
+            .max_rect(rect.shrink(paint_inset))
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     child.set_clip_rect(rect.intersect(ui.clip_rect()));
@@ -133,7 +136,8 @@ pub fn workspace(
         (Pane::Status, right.shrink2(egui::vec2(12.0, 0.0)), "status"),
     ] {
         region(ui, rect, id, |ui| {
-            let content_width = (rect.width() - ui.spacing().scroll.allocated_width()).max(1.0);
+            let content_width =
+                (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.0);
             egui::ScrollArea::both()
                 .id_salt(id)
                 .auto_shrink([false, false])

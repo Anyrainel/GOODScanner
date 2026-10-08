@@ -25,6 +25,17 @@ pub fn setup(ctx: &egui::Context) {
     style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     style.visuals.error_fg_color = ERROR;
     style.visuals.warn_fg_color = WARNING;
+    // Panes have independent clipping. Keep every interaction state within the
+    // widget's allocated bounds instead of egui's default 1px hover/press growth.
+    for widget in [
+        &mut style.visuals.widgets.noninteractive,
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.expansion = 0.0;
+    }
     for widget in [
         &mut style.visuals.widgets.inactive,
         &mut style.visuals.widgets.noninteractive,
@@ -96,9 +107,7 @@ pub fn text_button(
         visuals.widgets.inactive.bg_stroke = Stroke::NONE;
         visuals.widgets.inactive.fg_stroke.color = if selected { ACCENT } else { MUTED };
         visuals.widgets.hovered.fg_stroke.color = ACCENT;
-        visuals.widgets.hovered.expansion = 0.0;
         visuals.widgets.active.fg_stroke.color = ACCENT;
-        visuals.widgets.active.expansion = 0.0;
         ui.add_sized(size, egui::Button::new(text))
     })
     .inner

@@ -16,6 +16,8 @@ pub fn run(
     completed: bool,
     click: Option<[f32; 2]>,
     scenario: String,
+    hover: Option<[f32; 2]>,
+    pressed: bool,
 ) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -157,6 +159,8 @@ pub fn run(
                 output,
                 frames: 0,
                 click,
+                hover,
+                pressed,
             }))
         }),
     )
@@ -177,9 +181,22 @@ struct Preview {
     output: PathBuf,
     frames: usize,
     click: Option<[f32; 2]>,
+    hover: Option<[f32; 2]>,
+    pressed: bool,
 }
 impl eframe::App for Preview {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        if let Some(point) = self.hover {
+            input.events.push(egui::Event::PointerMoved(point.into()));
+            if self.pressed && self.frames == 1 {
+                input.events.push(egui::Event::PointerButton {
+                    pos: point.into(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
         if let Some(point) = self.click.filter(|_| self.frames == 1 || self.frames == 2) {
             input.events.push(egui::Event::PointerMoved(point.into()));
             input.events.push(egui::Event::PointerButton {

@@ -141,8 +141,6 @@ pub fn sidebar(ui: &mut egui::Ui, lang: &mut Lang, navigation: &mut GameNavigati
                         egui::Stroke::new(1.0, theme::ACCENT);
                     ui.visuals_mut().widgets.active.bg_stroke =
                         egui::Stroke::new(1.0, theme::ACCENT);
-                    ui.visuals_mut().widgets.hovered.expansion = 0.0;
-                    ui.visuals_mut().widgets.active.expansion = 0.0;
                     ui.add_space(18.0);
                     let mut tab = navigation.active_tab();
                     let original = tab;
@@ -179,7 +177,7 @@ pub fn sidebar(ui: &mut egui::Ui, lang: &mut Lang, navigation: &mut GameNavigati
     });
     super::layout::region(ui, footer, "sidebar-footer", |ui| {
         egui::Frame::none().inner_margin(2.0).show(ui, |ui| {
-            ui.set_width(footer.width() - 4.0);
+            ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 4.0;
             if theme::text_button(
                 ui,

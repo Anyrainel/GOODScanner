@@ -436,6 +436,86 @@ fn quiet_buttons_have_a_visible_hover_border_and_hand_cursor() {
 }
 
 #[test]
+fn refresh_heading_borders_fit_the_pane_when_hovered_and_pressed() {
+    use good_tools_app::{
+        config::{Game, ToolTab},
+        gui::{data_refresh::DataRefresh, state::Lang},
+    };
+    for lang in [Lang::Zh, Lang::En] {
+        for (width, scale, game, tab) in [
+            (240.0, 1.0, Game::Genshin, ToolTab::Scanner),
+            (720.0, 1.0, Game::Genshin, ToolTab::Manager),
+            (240.0, 1.25, Game::StarRail, ToolTab::Scanner),
+            (720.0, 1.5, Game::StarRail, ToolTab::Manager),
+            (240.0, 2.0, Game::Genshin, ToolTab::Capture),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            theme::setup(&ctx);
+            let mut refresh = DataRefresh::default();
+            let mut draw = |events| {
+                ctx.run(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            layout::region(
+                                ui,
+                                egui::Rect::from_min_size(
+                                    egui::pos2(20.0, 30.0),
+                                    egui::vec2(width, 200.0),
+                                ),
+                                "heading",
+                                |ui| {
+                                    refresh.heading(ui, lang, game, tab, true);
+                                },
+                            );
+                        });
+                    },
+                )
+            };
+            draw(vec![]);
+            let initial = draw(vec![]);
+            let point = painted_text(&initial.shapes)
+                .into_iter()
+                .find(|(text, _)| text == lang.t("刷新数据", "Refresh data"))
+                .unwrap()
+                .1;
+            for events in [
+                vec![Event::PointerMoved(point)],
+                vec![Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }],
+            ] {
+                let frame = draw(events);
+                let mut borders = 0;
+                for clipped in frame.shapes {
+                    if let egui::Shape::Rect(rect) = clipped.shape {
+                        if rect.stroke.width > 0.0 {
+                            borders += 1;
+                            assert!(
+                                clipped
+                                    .clip_rect
+                                    .contains_rect(rect.rect.expand(rect.stroke.width / 2.0)),
+                                "heading border clipped ({lang:?}, width {width}): {:?} vs {:?}",
+                                rect.rect,
+                                clipped.clip_rect
+                            );
+                        }
+                    }
+                }
+                assert!(borders > 0);
+            }
+        }
+    }
+}
+
+#[test]
 fn sidebar_tab_borders_stay_inside_the_scroll_clip_while_pressed() {
     use good_tools_app::{
         config::GameNavigation,
@@ -502,6 +582,165 @@ fn sidebar_tab_borders_stay_inside_the_scroll_clip_while_pressed() {
                 }
             }
             assert!(borders > 0);
+        }
+    }
+}
+
+#[test]
+fn ordinary_controls_keep_their_borders_inside_pane_edges_in_every_state() {
+    for control in 0..4 {
+        let ctx = egui::Context::default();
+        theme::setup(&ctx);
+        let mut value = 8765;
+        let mut text = "Player".to_owned();
+        let point = std::cell::Cell::new(egui::Pos2::ZERO);
+        let mut draw = |events| {
+            ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        layout::region(
+                            ui,
+                            egui::Rect::from_min_size(
+                                egui::pos2(20.0, 30.0),
+                                egui::vec2(180.0, 200.0),
+                            ),
+                            "edge-controls",
+                            |ui| {
+                                let response = match control {
+                                    0 => ui.button("Refresh data"),
+                                    1 => theme::text_button(
+                                        ui,
+                                        "About",
+                                        egui::vec2(ui.available_width(), 30.0),
+                                        false,
+                                    ),
+                                    2 => ui.add(egui::DragValue::new(&mut value)),
+                                    _ => ui.add(
+                                        egui::TextEdit::singleline(&mut text)
+                                            .desired_width(ui.available_width()),
+                                    ),
+                                };
+                                point.set(response.rect.center());
+                            },
+                        );
+                    });
+                },
+            )
+        };
+        draw(vec![]);
+        draw(vec![]);
+        let point = point.get();
+        for events in [
+            vec![Event::PointerMoved(point)],
+            vec![Event::PointerButton {
+                pos: point,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+        ] {
+            let frame = draw(events);
+            let mut borders = 0;
+            for clipped in frame.shapes {
+                if let egui::Shape::Rect(rect) = clipped.shape {
+                    if rect.stroke.width > 0.0 {
+                        borders += 1;
+                        assert!(
+                            clipped
+                                .clip_rect
+                                .contains_rect(rect.rect.expand(rect.stroke.width / 2.0)),
+                            "control {control} border clipped: {:?} vs {:?}",
+                            rect.rect,
+                            clipped.clip_rect
+                        );
+                    }
+                }
+            }
+            assert!(borders > 0);
+        }
+    }
+}
+
+#[test]
+fn sidebar_footer_buttons_fit_their_clip_in_both_languages() {
+    use good_tools_app::{
+        config::GameNavigation,
+        gui::{shell, state::Lang},
+    };
+    for initial_lang in [Lang::Zh, Lang::En] {
+        let ctx = egui::Context::default();
+        theme::setup(&ctx);
+        let mut navigation = GameNavigation::default();
+        let mut lang = initial_lang;
+        let mut draw = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(150.0, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| shell::sidebar(ui, &mut lang, &mut navigation));
+                },
+            )
+        };
+        draw(vec![]);
+        let initial = draw(vec![]);
+        for label in [
+            initial_lang.t("EN", "中"),
+            initial_lang.t("关于", "About"),
+            "GGArtifact",
+        ] {
+            let point = painted_text(&initial.shapes)
+                .into_iter()
+                .find(|(text, _)| text == label)
+                .unwrap()
+                .1;
+            for events in [
+                vec![Event::PointerMoved(point)],
+                vec![Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }],
+            ] {
+                let frame = draw(events);
+                let mut borders = 0;
+                for clipped in frame.shapes {
+                    if let egui::Shape::Rect(rect) = clipped.shape {
+                        if rect.stroke.width > 0.0 {
+                            borders += 1;
+                            assert!(
+                                clipped
+                                    .clip_rect
+                                    .contains_rect(rect.rect.expand(rect.stroke.width / 2.0)),
+                                "footer {label} border clipped: {:?} vs {:?}",
+                                rect.rect,
+                                clipped.clip_rect
+                            );
+                        }
+                    }
+                }
+                assert!(borders > 0);
+            }
+            draw(vec![
+                Event::PointerMoved(egui::Pos2::ZERO),
+                Event::PointerButton {
+                    pos: egui::Pos2::ZERO,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
         }
     }
 }

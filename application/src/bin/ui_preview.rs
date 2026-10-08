@@ -25,6 +25,12 @@ struct Args {
     /// Click a control in the real UI before taking the screenshot.
     #[arg(long, num_args = 2)]
     click: Vec<f32>,
+    /// Hold the pointer over a real control without activating it.
+    #[arg(long, num_args = 2)]
+    hover: Vec<f32>,
+    /// Keep the hovered control pressed while taking the screenshot.
+    #[arg(long, requires = "hover")]
+    pressed: bool,
 }
 
 fn main() -> eframe::Result {
@@ -55,5 +61,7 @@ fn main() -> eframe::Result {
         args.completed,
         (!args.click.is_empty()).then(|| [args.click[0], args.click[1]]),
         args.scenario,
+        (!args.hover.is_empty()).then(|| [args.hover[0], args.hover[1]]),
+        args.pressed,
     )
 }

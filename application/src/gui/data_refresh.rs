@@ -148,66 +148,78 @@ impl DataRefresh {
         };
         let cache = &mut self.caches[source.index()];
         cache.read_age(source);
-        ui.horizontal_wrapped(|ui| {
-            ui.heading(title);
-            ui.add_space(8.0);
-            let busy = cache.refresh.is_running();
-            if ui
-                .add_enabled(
-                    !busy && enabled,
-                    egui::Button::new(
-                        egui::RichText::new(if busy {
-                            lang.t("刷新中…", "Refreshing…")
-                        } else {
-                            lang.t("刷新数据", "Refresh data")
-                        })
-                        .size(12.0),
-                    ),
+        ui.scope(|ui| {
+            // horizontal_wrapped starts with interact_size.y and centers taller
+            // widgets around it. Allocate the full mixed text/button height upfront.
+            ui.spacing_mut().interact_size.y = ui
+                .spacing()
+                .interact_size
+                .y
+                .max(ui.text_style_height(&egui::TextStyle::Heading))
+                .max(
+                    ui.text_style_height(&egui::TextStyle::Button)
+                        + 2.0 * ui.spacing().button_padding.y,
+                );
+            ui.horizontal_wrapped(|ui| {
+                ui.heading(title);
+                ui.add_space(8.0);
+                let busy = cache.refresh.is_running();
+                if ui
+                    .add_enabled(
+                        !busy && enabled,
+                        egui::Button::new(
+                            egui::RichText::new(if busy {
+                                lang.t("刷新中…", "Refreshing…")
+                            } else {
+                                lang.t("刷新数据", "Refresh data")
+                            })
+                            .size(12.0),
+                        ),
+                    )
+                    .clicked()
+                {
+                    let hint = UiText::new(
+                        "无法刷新游戏数据，请检查网络后重试。",
+                        "Cannot refresh game data. Check your connection and retry.",
+                    );
+                    let thread_hint = hint.clone();
+                    cache.refresh = match std::thread::Builder::new()
+                        .name("game-data-refresh".into())
+                        .spawn(move || {
+                            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                source.refresh()
+                            })) {
+                                Ok(result) => result
+                                    .map_err(|error| UiError::from_anyhow(thread_hint, &error)),
+                                Err(error) => Err(UiError::from_panic(thread_hint, error.as_ref())),
+                            }
+                        }) {
+                        Ok(handle) => RefreshState::Running(handle),
+                        Err(error) => RefreshState::Failed(UiError::from_error(hint, error)),
+                    };
+                }
+                ui.label(
+                    egui::RichText::new(age_text(lang, cache.updated_at, now_secs()))
+                        .size(12.0)
+                        .color(theme::MUTED),
                 )
-                .clicked()
-            {
-                let hint = UiText::new(
-                    "无法刷新游戏数据，请检查网络后重试。",
-                    "Cannot refresh game data. Check your connection and retry.",
-                );
-                let thread_hint = hint.clone();
-                cache.refresh = match std::thread::Builder::new()
-                    .name("game-data-refresh".into())
-                    .spawn(move || {
-                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            source.refresh()
-                        })) {
-                            Ok(result) => {
-                                result.map_err(|error| UiError::from_anyhow(thread_hint, &error))
-                            },
-                            Err(error) => Err(UiError::from_panic(thread_hint, error.as_ref())),
-                        }
-                    }) {
-                    Ok(handle) => RefreshState::Running(handle),
-                    Err(error) => RefreshState::Failed(UiError::from_error(hint, error)),
-                };
-            }
-            ui.label(
-                egui::RichText::new(age_text(lang, cache.updated_at, now_secs()))
-                    .size(12.0)
-                    .color(theme::MUTED),
-            )
-            .on_hover_text(lang.t(
-                "游戏数据上次成功下载的时间；有多个缓存文件时显示最旧的一份。",
-                "Time since the last successful download; shows the oldest cached data file.",
-            ));
-            if let RefreshState::Failed(error) = &cache.refresh {
-                ui.menu_button(
-                    egui::RichText::new(lang.t("刷新失败", "Refresh failed"))
-                        .color(theme::ERROR)
-                        .size(12.0),
-                    |ui| {
-                        ui.set_max_width(340.0);
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        widgets::error_card(ui, lang, error);
-                    },
-                );
-            }
+                .on_hover_text(lang.t(
+                    "游戏数据上次成功下载的时间；有多个缓存文件时显示最旧的一份。",
+                    "Time since the last successful download; shows the oldest cached data file.",
+                ));
+                if let RefreshState::Failed(error) = &cache.refresh {
+                    ui.menu_button(
+                        egui::RichText::new(lang.t("刷新失败", "Refresh failed"))
+                            .color(theme::ERROR)
+                            .size(12.0),
+                        |ui| {
+                            ui.set_max_width(340.0);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                            widgets::error_card(ui, lang, error);
+                        },
+                    );
+                }
+            });
         });
     }
     #[cfg(feature = "dev-tools")]
