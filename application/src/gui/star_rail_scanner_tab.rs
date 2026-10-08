@@ -136,8 +136,14 @@ pub fn show_settings(
             });
         });
     }
-    widgets::section(ui, lang.t("显示设置", "Display"), |ui| {
+    widgets::section(ui, lang.t("导出与显示", "Export & display"), |ui| {
         ui.add_enabled_ui(!is_running && !game_busy, |ui| {
+            widgets::scan_export_options(
+                ui,
+                lang,
+                &mut settings.scan_only_keep_latest_export,
+                &mut settings.scan_save_on_cancel,
+            );
             if ui.checkbox(&mut settings.hdr_mode, lang.t("游戏使用 HDR", "Game uses HDR"))
                 .on_hover_text(lang.t("切换后恢复自动截图：普通模式使用 BitBlt，HDR 使用 Windows 图形捕获。", "Restores Automatic capture: BitBlt normally, Windows Graphics Capture for HDR.")).changed() {
                 settings.set_hdr_mode(settings.hdr_mode);

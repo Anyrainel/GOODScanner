@@ -427,6 +427,8 @@ fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() 
             saved["starRail"]["maxGear"] = 0.into();
             saved["starRail"]["hdrMode"] = false.into();
             saved["starRail"]["managerPort"] = 8765.into();
+            saved["starRail"]["scanOnlyKeepLatestExport"] = true.into();
+            saved["starRail"]["scanSaveOnCancel"] = false.into();
             saved["starRail"]["captureMethod"] = "auto".into();
             assert_eq!(persisted, saved);
             let reloaded = ApplicationConfigStore::load(&path).unwrap();
@@ -611,6 +613,38 @@ fn manager_port_migrates_from_v3_without_overwriting_a_saved_choice() {
         assert_eq!(store.config.star_rail.manager_port, port.unwrap_or(8765));
         assert!(store.config.star_rail.hdr_mode);
         assert_eq!(store.config.star_rail.trailblazer_name, "Player");
+        store.persist_now().unwrap();
+        assert_eq!(
+            ApplicationConfigStore::load(&path).unwrap().config,
+            store.config
+        );
+    }
+    remove_test_tree(&root);
+}
+
+#[test]
+fn scan_export_preferences_load_old_configs_and_preserve_explicit_choices() {
+    let root = temp_root("scan-export-preferences");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.json");
+    for version in [1, 2, 3, 4] {
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion":version,
+                "starRail":{"scanCharacters":false,"outputDir":"D:\\exports","managerPort":8766}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut store = ApplicationConfigStore::load(&path).unwrap();
+        assert!(store.config.star_rail.scan_only_keep_latest_export);
+        assert!(!store.config.star_rail.scan_save_on_cancel);
+        assert!(!store.config.star_rail.scan_characters);
+        assert_eq!(store.config.star_rail.manager_port, 8766);
+        assert_eq!(store.config.star_rail.output_dir, "D:\\exports");
+        store.config.star_rail.scan_only_keep_latest_export = false;
+        store.config.star_rail.scan_save_on_cancel = true;
         store.persist_now().unwrap();
         assert_eq!(
             ApplicationConfigStore::load(&path).unwrap().config,

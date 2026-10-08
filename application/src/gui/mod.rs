@@ -19,7 +19,6 @@ pub mod scanner_tab;
 pub mod shell;
 #[cfg(feature = "capture")]
 pub mod star_rail_capture_tab;
-#[cfg(feature = "capture")]
 pub mod star_rail_exports;
 pub mod star_rail_manager_tab;
 pub mod star_rail_scanner_tab;

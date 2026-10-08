@@ -127,6 +127,9 @@ pub struct ScanConfig {
     /// under `debug_images/` as a side effect of parsing; click/wait code is
     /// unchanged.
     pub dump_images: bool,
+    /// Retain fully parsed entries on an explicit device cancellation. Manager
+    /// scans always leave this off: incomplete inventories cannot authorize actions.
+    pub save_on_cancel: bool,
 }
 
 impl Default for ScanConfig {
@@ -146,6 +149,7 @@ impl Default for ScanConfig {
             max_characters: 0,
             trailblazer: None,
             dump_images: false,
+            save_on_cancel: false,
         }
     }
 }
@@ -319,7 +323,8 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         } else {
             CoverageLevel::Unknown
         };
-        let light_cone_coverage = if self.config.targets.light_cones {
+        let light_cone_coverage = if self.config.targets.light_cones && !self.device.is_cancelled()
+        {
             self.report(
                 crate::scan_progress::ScanCategory::LightCones,
                 crate::scan_progress::ScanEvent::Started,
@@ -337,7 +342,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         } else {
             CoverageLevel::Unknown
         };
-        let gear_coverage = if self.config.targets.gear {
+        let gear_coverage = if self.config.targets.gear && !self.device.is_cancelled() {
             self.report(
                 crate::scan_progress::ScanCategory::Gear,
                 crate::scan_progress::ScanEvent::Started,
@@ -356,6 +361,13 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             CoverageLevel::Unknown
         };
 
+        if self.device.is_cancelled() && !self.config.save_on_cancel {
+            return Err(HsrError::new(
+                "HSR-SCAN-CANCELLED",
+                hints::CANCELLED,
+                "scan stopped before all selected categories completed",
+            ));
+        }
         let coverage = InventoryCoverage {
             characters: character_coverage,
             light_cones: light_cone_coverage,
@@ -464,124 +476,142 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             usize,
         ) -> HsrResult<T>,
     ) -> HsrResult<InventoryScan<T>> {
-        let mut session = self.enter_inventory(kind)?;
-        let quantity = session.cursor.quantity();
-        let reads_agree = session.quantity_reads[0] == session.quantity_reads[1];
-        let category_cap = match kind {
-            InventoryKind::LightCone => self.config.max_light_cones,
-            InventoryKind::Gear => self.config.max_gear,
-        };
-        let limit = self
-            .config
-            .scan_item_limit
-            .unwrap_or(quantity)
-            .min(quantity)
-            .min(if category_cap == 0 {
-                quantity
-            } else {
-                category_cap
-            });
-        let mut items = Vec::with_capacity(limit);
-        let progress_category = match kind {
-            InventoryKind::LightCone => crate::scan_progress::ScanCategory::LightCones,
-            InventoryKind::Gear => crate::scan_progress::ScanCategory::Gear,
-        };
-        self.report(
-            progress_category,
-            crate::scan_progress::ScanEvent::Progress {
-                recognized: 0,
-                visited: 0,
-                total: Some(limit),
-            },
-        );
-        let mut incomplete_reason = None;
-        // The first slot is already selected. Later items use the inventory
-        // next-item key. The client moves the highlight and scrolls the grid;
-        // clicking later cells and paging the wheel is what stalled live scans.
-        for ordinal in 0..limit {
-            self.observe_uid(&session.frame);
-            match dump_parsed_item(
-                inventory_dump_category(kind),
-                ordinal,
-                &session.frame,
-                || {
-                    parse(
-                        &mut self.parser,
-                        &session.frame,
-                        session.panel,
-                        &self.references,
-                        ordinal,
-                    )
+        let mut items = Vec::new();
+        let traversal = (|| {
+            let mut session = self.enter_inventory(kind)?;
+            let quantity = session.cursor.quantity();
+            let reads_agree = session.quantity_reads[0] == session.quantity_reads[1];
+            let category_cap = match kind {
+                InventoryKind::LightCone => self.config.max_light_cones,
+                InventoryKind::Gear => self.config.max_gear,
+            };
+            let limit = self
+                .config
+                .scan_item_limit
+                .unwrap_or(quantity)
+                .min(quantity)
+                .min(if category_cap == 0 {
+                    quantity
+                } else {
+                    category_cap
+                });
+            items.reserve(limit);
+            let progress_category = match kind {
+                InventoryKind::LightCone => crate::scan_progress::ScanCategory::LightCones,
+                InventoryKind::Gear => crate::scan_progress::ScanCategory::Gear,
+            };
+            self.report(
+                progress_category,
+                crate::scan_progress::ScanEvent::Progress {
+                    recognized: 0,
+                    visited: 0,
+                    total: Some(limit),
                 },
-            ) {
-                Ok(item) => items.push(item),
-                Err(error) if is_omittable_scan_error(error.code()) => {
-                    incomplete_reason.get_or_insert_with(|| {
-                        format!("one or more entries were omitted; firstCause={error}")
-                    });
-                    yas::log_warn!(
+            );
+            let mut incomplete_reason = None;
+            // The first slot is already selected. Later items use the inventory
+            // next-item key. The client moves the highlight and scrolls the grid;
+            // clicking later cells and paging the wheel is what stalled live scans.
+            for ordinal in 0..limit {
+                self.observe_uid(&session.frame);
+                match dump_parsed_item(
+                    inventory_dump_category(kind),
+                    ordinal,
+                    &session.frame,
+                    || {
+                        parse(
+                            &mut self.parser,
+                            &session.frame,
+                            session.panel,
+                            &self.references,
+                            ordinal,
+                        )
+                    },
+                ) {
+                    Ok(item) => items.push(item),
+                    Err(error) if is_omittable_scan_error(error.code()) => {
+                        incomplete_reason.get_or_insert_with(|| {
+                            format!("one or more entries were omitted; firstCause={error}")
+                        });
+                        yas::log_warn!(
                         "一个库存条目无法可靠读出，已省略并继续下一项；覆盖率将标记为未知。完整错误详情：{}",
                         "An inventory entry could not be read reliably and was omitted; the walk continues and coverage will be marked unknown. Full error details: {}",
                         error
                     );
-                },
-                Err(error) => return Err(error),
-            }
-            self.report(
-                progress_category,
-                crate::scan_progress::ScanEvent::Progress {
-                    recognized: items.len(),
-                    visited: ordinal + 1,
-                    total: Some(limit),
-                },
-            );
-            if ordinal % 25 == 0 || ordinal + 1 == limit {
-                yas::log_info!(
-                    "库存进度：{}/{}。",
-                    "Inventory progress: {}/{}.",
-                    ordinal + 1,
-                    quantity
+                    },
+                    Err(error) => return Err(error),
+                }
+                self.report(
+                    progress_category,
+                    crate::scan_progress::ScanEvent::Progress {
+                        recognized: items.len(),
+                        visited: ordinal + 1,
+                        total: Some(limit),
+                    },
                 );
-            }
-            if ordinal + 1 == limit {
-                break;
-            }
-            match self.advance_inventory_with_next_key(
-                &session.panel,
-                &session.grid,
-                &session.frame,
-                &mut session.walk,
-            ) {
-                Ok(frame) => session.frame = frame,
-                Err(error) if error.code() == "HSR-SCAN-NAV" => {
-                    incomplete_reason.get_or_insert_with(|| error.to_string());
+                if ordinal % 25 == 0 || ordinal + 1 == limit {
+                    yas::log_info!(
+                        "库存进度：{}/{}。",
+                        "Inventory progress: {}/{}.",
+                        ordinal + 1,
+                        quantity
+                    );
+                }
+                if ordinal + 1 == limit {
                     break;
-                },
-                Err(error) => return Err(error),
+                }
+                match self.advance_inventory_with_next_key(
+                    &session.panel,
+                    &session.grid,
+                    &session.frame,
+                    &mut session.walk,
+                ) {
+                    Ok(frame) => session.frame = frame,
+                    Err(error) if error.code() == "HSR-SCAN-NAV" => {
+                        incomplete_reason.get_or_insert_with(|| error.to_string());
+                        break;
+                    },
+                    Err(error) => return Err(error),
+                }
             }
-        }
-        if limit < quantity {
-            incomplete_reason.get_or_insert_with(|| {
-                format!("scan cap={limit} reached before quantity={quantity}")
-            });
-        }
+            if limit < quantity {
+                incomplete_reason.get_or_insert_with(|| {
+                    format!("scan cap={limit} reached before quantity={quantity}")
+                });
+            }
 
-        let coverage = if let Some(reason) = incomplete_reason {
-            log_inventory_coverage_warning(kind, items.len(), &reason);
-            CoverageLevel::Unknown
-        } else if !reads_agree || items.len() != quantity {
-            let reason = format!(
+            let coverage = if let Some(reason) = incomplete_reason {
+                log_inventory_coverage_warning(kind, items.len(), &reason);
+                CoverageLevel::Unknown
+            } else if !reads_agree || items.len() != quantity {
+                let reason = format!(
                 "next-item walk parsed {} entries; quantity reads were {:?} and agreement={reads_agree}",
                 items.len(),
                 session.quantity_reads
             );
-            log_inventory_coverage_warning(kind, items.len(), &reason);
-            CoverageLevel::Unknown
-        } else {
-            CoverageLevel::Complete
-        };
-        self.leave_menu()?;
+                log_inventory_coverage_warning(kind, items.len(), &reason);
+                CoverageLevel::Unknown
+            } else {
+                CoverageLevel::Complete
+            };
+            self.leave_menu()?;
+            Ok(coverage)
+        })();
+        let coverage = self.category_coverage(traversal)?;
         Ok(InventoryScan { items, coverage })
+    }
+
+    fn category_coverage(&self, result: HsrResult<CoverageLevel>) -> HsrResult<CoverageLevel> {
+        match result {
+            Err(error)
+                if self.config.save_on_cancel
+                    && self.device.is_cancelled()
+                    && error.hint() == hints::CANCELLED =>
+            {
+                Ok(CoverageLevel::Unknown)
+            },
+            other => other,
+        }
     }
 
     /// Reopen the inventory and select one scan ordinal, then reparse the
@@ -1184,18 +1214,6 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
     fn scan_characters(&mut self) -> HsrResult<CharacterScan> {
         yas::log_info!("正在扫描角色详情。", "Scanning Character details.");
-        self.open_menu('c', CHARACTER_TITLE)?;
-        // Leave controller UI once, then use only mouse traversal.
-        self.issue_input(InputCommand::Key('1'))?;
-        self.wait_attended(Duration::from_millis(self.config.timings.input_settle_ms))?;
-        self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-        self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-        self.reset_character_bar()?;
-        self.issue_input(InputCommand::Click(layout::character_portrait(0)))?;
-        self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-        let mut slot = 0;
-
-        let limit = self.config.max_characters;
         let mut items: Vec<ObservedCharacter> = Vec::new();
         let mut export_details = CaptureExportDetails {
             trailblazer: self
@@ -1205,131 +1223,147 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                 .map(|identity| identity.gender.name().to_string()),
             ..CaptureExportDetails::default()
         };
-        let mut seen = BTreeSet::new();
-        let mut unreadable_streak = 0_usize;
-        let mut terminal_proven = false;
-        let mut coverage_degraded = false;
-        // Bound a malfunctioning traversal by the reference roster, allowing
-        // one overlapping final page. Completion comes from the controller's
-        // terminal evidence, never from this bound or an entered total.
-        let visit_bound = self.references.character_count() * 2 + layout::CHARACTER_PAGE_SIZE;
-        for index in 0..visit_bound {
-            let (eidolon, eidolon_frame) = self.read_eidolon_count(index)?;
+        let traversal = (|| {
+            self.open_menu('c', CHARACTER_TITLE)?;
+            // Leave controller UI once, then use only mouse traversal.
+            self.issue_input(InputCommand::Key('1'))?;
+            self.wait_attended(Duration::from_millis(self.config.timings.input_settle_ms))?;
             self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
             self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-            // Parse the panel seen right after the eidolon screen, and check
-            // both show one breadcrumb, so a delayed click cannot pair
-            // one Character's eidolons with another's details.
-            let fresh = self.capture_stable()?;
-            if !glyphs_match(
-                &CHARACTER_IDENTITY_REGION.crop(&eidolon_frame)?,
-                &CHARACTER_IDENTITY_REGION.crop(&fresh)?,
-            ) {
-                coverage_degraded = true;
-                yas::log_warn!(
+            self.reset_character_bar()?;
+            self.issue_input(InputCommand::Click(layout::character_portrait(0)))?;
+            self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
+            let mut slot = 0;
+
+            let limit = self.config.max_characters;
+            let mut seen = BTreeSet::new();
+            let mut unreadable_streak = 0_usize;
+            let mut terminal_proven = false;
+            let mut coverage_degraded = false;
+            // Bound a malfunctioning traversal by the reference roster, allowing
+            // one overlapping final page. Completion comes from the controller's
+            // terminal evidence, never from this bound or an entered total.
+            let visit_bound = self.references.character_count() * 2 + layout::CHARACTER_PAGE_SIZE;
+            for index in 0..visit_bound {
+                let (eidolon, eidolon_frame) = self.read_eidolon_count(index)?;
+                self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
+                self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
+                // Parse the panel seen right after the eidolon screen, and check
+                // both show one breadcrumb, so a delayed click cannot pair
+                // one Character's eidolons with another's details.
+                let fresh = self.capture_stable()?;
+                if !glyphs_match(
+                    &CHARACTER_IDENTITY_REGION.crop(&eidolon_frame)?,
+                    &CHARACTER_IDENTITY_REGION.crop(&fresh)?,
+                ) {
+                    coverage_degraded = true;
+                    yas::log_warn!(
                     "角色在读取星魂时发生了切换，可能漏掉了一名角色；覆盖率将标记为未知。",
                     "The selected Character changed while eidolons were read, so one Character may have been skipped; coverage will be marked unknown."
                 );
-            }
-            let mut details = fresh;
-            self.observe_uid(&details);
-            let parsed = match dump_parsed_item("characters", index, &details, || {
-                self.parser.parse_character_details(
-                    &details,
-                    &self.references,
-                    self.config.trailblazer.as_ref(),
-                    eidolon,
-                )
-            }) {
-                Ok(parsed) => Some(parsed),
-                Err(error) if error.code() == "HSR-OCR-CHARACTER-AMBIGUOUS" => {
-                    coverage_degraded = true;
-                    yas::log_warn!(
+                }
+                let mut details = fresh;
+                self.observe_uid(&details);
+                let parsed = match dump_parsed_item("characters", index, &details, || {
+                    self.parser.parse_character_details(
+                        &details,
+                        &self.references,
+                        self.config.trailblazer.as_ref(),
+                        eidolon,
+                    )
+                }) {
+                    Ok(parsed) => Some(parsed),
+                    Err(error) if error.code() == "HSR-OCR-CHARACTER-AMBIGUOUS" => {
+                        coverage_degraded = true;
+                        yas::log_warn!(
                         "当前角色名称对应多个公开角色模板，且画面没有足够的命途或变体证据；已省略该角色并将角色覆盖率标记为未知。完整错误详情：{}",
                         "The current character name maps to multiple public templates and the screen lacks sufficient path or variant evidence; the entry was omitted and character coverage is marked unknown. Full error details: {}",
                         error
                     );
-                    None
-                },
-                Err(error)
-                    if is_omittable_scan_error(error.code())
-                        && unreadable_streak + 1 < MAX_UNREADABLE_CHARACTERS =>
-                {
-                    unreadable_streak += 1;
-                    coverage_degraded = true;
-                    yas::log_warn!(
+                        None
+                    },
+                    Err(error)
+                        if is_omittable_scan_error(error.code())
+                            && unreadable_streak + 1 < MAX_UNREADABLE_CHARACTERS =>
+                    {
+                        unreadable_streak += 1;
+                        coverage_degraded = true;
+                        yas::log_warn!(
                         "角色面板有字段无法识别，已省略该角色并将角色覆盖率标记为未知。完整错误详情：{}",
                         "A field on the Character panel was unreadable; the entry was omitted and character coverage is marked unknown. Full error details: {}",
                         error
                     );
-                    None
-                },
-                Err(error) => return Err(error),
-            };
-            if let Some(parsed) = parsed {
-                unreadable_streak = 0;
-                // A final drag clamps to the end and overlaps the previous
-                // page. Revisited identities are expected and are not exported
-                // twice; continue clicking through the rest of that page.
-                if seen.insert(parsed.observation.character_id) {
-                    if let Some(trace_details) =
-                        self.read_character_traces(index, &parsed.reference.path)?
-                    {
-                        export_details
-                            .characters
-                            .insert(parsed.observation.character_id, trace_details);
+                        None
+                    },
+                    Err(error) => return Err(error),
+                };
+                if let Some(parsed) = parsed {
+                    unreadable_streak = 0;
+                    // A final drag clamps to the end and overlaps the previous
+                    // page. Revisited identities are expected and are not exported
+                    // twice; continue clicking through the rest of that page.
+                    if seen.insert(parsed.observation.character_id) {
+                        if let Some(trace_details) =
+                            self.read_character_traces(index, &parsed.reference.path)?
+                        {
+                            export_details
+                                .characters
+                                .insert(parsed.observation.character_id, trace_details);
+                        }
+                        if trailblazer_gender(parsed.observation.character_id).is_some() {
+                            export_details.current_trailblazer_path =
+                                Some(path_name(&parsed.reference.path)?.to_string());
+                        }
+                        items.push(parsed.observation);
+                        self.report(
+                            crate::scan_progress::ScanCategory::Characters,
+                            crate::scan_progress::ScanEvent::Progress {
+                                recognized: items.len(),
+                                visited: items.len(),
+                                total: None,
+                            },
+                        );
+                        yas::log_info!("角色进度：{}。", "Character progress: {}.", items.len());
                     }
-                    if trailblazer_gender(parsed.observation.character_id).is_some() {
-                        export_details.current_trailblazer_path =
-                            Some(path_name(&parsed.reference.path)?.to_string());
-                    }
-                    items.push(parsed.observation);
-                    self.report(
-                        crate::scan_progress::ScanCategory::Characters,
-                        crate::scan_progress::ScanEvent::Progress {
-                            recognized: items.len(),
-                            visited: items.len(),
-                            total: None,
-                        },
-                    );
-                    yas::log_info!("角色进度：{}。", "Character progress: {}.", items.len());
                 }
-            }
-            // Traces replace the details panel. Returning first keeps the
-            // identity baseline on the same character; otherwise the traces
-            // screen is read as the next roster entry and the scan stops.
-            if limit > 0 && items.len() >= limit {
-                break;
-            }
-            self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-            self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-            details = self.capture_stable()?;
-            // The next iteration parses the panel captured after its eidolon
-            // read, so the frame that proved the advance is not kept.
-            match self.advance_character(&details, &mut slot, index) {
-                Ok(_) => {},
-                Err(error) if error.code() == "HSR-CHAR-END" => {
-                    terminal_proven = true;
+                // Traces replace the details panel. Returning first keeps the
+                // identity baseline on the same character; otherwise the traces
+                // screen is read as the next roster entry and the scan stops.
+                if limit > 0 && items.len() >= limit {
                     break;
-                },
-                Err(error) if error.code() == "HSR-CHAR-ADVANCE" => {
-                    coverage_degraded = true;
-                    yas::log_warn!(
+                }
+                self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
+                self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
+                details = self.capture_stable()?;
+                // The next iteration parses the panel captured after its eidolon
+                // read, so the frame that proved the advance is not kept.
+                match self.advance_character(&details, &mut slot, index) {
+                    Ok(_) => {},
+                    Err(error) if error.code() == "HSR-CHAR-END" => {
+                        terminal_proven = true;
+                        break;
+                    },
+                    Err(error) if error.code() == "HSR-CHAR-ADVANCE" => {
+                        coverage_degraded = true;
+                        yas::log_warn!(
                         "点击后没有切换到下一个角色，角色列表在此停止。完整错误详情：{}",
                         "Clicking did not open another Character; roster traversal stopped here. Full error details: {}",
                         error
                     );
-                    break;
-                },
-                Err(error) => return Err(error),
+                        break;
+                    },
+                    Err(error) => return Err(error),
+                };
+            }
+            self.leave_menu()?;
+            let coverage = if terminal_proven && !coverage_degraded {
+                CoverageLevel::Complete
+            } else {
+                CoverageLevel::Unknown
             };
-        }
-        self.leave_menu()?;
-        let coverage = if terminal_proven && !coverage_degraded {
-            CoverageLevel::Complete
-        } else {
-            CoverageLevel::Unknown
-        };
+            Ok(coverage)
+        })();
+        let coverage = self.category_coverage(traversal)?;
         yas::log_info!(
             "角色扫描完成：{} 名。",
             "Character scan complete: {} entries.",
@@ -3239,6 +3273,124 @@ mod tests {
                 .commands()
                 .contains(&InputCommand::Key('d')));
         }
+    }
+
+    #[test]
+    fn user_stop_keeps_inventory_entries_only_when_requested_and_never_masks_focus_loss() {
+        for kind in [InventoryKind::LightCone, InventoryKind::Gear] {
+            let make = |cap, save_on_cancel| {
+                let grid = backpack_grid(kind);
+                let frame = page_frame(&grid, 0, 3, Some(0));
+                let name_field = if kind == InventoryKind::LightCone {
+                    OcrField::LightConeName
+                } else {
+                    OcrField::GearName
+                };
+                let title = if kind == InventoryKind::LightCone {
+                    "制胜的瞬间"
+                } else {
+                    "过客的逢春木簪"
+                };
+                let reader = ScriptedOcrReader::default()
+                    .with(OcrField::MenuTitle, ["背包"])
+                    .with(name_field, [title])
+                    .with(OcrField::InventoryQuantity, ["3/2000", "3/2000"]);
+                let reference: ReferenceSnapshot =
+                    serde_json::from_str(include_str!("../tests/fixtures/reference_cache.json"))
+                        .unwrap();
+                HsrScanner::new(
+                    ReplayDevice::new(1280, 720, vec![frame; 7]),
+                    reader,
+                    ReferenceCache::from_snapshot(reference).unwrap(),
+                    ScanConfig {
+                        max_light_cones: cap,
+                        max_gear: cap,
+                        save_on_cancel,
+                        ..Default::default()
+                    },
+                )
+            };
+            let mut baseline = make(1, false);
+            assert_eq!(
+                baseline
+                    .scan_inventory(kind, |_, _, _, _, ordinal| Ok(ordinal))
+                    .unwrap()
+                    .items,
+                [0]
+            );
+            let stop_at = baseline.device().commands().len() - 1;
+            for save in [false, true] {
+                let mut scanner = make(0, save);
+                scanner.device.cancel_after_commands(stop_at);
+                let scan = scanner.scan_inventory(kind, |_, _, _, _, ordinal| Ok(ordinal));
+                if save {
+                    let scan = scan.unwrap();
+                    assert_eq!(scan.items, [0]);
+                    assert_eq!(scan.coverage, CoverageLevel::Unknown);
+                } else {
+                    assert_eq!(scan.unwrap_err().hint(), hints::CANCELLED);
+                }
+                assert_eq!(scanner.device().commands().len(), stop_at);
+                assert!(matches!(
+                    scanner.device().commands().last(),
+                    Some(InputCommand::Key(_))
+                ));
+            }
+            let mut scanner = make(0, true);
+            scanner.device.lose_focus_after_commands(stop_at);
+            assert_eq!(
+                scanner
+                    .scan_inventory(kind, |_, _, _, _, ordinal| Ok(ordinal))
+                    .unwrap_err()
+                    .hint(),
+                hints::FOCUS_REQUIRED
+            );
+        }
+    }
+
+    #[test]
+    fn user_stop_retains_complete_characters_and_skips_all_later_categories() {
+        let make = |maximum, save_on_cancel| {
+            let frame = character_frame(Rgb([90, 120, 170]));
+            let reader = ScriptedOcrReader::default()
+                .with(OcrField::MenuTitle, ["角色详情"])
+                .with(OcrField::CharacterName, ["三月七"])
+                .with(OcrField::CharacterLevel, ["等级 80/80"]);
+            HsrScanner::new(
+                ReplayDevice::new(1280, 720, with_character_menu_open(vec![frame; 64])),
+                reader,
+                two_character_references(),
+                ScanConfig {
+                    max_characters: maximum,
+                    save_on_cancel,
+                    timings: ScanTimings {
+                        panel_timeout_ms: 40,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+        };
+        let mut baseline = make(1, false);
+        assert_eq!(baseline.scan_characters().unwrap().items.len(), 1);
+        let stop_at = baseline.device().commands().len() - 1;
+        let mut scanner = make(0, true);
+        scanner.device.cancel_after_commands(stop_at);
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        scanner = scanner.with_observer(Box::new(move |category, event| {
+            recorded.lock().unwrap().push((category, event))
+        }));
+        let scan = scanner.scan().unwrap();
+        assert_eq!(scan.observations.as_inner().characters.len(), 1);
+        assert!(scan.observations.as_inner().light_cones.is_empty());
+        assert!(scan.gear_items.is_empty());
+        assert_eq!(scan.coverage.characters, CoverageLevel::Unknown);
+        assert!(events
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(category, _)| *category == crate::scan_progress::ScanCategory::Characters));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! One capture produces a complete export before any older set is removed.
+//! Save each game's scan/capture stream before removing its older exports.
 use hsr_scanner::{HsrError, HsrResult};
 use serde_json::Value;
 use std::{
@@ -12,19 +12,57 @@ pub struct CaptureFiles {
     pub paths: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy)]
+enum ExportKind {
+    Capture,
+    Scan,
+}
+
+impl ExportKind {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Capture => "star_rail_capture_",
+            Self::Scan => "star_rail_scan_",
+        }
+    }
+    fn fail(self, detail: String) -> HsrError {
+        HsrError::write_failed(
+            match self {
+                Self::Capture => "HSR-CAPTURE-EXPORT-FILES",
+                Self::Scan => "HSR-SCAN-EXPORT-FILES",
+            },
+            detail,
+        )
+    }
+}
+
+fn export_stamp(kind: ExportKind) -> HsrResult<String> {
+    Ok(format!(
+        "{}_{:09}",
+        genshin_scanner::cli::chrono_timestamp(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| kind.fail(e.to_string()))?
+            .subsec_nanos()
+    ))
+}
+
+pub fn write_scan_file(output_dir: &Path, export: &Value, only_latest: bool) -> HsrResult<PathBuf> {
+    write_export_file(
+        output_dir,
+        &export_stamp(ExportKind::Scan)?,
+        export,
+        only_latest,
+        ExportKind::Scan,
+    )
+}
+
 pub fn write_capture_files(
     output_dir: &Path,
     export: &Value,
     only_latest: bool,
 ) -> HsrResult<CaptureFiles> {
-    let stamp = format!(
-        "{}_{:09}",
-        genshin_scanner::cli::chrono_timestamp(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| fail(e.to_string()))?
-            .subsec_nanos()
-    );
+    let stamp = export_stamp(ExportKind::Capture)?;
     write_capture_set(output_dir, &stamp, export, only_latest)
 }
 
@@ -34,49 +72,50 @@ fn write_capture_set(
     export: &Value,
     only_latest: bool,
 ) -> HsrResult<CaptureFiles> {
-    let bytes = serialize(export)?;
-    let path = output_dir.join(format!("star_rail_capture_{stamp}.json"));
+    write_export_file(output_dir, stamp, export, only_latest, ExportKind::Capture)
+        .map(|path| CaptureFiles { paths: vec![path] })
+}
+
+fn write_export_file(
+    output_dir: &Path,
+    stamp: &str,
+    export: &Value,
+    only_latest: bool,
+    kind: ExportKind,
+) -> HsrResult<PathBuf> {
+    let bytes = serde_json::to_vec_pretty(export).map_err(|e| kind.fail(e.to_string()))?;
+    let path = output_dir.join(format!("{}{stamp}.json", kind.prefix()));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&path)
         .map_err(|e| {
-            fail(format!(
+            kind.fail(format!(
                 "path={}; cause={e}; older exports retained",
                 path.display()
             ))
         })?;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|e| {
-            fail(format!(
-                "path={}; cause={e}; older exports retained",
-                path.display()
-            ))
-        })?;
-    let paths = vec![path];
+    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        let cleanup = fs::remove_file(&path);
+        return Err(kind.fail(format!(
+            "path={}; cause={error}; incomplete-file cleanup={cleanup:?}; older exports retained",
+            path.display()
+        )));
+    }
+    drop(file);
     if only_latest {
-        remove_older_exports(output_dir, stamp).map_err(|e| {
-            fail(format!(
+        remove_older_exports(output_dir, stamp, kind).map_err(|e| {
+            kind.fail(format!(
                 "new exports saved: {}; older exports could not all be removed: {e}",
-                paths
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                path.display()
             ))
         })?;
     }
-    Ok(CaptureFiles { paths })
-}
-fn serialize(value: &impl serde::Serialize) -> HsrResult<Vec<u8>> {
-    serde_json::to_vec_pretty(value).map_err(|e| fail(e.to_string()))
-}
-fn fail(detail: String) -> HsrError {
-    HsrError::write_failed("HSR-CAPTURE-EXPORT-FILES", detail)
+    Ok(path)
 }
 
-fn remove_older_exports(dir: &Path, current: &str) -> std::io::Result<()> {
+fn remove_older_exports(dir: &Path, current: &str, kind: ExportKind) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         // Never follow symlinks or recurse; only generated HSR export filenames.
@@ -84,7 +123,7 @@ fn remove_older_exports(dir: &Path, current: &str) -> std::io::Result<()> {
             continue;
         }
         let name = entry.file_name();
-        let Some(stamp) = name.to_str().and_then(export_timestamp) else {
+        let Some(stamp) = name.to_str().and_then(|name| export_timestamp(name, kind)) else {
             continue;
         };
         if stamp < current {
@@ -93,16 +132,18 @@ fn remove_older_exports(dir: &Path, current: &str) -> std::io::Result<()> {
     }
     Ok(())
 }
-fn export_timestamp(name: &str) -> Option<&str> {
+fn export_timestamp(name: &str, kind: ExportKind) -> Option<&str> {
     let body = name.strip_suffix(".json")?;
-    let stamp = [
-        "star_rail_capture_",
-        "star_rail_export_",
-        "star_rail_fribbels_",
-        "star_rail_achievements_",
-    ]
-    .iter()
-    .find_map(|p| body.strip_prefix(p))?;
+    let prefixes: &[&str] = match kind {
+        ExportKind::Scan => &["star_rail_scan_"],
+        ExportKind::Capture => &[
+            "star_rail_capture_",
+            "star_rail_export_",
+            "star_rail_fribbels_",
+            "star_rail_achievements_",
+        ],
+    };
+    let stamp = prefixes.iter().find_map(|p| body.strip_prefix(p))?;
     let bytes = stamp.as_bytes();
     if bytes.len() != 19 && bytes.len() != 29 {
         return None;
@@ -188,7 +229,7 @@ mod tests {
             fs::write(dir.join(name), b"keep").unwrap();
         }
         fs::create_dir(dir.join("star_rail_export_2026-09-01_10-00-00_000000009.json")).unwrap();
-        remove_older_exports(&dir, "2026-09-07_10-00-00_000000001").unwrap();
+        remove_older_exports(&dir, "2026-09-07_10-00-00_000000001", ExportKind::Capture).unwrap();
         for name in old {
             assert!(!dir.join(name).exists());
         }

@@ -12,10 +12,9 @@ use hsr_scanner::{
         AppendOnlyJsonJournalStore, HsrControllerLease, ManagerInstructionsEnvelope,
         ManagerJournalStore, ManagerPlan,
     },
-    pipeline::write_json_create_new,
     reference::ReferenceCache,
-    scanner::{HsrScanner, ScanConfig, ScanTargets},
-    CaptureExportDetails, HsrError, Language, ValidatedObservationSnapshot,
+    scanner::{HsrScanner, ScanConfig, ScanResult, ScanTargets},
+    HsrError, Language,
 };
 
 use crate::config::StarRailSettings;
@@ -150,6 +149,7 @@ fn scanner_config(
         max_characters: settings.max_characters,
         trailblazer,
         dump_images: settings.dump_images,
+        save_on_cancel: settings.scan_save_on_cancel,
         ..ScanConfig::default()
     })
 }
@@ -175,25 +175,30 @@ pub fn load_references() -> Result<ReferenceCache, HsrError> {
     Ok(references)
 }
 
-pub fn next_scan_export_path(output_dir: &Path) -> PathBuf {
-    output_dir.join(format!(
-        "star_rail_scan_{}.json",
-        genshin_scanner::cli::chrono_timestamp()
-    ))
-}
-
-struct V4ExportFile {
-    path: PathBuf,
-    counts: (usize, usize, usize, usize),
-}
-
-fn write_v4_export(
-    observations: &ValidatedObservationSnapshot,
+/// Finalize a real scan through the same policy for GUI, HTTP and CLI callers.
+pub fn finish_scan_export(
+    settings: &StarRailSettings,
+    result: &ScanResult,
     references: &ReferenceCache,
-    output_dir: &Path,
-    details: &CaptureExportDetails,
-) -> Result<V4ExportFile, UiError> {
-    let export = export_observations(observations, references, details, None).map_err(|error| {
+    cancelled: bool,
+    status: Option<&Arc<Mutex<TaskStatus>>>,
+) -> Result<TaskStatus, UiError> {
+    let stopped = || {
+        TaskStatus::Stopped(UiText::new(
+            "扫描已停止 · 未导出",
+            "Scan stopped · no export",
+        ))
+    };
+    if cancelled && !settings.scan_save_on_cancel {
+        return Ok(stopped());
+    }
+    let export = export_observations(
+        &result.observations,
+        references,
+        &result.export_details,
+        None,
+    )
+    .map_err(|error| {
         hsr_ui_error(
             UiText::new(
                 "扫描结果无法转换为 HSR-Scanner v4 JSON。",
@@ -202,19 +207,40 @@ fn write_v4_export(
             error,
         )
     })?;
-    let path = next_scan_export_path(output_dir);
-    write_json_create_new(&path, &export).map_err(|error| {
-        hsr_ui_error(
+    let counts = v4_inventory_counts(&export);
+    if counts == (0, 0, 0, 0) {
+        if cancelled {
+            return Ok(stopped());
+        }
+        return Err(UiError::from_message(
+            UiText::new("未识别出所选数据，未导出。请检查游戏画面和日志后重试。", "No selected data was recognized. Nothing was exported. Check the game screen and logs, then retry."),
+            "scan yielded no validated inventory entries; older exports retained",
+        ));
+    }
+    if let Some(status) = status {
+        *status.lock().unwrap() = TaskStatus::Running(UiText::new("正在导出数据", "Saving export"));
+    }
+    let output_dir = ensure_output_dir(settings)?;
+    let path = super::star_rail_exports::write_scan_file(&output_dir, &export, settings.scan_only_keep_latest_export).map_err(|error| {
+        UiError::from_error(
             UiText::new(
-                "星穹铁道导出文件无法写入。请检查输出文件夹、磁盘空间和文件权限。",
-                "The Star Rail export file could not be written. Check the output folder, disk space, and file permissions.",
+                "扫描导出未完成，请检查输出位置或旧文件的权限。新文件若已保存，其路径在完整错误中。",
+                "Scan export did not finish. Check the output location or old file permissions. If the new file was saved, its path is in the full error.",
             ),
             error,
         )
     })?;
-    Ok(V4ExportFile {
-        counts: v4_inventory_counts(&export),
-        path,
+    let partial = cancelled
+        || (settings.scan_characters
+            && result.coverage.characters != hsr_scanner::model::CoverageLevel::Complete)
+        || (settings.scan_light_cones
+            && result.coverage.light_cones != hsr_scanner::model::CoverageLevel::Complete)
+        || (settings.scan_relics_and_ornaments
+            && result.coverage.relics != hsr_scanner::model::CoverageLevel::Complete);
+    Ok(TaskStatus::Exported {
+        message: v4_export_message(counts, &path),
+        path: path.display().to_string(),
+        partial,
     })
 }
 
@@ -430,7 +456,7 @@ fn run_scan_observed(
     };
     let mut config = scanner_config(settings, targets)?;
     config.scan_item_limit = sample_limit;
-    let output_dir = ensure_output_dir(settings)?;
+    ensure_output_dir(settings)?;
     if user_aborted(&cancel) {
         return Ok(TaskStatus::Stopped(UiText::new(
             "扫描已停止 · 未导出",
@@ -499,29 +525,19 @@ fn run_scan_observed(
             ));
         },
     };
-    if user_aborted(&cancel) {
+    if cancel.is_cancelled() && !user_aborted(&cancel) {
         return Ok(TaskStatus::Stopped(UiText::new(
             "扫描已停止 · 未导出",
             "Scan stopped · no export",
         )));
     }
-    phase("正在导出数据", "Saving export");
-    let export = write_v4_export(
-        &result.observations,
+    finish_scan_export(
+        settings,
+        &result,
         &references,
-        &output_dir,
-        &result.export_details,
-    )?;
-    let partial = (targets.characters
-        && result.coverage.characters != hsr_scanner::model::CoverageLevel::Complete)
-        || (targets.light_cones
-            && result.coverage.light_cones != hsr_scanner::model::CoverageLevel::Complete)
-        || (targets.gear && result.coverage.relics != hsr_scanner::model::CoverageLevel::Complete);
-    Ok(TaskStatus::Exported {
-        message: v4_export_message(export.counts, &export.path),
-        path: export.path.display().to_string(),
-        partial,
-    })
+        user_aborted(&cancel),
+        status,
+    )
 }
 
 fn build_manager_preview(
@@ -580,6 +596,7 @@ fn manager_scan_config(settings: &StarRailSettings) -> Result<ScanConfig, UiErro
     // Sample caps belong to export scans. Manager matching needs the complete
     // inventory and must not inherit a user's diagnostic sample preference.
     config.max_gear = 0;
+    config.save_on_cancel = false;
     Ok(config)
 }
 
@@ -614,6 +631,7 @@ pub fn spawn_manager_server(
             crate::hsr_server::serve(server, cancel, job,
                 move |request, job_cancel| {
                     progress.lock().unwrap().steps.clear();
+                    *status_worker.lock().unwrap() = TaskStatus::Running(UiText::new("正在启动任务", "Starting task"));
                     let result = match request {
                         crate::hsr_server::Job::Manage(envelope) => run_manager_request(
                             &settings, &envelope, job_cancel.clone(), status_worker.clone(), progress.clone()),
@@ -629,10 +647,13 @@ pub fn spawn_manager_server(
                                             UiText::new("无法读取扫描结果", "Could not read scan results"), error))?;
                                         let export: serde_json::Value = serde_json::from_str(&data).map_err(|error| UiError::from_error(
                                             UiText::new("无法读取扫描结果", "Could not read scan results"), error))?;
-                                        *status_worker.lock().unwrap() = TaskStatus::Completed(message);
+                                        *status_worker.lock().unwrap() = TaskStatus::Exported { message, path, partial };
                                         Ok(serde_json::json!({"kind":"scan", "export":export, "partial":partial}))
                                     },
-                                    TaskStatus::Stopped(message) => Err(UiError::from_message(message, "scan cancelled")),
+                                    TaskStatus::Stopped(message) => {
+                                        *status_worker.lock().unwrap() = TaskStatus::Stopped(message.clone());
+                                        Err(UiError::from_message(message, "scan cancelled"))
+                                    },
                                     _ => unreachable!("scan produces export or stopped"),
                                 })
                         },
@@ -644,7 +665,8 @@ pub fn spawn_manager_server(
                             "en":error.hint_text(super::state::Lang::En),
                             "details":error.copy_text(super::state::Lang::En),
                         });
-                        *status_worker.lock().unwrap() = TaskStatus::Failed(error);
+                        let mut status = status_worker.lock().unwrap();
+                        if !matches!(*status, TaskStatus::Stopped(_)) { *status = TaskStatus::Failed(error); }
                         body
                     })
                 },
@@ -836,6 +858,19 @@ fn run_manager_request(
 #[cfg(test)]
 mod feedback_tests {
     use super::*;
+    #[test]
+    fn manager_scan_cannot_inherit_partial_export_or_sample_preferences() {
+        let settings = StarRailSettings {
+            scan_save_on_cancel: true,
+            max_gear: 12,
+            ..Default::default()
+        };
+        let config = manager_scan_config(&settings).unwrap();
+        assert!(!config.save_on_cancel);
+        assert_eq!(config.max_gear, 0);
+        assert!(!config.targets.characters);
+        assert!(!config.targets.light_cones);
+    }
     #[test]
     fn actionable_backend_hint_is_primary_and_context_is_retained() {
         let error = HsrError::new(

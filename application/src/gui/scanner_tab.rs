@@ -31,15 +31,13 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_scanning: bool)
     }
     widgets::section(ui, l.t("导出与显示", "Export & display"), |ui| {
         ui.add_enabled_ui(!is_scanning, |ui| {
-            ui.checkbox(
+            widgets::scan_export_options(
+                ui,
+                l,
                 &mut state.only_keep_latest_export,
-                l.t("仅保留最新导出", "Keep latest export only"),
+                &mut state.save_on_cancel,
             );
             ui.checkbox(&mut state.hdr_mode, l.t("游戏使用 HDR", "Game uses HDR"));
-            ui.checkbox(
-                &mut state.save_on_cancel,
-                l.t("停止时保存已扫描结果", "Save results when stopped"),
-            );
         });
     });
 

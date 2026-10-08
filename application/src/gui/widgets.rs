@@ -80,6 +80,23 @@ pub fn singleline_input(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
 }
 
+/// Both games expose the same export choices with identical copy and order.
+pub fn scan_export_options(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    only_latest: &mut bool,
+    save_on_cancel: &mut bool,
+) {
+    ui.checkbox(
+        only_latest,
+        lang.t("仅保留最新导出", "Keep latest export only"),
+    );
+    ui.checkbox(
+        save_on_cancel,
+        lang.t("停止时保存已扫描结果", "Save results on stop"),
+    );
+}
+
 /// Render every user-visible failure with the same information hierarchy:
 /// a localized hint first, then copyable diagnostics behind a native disclosure.
 pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {

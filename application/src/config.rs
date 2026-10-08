@@ -157,6 +157,10 @@ pub struct StarRailSettings {
     pub trailblazer_gender: Option<TrailblazerGender>,
     #[serde(default)]
     pub dump_images: bool,
+    #[serde(default = "default_true")]
+    pub scan_only_keep_latest_export: bool,
+    #[serde(default)]
+    pub scan_save_on_cancel: bool,
     #[serde(default)]
     pub manager_instructions_path: String,
     #[serde(default = "default_manager_port")]
@@ -193,6 +197,8 @@ impl Default for StarRailSettings {
             trailblazer_name: String::new(),
             trailblazer_gender: None,
             dump_images: false,
+            scan_only_keep_latest_export: true,
+            scan_save_on_cancel: false,
             manager_instructions_path: String::new(),
             manager_port: default_manager_port(),
             manager_journal_path: String::new(),
@@ -410,8 +416,10 @@ impl ApplicationConfigStore {
         // (default bitBlt) and no HDR
         // setting. Preserve supported choices as advanced overrides; an omitted
         // method now uses Auto, which still selects BitBlt with HDR disabled.
-        // v3 added HDR. v4 adds the loopback manager port; the serde default
-        // preserves every existing preference and supplies port 8765.
+        // v3 added HDR. v4 adds the loopback manager port and scan export
+        // preferences. Earlier files lacked both export preferences: serde
+        // supplies the shared defaults (keep latest, discard on user stop).
+        // Existing values remain intact, including the manager's saved port.
         if matches!(config.schema_version, 1 | 2 | 3) {
             config.schema_version = APPLICATION_CONFIG_SCHEMA_VERSION;
         }

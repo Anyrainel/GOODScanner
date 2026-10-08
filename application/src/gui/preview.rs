@@ -45,6 +45,12 @@ pub fn run(
             let mut app = GuiApp::new(state, config, &cc.egui_ctx);
             app.save_settings = false;
             app.data_refresh.preview_age(5 * 3600);
+            if tab == ToolTab::Scanner && scenario == "partial" {
+                match game {
+                    Game::Genshin => app.state.save_on_cancel = true,
+                    Game::StarRail => app.app_config.config.star_rail.scan_save_on_cancel = true,
+                }
+            }
             if completed {
                 app.app_config.config.star_rail.trailblazer_name =
                     lang.t("开拓者", "Trailblazer").into();

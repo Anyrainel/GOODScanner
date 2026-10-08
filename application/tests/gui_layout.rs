@@ -10,6 +10,88 @@ use hsr_scanner::manager::{JournalEntry, JournalStatus, ManagerJournal, ManagerJ
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn both_games_expose_and_toggle_the_same_scan_export_preferences() {
+    use good_tools_app::{
+        config::StarRailSettings,
+        gui::{
+            scanner_tab, star_rail_scanner_tab,
+            state::{AppState, Lang},
+        },
+    };
+    for lang in [Lang::Zh, Lang::En] {
+        for star_rail in [false, true] {
+            let ctx = egui::Context::default();
+            theme::setup(&ctx);
+            let mut genshin = AppState::new();
+            genshin.lang = lang;
+            genshin.scan_characters = false;
+            genshin.only_keep_latest_export = true;
+            genshin.save_on_cancel = false;
+            let mut settings = StarRailSettings {
+                scan_characters: false,
+                ..Default::default()
+            };
+            let mut draw = |events| {
+                ctx.run(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            if star_rail {
+                                star_rail_scanner_tab::show_settings(
+                                    ui,
+                                    lang,
+                                    &mut settings,
+                                    false,
+                                );
+                            } else {
+                                scanner_tab::show_settings(ui, &mut genshin, false);
+                            }
+                        });
+                    },
+                )
+            };
+            draw(vec![]);
+            let initial = draw(vec![]);
+            for caption in [
+                lang.t("仅保留最新导出", "Keep latest export only"),
+                lang.t("停止时保存已扫描结果", "Save results on stop"),
+            ] {
+                let point = painted_text(&initial.shapes)
+                    .into_iter()
+                    .find(|(text, _)| text == caption)
+                    .unwrap()
+                    .1;
+                draw(vec![
+                    Event::PointerMoved(point),
+                    Event::PointerButton {
+                        pos: point,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    },
+                ]);
+                draw(vec![Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }]);
+            }
+            if star_rail {
+                assert!(!settings.scan_only_keep_latest_export);
+                assert!(settings.scan_save_on_cancel);
+            } else {
+                assert!(!genshin.only_keep_latest_export);
+                assert!(genshin.save_on_cancel);
+            }
+        }
+    }
+}
+
+#[test]
 fn single_line_input_text_is_centered_at_every_control_height_and_scale() {
     use good_tools_app::gui::widgets;
     for scale in [1.0, 1.25, 1.5, 2.0] {
