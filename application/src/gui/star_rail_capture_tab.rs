@@ -305,7 +305,6 @@ pub fn show_settings(
     });
     widgets::section(ui, lang.t("导出设置", "Export"), |ui| {
         ui.add_enabled_ui(!state.is_busy() && !game_busy, |ui| {
-            widgets::output_folder(ui, lang, &mut settings.output_dir);
             ui.checkbox(
                 &mut settings.capture_only_keep_latest_export,
                 lang.t("仅保留最新导出", "Keep latest export only"),
@@ -319,20 +318,6 @@ pub fn show_settings(
                 lang.t("保存解密数据包", "Save decoded packets"),
             );
         });
-    });
-
-    widgets::fold(ui, lang.t("使用说明", "How to use"), |ui| {
-        widgets::hint(
-            ui,
-            lang.t(
-                "导出 HSR-Scanner v4 JSON，含成就及开拓者扩展。",
-                "Exports HSR-Scanner v4 JSON with achievements and Trailblazer extensions.",
-            ),
-        );
-        ui.label(lang.t(
-                        "1. 关闭星穹铁道。\n2. 点击“开始抓包”。\n3. 启动游戏并登录，直至进入列车或当前场景。\n4. 所选数据读取完成后会自动停止并导出。",
-                        "1. Close Star Rail.\n2. Select Start Capture.\n3. Launch and log in until the Astral Express or current scene appears.\n4. Capture stops and exports after all selected data arrive.",
-                    ));
     });
 }
 
@@ -357,30 +342,34 @@ pub fn show_status(
         return;
     }
     let shared = lock_shared(&state.shared).clone();
-    let text = match &state.phase {
-        CapturePhase::Stopped => lang.t("抓包已停止 · 未导出", "Capture stopped · no export"),
-        CapturePhase::Idle => lang.t("准备抓包", "Ready to capture"),
-        CapturePhase::Initializing => lang.t("正在初始化抓包", "Initializing capture"),
-        CapturePhase::Waiting if shared.command_count == 0 => {
-            lang.t("请重启游戏并登录", "Restart the game and log in")
-        },
-        CapturePhase::Waiting => lang.t("等待所选类别数据", "Waiting for selected data"),
-        CapturePhase::Stopping => lang.t("正在停止抓包", "Stopping capture"),
-        CapturePhase::Exporting => lang.t("正在导出数据", "Exporting data"),
-        CapturePhase::Done { .. } => lang.t("数据已导出", "Data exported"),
-        CapturePhase::Failed(_) => lang.t("抓包未完成", "Capture failed"),
+    use super::capture_status::{self, Stage};
+    let connected = shared.command_count > 0
+        || shared.has_characters
+        || shared.has_light_cones
+        || shared.has_relics
+        || shared.has_achievements;
+    let stage = match &state.phase {
+        CapturePhase::Stopped => Stage::Stopped,
+        CapturePhase::Idle => Stage::Ready,
+        CapturePhase::Initializing => Stage::Starting,
+        CapturePhase::Waiting => capture_status::waiting(
+            connected,
+            (settings.capture_include_characters && !shared.has_characters)
+                || (settings.capture_include_light_cones && !shared.has_light_cones)
+                || (settings.capture_include_relics && !shared.has_relics),
+            settings.capture_include_achievements && !shared.has_achievements,
+        ),
+        CapturePhase::Stopping => Stage::Stopping,
+        CapturePhase::Exporting => Stage::Exporting,
+        CapturePhase::Done { .. } => Stage::Done,
+        CapturePhase::Failed(_) => Stage::Failed,
     };
+    let text = stage.headline(lang);
     let feedback = match &state.phase {
         CapturePhase::Idle if !capture_targets(settings).any() => {
             Some(super::state::TaskStatus::AwaitingInput(UiText::new(
                 "请选择导出内容",
                 "Select export targets",
-            )))
-        },
-        CapturePhase::Idle if settings.output_dir.trim().is_empty() => {
-            Some(super::state::TaskStatus::AwaitingInput(UiText::new(
-                "请选择输出文件夹",
-                "Choose an output folder",
             )))
         },
         CapturePhase::Failed(error) => Some(super::state::TaskStatus::Failed(error.clone())),
@@ -393,6 +382,9 @@ pub fn show_status(
         _ => None,
     };
     super::theme::task_status(ui, lang, feedback.as_ref(), text);
+    if capture_targets(settings).any() {
+        capture_status::show_connection(ui, lang, stage, connected);
+    }
     for (selected, key, zh, en, complete, count) in [
         (
             settings.capture_include_characters,
@@ -434,6 +426,8 @@ pub fn show_status(
                 step.state = super::task_progress::StepState::Complete;
             } else if matches!(state.phase, CapturePhase::Failed(_) | CapturePhase::Stopped) {
                 step.state = super::task_progress::StepState::Interrupted;
+            } else if matches!(state.phase, CapturePhase::Waiting) {
+                step.state = super::task_progress::StepState::Running;
             }
             super::task_progress::row(ui, lang, &step);
         }
@@ -455,10 +449,7 @@ pub fn show_status(
         CapturePhase::Failed(_) => {
             if super::theme::primary_action(
                 ui,
-                !game_busy
-                    && !state.is_busy()
-                    && capture_targets(settings).any()
-                    && !settings.output_dir.trim().is_empty(),
+                !game_busy && !state.is_busy() && capture_targets(settings).any(),
                 lang.t("重试", "Retry"),
             )
             .clicked()
@@ -469,10 +460,7 @@ pub fn show_status(
         CapturePhase::Idle | CapturePhase::Stopped | CapturePhase::Done { .. } => {
             if super::theme::primary_action(
                 ui,
-                !game_busy
-                    && !state.is_busy()
-                    && capture_targets(settings).any()
-                    && !settings.output_dir.trim().is_empty(),
+                !game_busy && !state.is_busy() && capture_targets(settings).any(),
                 lang.t("开始抓包", "Start capture"),
             )
             .clicked()
@@ -495,7 +483,7 @@ fn capture_targets(settings: &StarRailSettings) -> CaptureTargets {
 fn start_capture(settings: &StarRailSettings, state: &mut StarRailCaptureState) {
     // Freeze export destination at Start. Shared settings are disabled while
     // any Star Rail task runs, but this snapshot also protects future callers.
-    state.output_dir.clone_from(&settings.output_dir);
+    state.output_dir = settings.export_directory().display().to_string();
     state.only_keep_latest_export = settings.capture_only_keep_latest_export;
     *lock_shared(&state.shared) = HsrCaptureState::default();
     *lock_shared(&state.references) = None;
@@ -837,6 +825,39 @@ fn lock_shared<T>(shared: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod feedback_tests {
     use super::*;
+    #[test]
+    fn next_action_changes_only_after_relevant_capture_data_arrives() {
+        use super::super::capture_status::feedback_tests::texts;
+        let mut settings = StarRailSettings::default();
+        let mut state = StarRailCaptureState::new(String::new());
+        state.phase = CapturePhase::Waiting;
+        let login = texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
+        assert!(login.iter().any(|s| s == "Launch the game and log in"));
+        lock_shared(&state.shared).command_count = 1;
+        let inventory =
+            texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
+        assert!(inventory.iter().any(|s| s == "Waiting for remaining data"));
+        assert!(!inventory.iter().any(|s| s.contains("Open Achievements")));
+        {
+            let mut shared = lock_shared(&state.shared);
+            shared.has_characters = true;
+            shared.has_light_cones = true;
+            shared.has_relics = true;
+        }
+        let achievements =
+            texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
+        assert!(achievements
+            .iter()
+            .any(|s| s == "Open Achievements in the game"));
+        assert!(!achievements.iter().any(|s| s.contains("Import the file")));
+        state.phase = CapturePhase::Done {
+            summary: UiText::new("已完成", "Completed"),
+            path: "capture.json".into(),
+        };
+        let done = texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
+        assert!(done.iter().any(|s| s.contains("Import the file")));
+        assert!(!done.iter().any(|s| s.contains("Open Achievements")));
+    }
     #[test]
     fn stop_cannot_hide_a_reported_capture_failure() {
         let mut state = StarRailCaptureState::new(String::new());

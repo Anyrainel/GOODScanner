@@ -126,15 +126,6 @@ pub fn export_file(ui: &mut egui::Ui, l: Lang, path: &str) {
     );
 }
 
-pub fn output_folder(ui: &mut egui::Ui, l: Lang, path: &mut String) {
-    ui.label(l.t("输出文件夹", "Output folder"));
-    if path_control(ui, path, l.t("选择…", "Choose…")).clicked() {
-        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            *path = folder.display().to_string();
-        }
-    }
-}
-
 /// Numeric input for u64 values (clamped to 5000).
 pub fn num_input_u64(ui: &mut egui::Ui, value: &mut u64, width: f32) {
     ui.add_sized(

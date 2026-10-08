@@ -200,6 +200,15 @@ impl Default for StarRailSettings {
 }
 
 impl StarRailSettings {
+    /// GUI exports need no folder selection. Keep existing saved destinations working.
+    pub fn export_directory(&self) -> PathBuf {
+        if self.output_dir.trim().is_empty() {
+            genshin_scanner::cli::exe_dir()
+        } else {
+            PathBuf::from(self.output_dir.trim())
+        }
+    }
+
     /// The normal HDR control restores the recommended capture policy.
     /// Advanced overrides can be selected afterward for troubleshooting.
     pub fn set_hdr_mode(&mut self, enabled: bool) {

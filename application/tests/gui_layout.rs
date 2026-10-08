@@ -436,6 +436,120 @@ fn quiet_buttons_have_a_visible_hover_border_and_hand_cursor() {
 }
 
 #[test]
+fn sidebar_tab_borders_stay_inside_the_scroll_clip_while_pressed() {
+    use good_tools_app::{
+        config::GameNavigation,
+        gui::{shell, state::Lang},
+    };
+    for width in [150.0, 220.0] {
+        let ctx = egui::Context::default();
+        theme::setup(&ctx);
+        let mut navigation = GameNavigation::default();
+        let mut lang = Lang::En;
+        let mut draw = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| shell::sidebar(ui, &mut lang, &mut navigation));
+                },
+            )
+        };
+        draw(vec![]);
+        let initial = draw(vec![]);
+        let point = painted_text(&initial.shapes)
+            .into_iter()
+            .find(|(text, _)| text == "Manager")
+            .unwrap()
+            .1;
+        for events in [
+            vec![Event::PointerMoved(point)],
+            vec![Event::PointerButton {
+                pos: point,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: point,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        ] {
+            let output = draw(events);
+            let mut borders = 0;
+            for clipped in output.shapes {
+                if let egui::Shape::Rect(rect) = clipped.shape {
+                    if rect.stroke.color == theme::ACCENT && rect.stroke.width > 0.0 {
+                        borders += 1;
+                        assert!(
+                            clipped
+                                .clip_rect
+                                .contains_rect(rect.rect.expand(rect.stroke.width / 2.0)),
+                            "tab border clipped: {:?} vs {:?}",
+                            rect.rect,
+                            clipped.clip_rect
+                        );
+                    }
+                }
+            }
+            assert!(borders > 0);
+        }
+    }
+}
+
+#[test]
+fn capture_count_rows_use_empty_meter_space_for_readable_labels() {
+    use good_tools_app::gui::{
+        state::Lang,
+        task_progress::{self, Step, StepState},
+    };
+    let ctx = egui::Context::default();
+    theme::setup(&ctx);
+    let mut step = Step::new("achievements", "成就", "Achievements");
+    step.state = StepState::Running;
+    let mut output = None;
+    for _ in 0..2 {
+        output = Some(ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(230.0, 100.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| task_progress::row(ui, Lang::En, &step));
+            },
+        ));
+    }
+    let frame = output.unwrap();
+    let label = frame
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Achievements" => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!label
+        .galley
+        .rows
+        .iter()
+        .flat_map(|row| &row.glyphs)
+        .any(|glyph| glyph.chr == '…'));
+}
+
+#[test]
 fn about_retains_all_credits_and_card_edges_inside_the_scroll_clip() {
     use good_tools_app::gui::{
         credits::{self, CreditSet},

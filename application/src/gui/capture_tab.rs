@@ -416,27 +416,6 @@ pub fn show_settings(ui: &mut egui::Ui, l: Lang, tab: &mut CaptureTabState, is_b
             l.t("保存解密数据包", "Save decoded packets"),
         );
     });
-
-    // === Help / FAQ ===
-    widgets::fold(ui, l.t("使用说明", "How to use"), |ui| {
-        let steps = match l {
-                        Lang::Zh => &[
-                            "1. 点击「开始抓包」后，软件开始监听网络数据包。",
-                            "2. 如果游戏已在运行，请关闭并重新启动，登录进入游戏（过门）。",
-                            "3. 软件会在收到角色和物品数据后自动停止并导出 JSON 文件。",
-                            "4. 导出的文件可直接导入到 ggartifact.com 等工具中使用。",
-                        ] as &[&str],
-                        Lang::En => &[
-                            "1. Click 'Start Capture' to begin listening for network packets.",
-                            "2. If the game is already running, close it, relaunch, and log in (enter door).",
-                            "3. Once character and item data are received, capture stops automatically and exports a JSON file.",
-                            "4. The exported file can be imported directly into ggartifact.com and similar tools.",
-                        ],
-                    };
-        for step in steps {
-            ui.label(*step);
-        }
-    });
 }
 
 /// Start a fresh capture directly from either the initial or completed state.
@@ -518,24 +497,36 @@ pub fn show_status(
         super::theme::restart_required(ui, l, tab.native_failure().as_ref());
         return;
     }
-    let received = tab.capture_state.try_lock().is_ok_and(|s| {
+    let shared = tab
+        .capture_state
+        .try_lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let received = {
+        let s = &shared;
         s.has_characters
             || s.has_items
             || s.has_achievements
             || s.weapon_count > 0
             || s.artifact_count > 0
-    });
-    let text = match &tab.phase {
-        Phase::Stopped => l.t("抓包已停止 · 未导出", "Capture stopped · no export"),
-        Phase::Idle => l.t("准备抓包", "Ready to capture"),
-        Phase::Initializing => l.t("正在初始化抓包", "Initializing capture"),
-        Phase::Waiting if received => l.t("等待剩余类别数据", "Waiting for remaining data"),
-        Phase::Waiting => l.t("请重启游戏并登录", "Restart the game and log in"),
-        Phase::Stopping => l.t("正在停止抓包", "Stopping capture"),
-        Phase::Exporting => l.t("正在导出数据", "Exporting data"),
-        Phase::Done { .. } => l.t("数据已导出", "Data exported"),
-        Phase::Failed(_) => l.t("抓包未完成", "Capture failed"),
     };
+    use super::capture_status::{self, Stage};
+    let stage = match &tab.phase {
+        Phase::Stopped => Stage::Stopped,
+        Phase::Idle => Stage::Ready,
+        Phase::Initializing => Stage::Starting,
+        Phase::Waiting => capture_status::waiting(
+            received,
+            (tab.include_characters && !shared.has_characters)
+                || ((tab.include_weapons || tab.include_artifacts) && !shared.has_items),
+            tab.include_achievements && !shared.has_achievements,
+        ),
+        Phase::Stopping => Stage::Stopping,
+        Phase::Exporting => Stage::Exporting,
+        Phase::Done { .. } => Stage::Done,
+        Phase::Failed(_) => Stage::Failed,
+    };
+    let text = stage.headline(l);
     let feedback = match &tab.phase {
         Phase::Idle
             if !tab.include_characters
@@ -558,7 +549,15 @@ pub fn show_status(
         _ => None,
     };
     super::theme::task_status(ui, l, feedback.as_ref(), text);
-    if let Ok(cs) = tab.capture_state.try_lock() {
+    if tab.include_characters
+        || tab.include_weapons
+        || tab.include_artifacts
+        || tab.include_achievements
+    {
+        capture_status::show_connection(ui, l, stage, received);
+    }
+    {
+        let cs = &shared;
         for (selected, key, zh, en, complete, count) in [
             (
                 tab.include_characters,
@@ -600,6 +599,8 @@ pub fn show_status(
                     step.state = super::task_progress::StepState::Complete;
                 } else if matches!(tab.phase, Phase::Failed(_) | Phase::Stopped) {
                     step.state = super::task_progress::StepState::Interrupted;
+                } else if matches!(tab.phase, Phase::Waiting) {
+                    step.state = super::task_progress::StepState::Running;
                 }
                 super::task_progress::row(ui, l, &step);
             }
@@ -808,6 +809,36 @@ fn update_phase(tab: &mut CaptureTabState) {
 #[cfg(test)]
 mod feedback_tests {
     use super::*;
+    #[test]
+    fn next_action_changes_only_after_relevant_capture_data_arrives() {
+        use super::super::capture_status::feedback_tests::texts;
+        let mut tab = CaptureTabState::new(String::new());
+        tab.include_achievements = true;
+        tab.phase = Phase::Waiting;
+        let login = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
+        assert!(login.iter().any(|s| s == "Launch the game and log in"));
+        assert!(!login.iter().any(|s| s.contains("Open Achievements")));
+        {
+            let mut shared = tab.capture_state.lock().unwrap();
+            shared.has_characters = true;
+        }
+        let inventory = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
+        assert!(inventory.iter().any(|s| s == "Waiting for remaining data"));
+        assert!(!inventory.iter().any(|s| s.contains("Open Achievements")));
+        tab.capture_state.lock().unwrap().has_items = true;
+        let achievements = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
+        assert!(achievements
+            .iter()
+            .any(|s| s == "Open Achievements in the game"));
+        assert!(!achievements.iter().any(|s| s.contains("Import the file")));
+        tab.phase = Phase::Done {
+            summary: UiText::new("已完成", "Completed"),
+            path: "capture.json".into(),
+        };
+        let done = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
+        assert!(done.iter().any(|s| s.contains("Import the file")));
+        assert!(!done.iter().any(|s| s.contains("Open Achievements")));
+    }
     #[test]
     fn stop_remains_visible_after_the_worker_exits() {
         let mut tab = CaptureTabState::new(String::new());

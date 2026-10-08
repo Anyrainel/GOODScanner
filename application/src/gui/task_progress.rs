@@ -16,6 +16,8 @@ pub struct Step {
     pub en: &'static str,
     pub completed: usize,
     pub total: Option<usize>,
+    /// Connection and other phase steps have a state, but no item quantity.
+    pub show_count: bool,
     pub state: StepState,
 }
 
@@ -27,6 +29,7 @@ impl Step {
             en,
             completed: 0,
             total: None,
+            show_count: true,
             state: StepState::Pending,
         }
     }
@@ -48,19 +51,27 @@ impl TaskProgress {
 }
 
 pub fn show(ui: &mut egui::Ui, lang: Lang, progress: &TaskProgress) {
+    let reserve_meter = progress
+        .steps
+        .iter()
+        .any(|step| step.total.is_some_and(|total| total > 0));
     for step in &progress.steps {
-        row(ui, lang, step);
+        row_with_meter(ui, lang, step, reserve_meter);
     }
 }
 
 pub fn row(ui: &mut egui::Ui, lang: Lang, step: &Step) {
+    row_with_meter(ui, lang, step, step.total.is_some_and(|total| total > 0));
+}
+
+fn row_with_meter(ui: &mut egui::Ui, lang: Lang, step: &Step, reserve_meter: bool) {
     let color = match step.state {
         StepState::Complete => theme::ACCENT,
         StepState::Running => ui.visuals().text_color(),
         StepState::Interrupted => ui.visuals().warn_fg_color,
         StepState::Pending => theme::MUTED,
     };
-    let count = if step.state != StepState::Pending || step.total.is_some() {
+    let count = if step.show_count && (step.state != StepState::Pending || step.total.is_some()) {
         match step.total {
             Some(total) => format!("{} / {total}", step.completed),
             None => step.completed.to_string(),
@@ -71,8 +82,18 @@ pub fn row(ui: &mut egui::Ui, lang: Lang, step: &Step) {
     // Allocate the entire row once: counts and meters never introduce a second line.
     let width = ui.available_width().max(180.0);
     let compact = width < 290.0;
-    let bar_width = (width * 0.27).clamp(44.0, 96.0);
-    let count_width = if compact { 68.0 } else { 86.0 };
+    let bar_width = if reserve_meter {
+        (width * 0.27).clamp(44.0, 96.0)
+    } else {
+        0.0
+    };
+    let count_width = if !step.show_count {
+        0.0
+    } else if compact {
+        68.0
+    } else {
+        86.0
+    };
     let gap = 6.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
     let icon = egui::Rect::from_center_size(

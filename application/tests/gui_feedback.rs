@@ -155,7 +155,6 @@ fn required_star_rail_inputs_replace_ready_until_they_are_supplied() {
     let mut settings = good_tools_app::config::StarRailSettings::default();
     let mut state = StarRailState::new(String::new());
     settings.scan_characters = true;
-    settings.output_dir = "C:/exports".into();
     let texts = render(|ui| {
         star_rail_scanner_tab::show_status(ui, Lang::En, &mut settings, &mut state, false, false)
     });
@@ -166,6 +165,58 @@ fn required_star_rail_inputs_replace_ready_until_they_are_supplied() {
         star_rail_scanner_tab::show_status(ui, Lang::En, &mut settings, &mut state, false, false)
     });
     assert!(texts.iter().any(|(text, _, _)| text == "Ready to scan"));
+}
+
+#[test]
+fn star_rail_exports_need_no_folder_selection_and_preserve_saved_destinations() {
+    let mut settings = good_tools_app::config::StarRailSettings::default();
+    assert_eq!(settings.export_directory(), genshin_scanner::cli::exe_dir());
+    settings.output_dir = "D:/custom-exports".into();
+    assert_eq!(
+        settings.export_directory(),
+        std::path::PathBuf::from("D:/custom-exports")
+    );
+    let texts =
+        render(|ui| star_rail_scanner_tab::show_settings(ui, Lang::En, &mut settings, false));
+    assert!(!texts.iter().any(|(text, _, _)| text == "Output folder"));
+}
+
+#[cfg(feature = "capture")]
+#[test]
+fn capture_forms_have_no_manual_or_folder_picker_and_start_with_actionable_guidance() {
+    use good_tools_app::gui::{
+        capture_tab::{self, CaptureTabState},
+        star_rail_capture_tab::{self, StarRailCaptureState},
+    };
+    let mut genshin = CaptureTabState::new(String::new());
+    let mut settings = good_tools_app::config::StarRailSettings::default();
+    let mut hsr = StarRailCaptureState::new(String::new());
+    for game in ["genshin", "hsr"] {
+        let settings_text = render(|ui| match game {
+            "genshin" => capture_tab::show_settings(ui, Lang::En, &mut genshin, false),
+            _ => star_rail_capture_tab::show_settings(ui, Lang::En, &mut settings, &mut hsr, false),
+        });
+        assert!(!settings_text
+            .iter()
+            .any(|(text, _, _)| text == "How to use" || text == "Output folder"));
+        let status_text = render(|ui| match game {
+            "genshin" => capture_tab::show_status(ui, Lang::En, &mut genshin, false, false),
+            _ => star_rail_capture_tab::show_status(
+                ui,
+                Lang::En,
+                &mut settings,
+                &mut hsr,
+                false,
+                false,
+            ),
+        });
+        assert!(status_text
+            .iter()
+            .any(|(text, _, _)| text == "Close the game first"));
+        assert!(!status_text
+            .iter()
+            .any(|(text, _, _)| text.contains("Import the file")));
+    }
 }
 
 #[test]

@@ -38,8 +38,6 @@ pub fn show_status(
                 "请填写开拓者昵称和性别",
                 "Enter Trailblazer name and gender",
             ))
-        } else if settings.output_dir.trim().is_empty() {
-            Some(lang.t("请选择输出文件夹", "Choose an output folder"))
         } else {
             None
         };
@@ -79,10 +77,7 @@ pub fn show_status(
                 || settings.scan_relics_and_ornaments;
             if super::theme::primary_action(
                 ui,
-                !game_busy
-                    && has_target
-                    && !settings.missing_trailblazer()
-                    && !settings.output_dir.trim().is_empty(),
+                !game_busy && has_target && !settings.missing_trailblazer(),
                 if matches!(status, Some(super::state::TaskStatus::Failed(_))) {
                     lang.t("重试", "Retry")
                 } else {
@@ -141,9 +136,8 @@ pub fn show_settings(
             });
         });
     }
-    widgets::section(ui, lang.t("导出与显示", "Export & display"), |ui| {
+    widgets::section(ui, lang.t("显示设置", "Display"), |ui| {
         ui.add_enabled_ui(!is_running && !game_busy, |ui| {
-            widgets::output_folder(ui, lang, &mut settings.output_dir);
             if ui.checkbox(&mut settings.hdr_mode, lang.t("游戏使用 HDR", "Game uses HDR"))
                 .on_hover_text(lang.t("切换后恢复自动截图：普通模式使用 BitBlt，HDR 使用 Windows 图形捕获。", "Restores Automatic capture: BitBlt normally, Windows Graphics Capture for HDR.")).changed() {
                 settings.set_hdr_mode(settings.hdr_mode);

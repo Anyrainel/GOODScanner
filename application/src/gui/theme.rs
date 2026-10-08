@@ -109,7 +109,7 @@ pub fn task_status(ui: &mut egui::Ui, lang: Lang, status: Option<&TaskStatus>, i
     ui.add_space(4.0);
     match status {
         Some(TaskStatus::Running(message)) => {
-            ui.add(egui::Label::new(RichText::new(message.text(lang)).size(18.0)).truncate())
+            ui.add(egui::Label::new(RichText::new(message.text(lang)).size(18.0)).wrap())
                 .on_hover_text(message.text(lang));
         },
         Some(TaskStatus::Completed(message))
@@ -152,7 +152,7 @@ pub fn task_status(ui: &mut egui::Ui, lang: Lang, status: Option<&TaskStatus>, i
             super::widgets::error_card(ui, lang, error);
         },
         _ => {
-            ui.add(egui::Label::new(RichText::new(idle).size(18.0)).truncate())
+            ui.add(egui::Label::new(RichText::new(idle).size(18.0)).wrap())
                 .on_hover_text(idle);
         },
     }

@@ -1,4 +1,6 @@
 #[cfg(feature = "capture")]
+mod capture_status;
+#[cfg(feature = "capture")]
 pub mod capture_tab;
 pub mod credits;
 pub mod data_refresh;
@@ -418,277 +420,269 @@ impl eframe::App for GuiApp {
                 layout::region(ui, logs.shrink2(egui::vec2(16.0, 5.0)), "logs", |ui| {
                     log_panel::show_with(ui, l, log_buf)
                 });
-                layout::region(
-                    ui,
-                    workspace.shrink2(egui::vec2(12.0, 16.0)),
-                    "workspace",
-                    |ui| {
-                        self.data_refresh.heading(
+                layout::region(ui, layout::workspace_bounds(workspace), "workspace", |ui| {
+                    self.data_refresh.heading(
+                        ui,
+                        l,
+                        active_game,
+                        active_tab,
+                        !game_task_busy && !update_in_progress && !restart_required,
+                    );
+                    let data_refreshing = self.data_refresh.is_running();
+                    let game_task_busy = genshin_busy || star_rail_busy || data_refreshing;
+                    ui.add_space(10.0);
+                    if active_tab == ToolTab::Credits {
+                        credits::show(
                             ui,
                             l,
-                            active_game,
-                            active_tab,
-                            !game_task_busy && !update_in_progress && !restart_required,
+                            if cfg!(feature = "capture") {
+                                credits::CreditSet::Full
+                            } else {
+                                credits::CreditSet::Scanner
+                            },
                         );
-                        let data_refreshing = self.data_refresh.is_running();
-                        let game_task_busy = genshin_busy || star_rail_busy || data_refreshing;
-                        ui.add_space(10.0);
-                        if active_tab == ToolTab::Credits {
-                            credits::show(
-                                ui,
-                                l,
-                                if cfg!(feature = "capture") {
-                                    credits::CreditSet::Full
-                                } else {
-                                    credits::CreditSet::Scanner
-                                },
-                            );
+                        return;
+                    }
+                    layout::workspace(ui, &mut self.splits.settings, |ui, pane| {
+                        let owns_running_task = match (active_game, active_tab) {
+                            (Game::Genshin, ToolTab::Scanner) => is_scan_running,
+                            (Game::Genshin, ToolTab::Manager) => is_server_running,
+                            (Game::Genshin, ToolTab::Capture) => is_capture_busy,
+                            (Game::StarRail, ToolTab::Scanner) => star_rail_scan_running,
+                            (Game::StarRail, ToolTab::Manager) => star_rail_manager_running,
+                            (Game::StarRail, ToolTab::Capture) => star_rail_capture_busy,
+                            _ => false,
+                        };
+                        if matches!(pane, layout::Pane::Status)
+                            && !restart_required
+                            && !owns_running_task
+                            && (game_task_busy || update_in_progress)
+                        {
+                            let running_tab = if is_server_running || star_rail_manager_running {
+                                ToolTab::Manager
+                            } else if is_scan_running || star_rail_scan_running {
+                                ToolTab::Scanner
+                            } else {
+                                ToolTab::Capture
+                            };
+                            let reason = if data_refreshing {
+                                l.t("正在更新游戏数据", "Updating game data")
+                            } else if update_in_progress {
+                                l.t("正在更新程序", "Updating the app")
+                            } else {
+                                match running_tab {
+                                    ToolTab::Manager => l.t("管理器正在运行", "Manager is running"),
+                                    ToolTab::Scanner => l.t("扫描正在进行", "Scan is running"),
+                                    _ => l.t("抓包正在进行", "Capture is running"),
+                                }
+                            };
+                            theme::blocked_status(ui, l, reason);
+                            if !update_in_progress
+                                && !data_refreshing
+                                && ui.button(l.t("查看任务", "View task")).clicked()
+                            {
+                                self.app_config.config.navigation.select_tab(running_tab);
+                            }
                             return;
                         }
-                        layout::workspace(ui, &mut self.splits.settings, |ui, pane| {
-                            let owns_running_task = match (active_game, active_tab) {
-                                (Game::Genshin, ToolTab::Scanner) => is_scan_running,
-                                (Game::Genshin, ToolTab::Manager) => is_server_running,
-                                (Game::Genshin, ToolTab::Capture) => is_capture_busy,
-                                (Game::StarRail, ToolTab::Scanner) => star_rail_scan_running,
-                                (Game::StarRail, ToolTab::Manager) => star_rail_manager_running,
-                                (Game::StarRail, ToolTab::Capture) => star_rail_capture_busy,
-                                _ => false,
-                            };
-                            if matches!(pane, layout::Pane::Status)
-                                && !restart_required
-                                && !owns_running_task
-                                && (game_task_busy || update_in_progress)
-                            {
-                                let running_tab = if is_server_running || star_rail_manager_running
-                                {
-                                    ToolTab::Manager
-                                } else if is_scan_running || star_rail_scan_running {
-                                    ToolTab::Scanner
-                                } else {
-                                    ToolTab::Capture
-                                };
-                                let reason = if data_refreshing {
-                                    l.t("正在更新游戏数据", "Updating game data")
-                                } else if update_in_progress {
-                                    l.t("正在更新程序", "Updating the app")
-                                } else {
-                                    match running_tab {
-                                        ToolTab::Manager => {
-                                            l.t("管理器正在运行", "Manager is running")
-                                        },
-                                        ToolTab::Scanner => l.t("扫描正在进行", "Scan is running"),
-                                        _ => l.t("抓包正在进行", "Capture is running"),
-                                    }
-                                };
-                                theme::blocked_status(ui, l, reason);
-                                if !update_in_progress
-                                    && !data_refreshing
-                                    && ui.button(l.t("查看任务", "View task")).clicked()
-                                {
-                                    self.app_config.config.navigation.select_tab(running_tab);
-                                }
-                                return;
-                            }
-                            match (active_game, active_tab, pane) {
-                                (Game::Genshin, ToolTab::Scanner, layout::Pane::Settings) => {
-                                    ui.add_enabled_ui(
-                                        !restart_required
-                                            && !(is_server_running
-                                                || is_capture_busy
-                                                || star_rail_busy
-                                                || update_in_progress)
-                                            && !is_scan_running,
-                                        |ui| {
-                                            scanner_tab::show_settings(
-                                                ui,
-                                                &mut self.state,
-                                                is_scan_running,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                },
-                                (Game::Genshin, ToolTab::Scanner, layout::Pane::Status) => {
-                                    scanner_tab::show_status(
-                                        ui,
-                                        &mut self.state,
-                                        &mut self.scan_handle,
-                                        is_server_running
+                        match (active_game, active_tab, pane) {
+                            (Game::Genshin, ToolTab::Scanner, layout::Pane::Settings) => {
+                                ui.add_enabled_ui(
+                                    !restart_required
+                                        && !(is_server_running
                                             || is_capture_busy
                                             || star_rail_busy
-                                            || update_in_progress,
-                                        restart_required,
-                                    )
-                                },
-                                (Game::Genshin, ToolTab::Manager, layout::Pane::Settings) => {
-                                    ui.add_enabled_ui(
-                                        !restart_required
-                                            && !(is_scan_running
-                                                || is_capture_busy
-                                                || star_rail_busy
-                                                || update_in_progress)
-                                            && !is_server_running,
-                                        |ui| {
-                                            manager_tab::show_settings(
-                                                ui,
-                                                &mut self.state,
-                                                is_server_running,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                },
-                                (Game::Genshin, ToolTab::Manager, layout::Pane::Status) => {
-                                    manager_tab::show_status(
-                                        ui,
-                                        &mut self.state,
-                                        &mut self.server_handle,
-                                        is_scan_running
+                                            || update_in_progress)
+                                        && !is_scan_running,
+                                    |ui| {
+                                        scanner_tab::show_settings(
+                                            ui,
+                                            &mut self.state,
+                                            is_scan_running,
+                                        )
+                                    },
+                                )
+                                .inner
+                            },
+                            (Game::Genshin, ToolTab::Scanner, layout::Pane::Status) => {
+                                scanner_tab::show_status(
+                                    ui,
+                                    &mut self.state,
+                                    &mut self.scan_handle,
+                                    is_server_running
+                                        || is_capture_busy
+                                        || star_rail_busy
+                                        || update_in_progress,
+                                    restart_required,
+                                )
+                            },
+                            (Game::Genshin, ToolTab::Manager, layout::Pane::Settings) => {
+                                ui.add_enabled_ui(
+                                    !restart_required
+                                        && !(is_scan_running
                                             || is_capture_busy
                                             || star_rail_busy
-                                            || update_in_progress,
-                                        restart_required,
-                                    )
-                                },
-                                (Game::StarRail, ToolTab::Scanner, layout::Pane::Settings) => {
-                                    ui.add_enabled_ui(
-                                        !restart_required
-                                            && !(genshin_busy
-                                                || star_rail_manager_running
-                                                || star_rail_capture_busy
-                                                || update_in_progress)
-                                            && !star_rail_scan_running,
-                                        |ui| {
-                                            star_rail_scanner_tab::show_settings(
-                                                ui,
-                                                l,
-                                                &mut self.app_config.config.star_rail,
-                                                star_rail_scan_running,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                },
-                                (Game::StarRail, ToolTab::Scanner, layout::Pane::Status) => {
-                                    star_rail_scanner_tab::show_status(
-                                        ui,
-                                        l,
-                                        &mut self.app_config.config.star_rail,
-                                        &mut self.star_rail,
-                                        genshin_busy
+                                            || update_in_progress)
+                                        && !is_server_running,
+                                    |ui| {
+                                        manager_tab::show_settings(
+                                            ui,
+                                            &mut self.state,
+                                            is_server_running,
+                                        )
+                                    },
+                                )
+                                .inner
+                            },
+                            (Game::Genshin, ToolTab::Manager, layout::Pane::Status) => {
+                                manager_tab::show_status(
+                                    ui,
+                                    &mut self.state,
+                                    &mut self.server_handle,
+                                    is_scan_running
+                                        || is_capture_busy
+                                        || star_rail_busy
+                                        || update_in_progress,
+                                    restart_required,
+                                )
+                            },
+                            (Game::StarRail, ToolTab::Scanner, layout::Pane::Settings) => {
+                                ui.add_enabled_ui(
+                                    !restart_required
+                                        && !(genshin_busy
                                             || star_rail_manager_running
                                             || star_rail_capture_busy
-                                            || update_in_progress,
-                                        restart_required,
-                                    )
-                                },
-                                (Game::StarRail, ToolTab::Manager, layout::Pane::Settings) => {
-                                    ui.add_enabled_ui(
-                                        !restart_required
-                                            && !(genshin_busy
-                                                || star_rail_scan_running
-                                                || star_rail_capture_busy
-                                                || update_in_progress)
-                                            && !star_rail_manager_running,
-                                        |ui| {
-                                            star_rail_manager_tab::show_settings(
-                                                ui,
-                                                l,
-                                                &mut self.app_config.config.star_rail,
-                                                &mut self.star_rail,
-                                                star_rail_manager_running,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                },
-                                (Game::StarRail, ToolTab::Manager, layout::Pane::Status) => {
-                                    star_rail_manager_tab::show_status(
-                                        ui,
-                                        l,
-                                        &mut self.app_config.config.star_rail,
-                                        &mut self.star_rail,
-                                        genshin_busy
+                                            || update_in_progress)
+                                        && !star_rail_scan_running,
+                                    |ui| {
+                                        star_rail_scanner_tab::show_settings(
+                                            ui,
+                                            l,
+                                            &mut self.app_config.config.star_rail,
+                                            star_rail_scan_running,
+                                        )
+                                    },
+                                )
+                                .inner
+                            },
+                            (Game::StarRail, ToolTab::Scanner, layout::Pane::Status) => {
+                                star_rail_scanner_tab::show_status(
+                                    ui,
+                                    l,
+                                    &mut self.app_config.config.star_rail,
+                                    &mut self.star_rail,
+                                    genshin_busy
+                                        || star_rail_manager_running
+                                        || star_rail_capture_busy
+                                        || update_in_progress,
+                                    restart_required,
+                                )
+                            },
+                            (Game::StarRail, ToolTab::Manager, layout::Pane::Settings) => {
+                                ui.add_enabled_ui(
+                                    !restart_required
+                                        && !(genshin_busy
                                             || star_rail_scan_running
                                             || star_rail_capture_busy
-                                            || update_in_progress,
-                                        restart_required,
-                                    )
-                                },
-                                #[cfg(feature = "capture")]
-                                (Game::Genshin, ToolTab::Capture, layout::Pane::Settings) => {
-                                    ui.add_enabled_ui(
-                                        !restart_required
-                                            && !(is_scan_running
-                                                || is_server_running
-                                                || star_rail_busy
-                                                || update_in_progress)
-                                            && !is_capture_busy,
-                                        |ui| {
-                                            capture_tab::show_settings(
-                                                ui,
-                                                l,
-                                                &mut self.capture_tab,
-                                                is_capture_busy,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                },
-                                #[cfg(feature = "capture")]
-                                (Game::Genshin, ToolTab::Capture, layout::Pane::Status) => {
-                                    capture_tab::show_status(
-                                        ui,
-                                        l,
-                                        &mut self.capture_tab,
-                                        is_scan_running
+                                            || update_in_progress)
+                                        && !star_rail_manager_running,
+                                    |ui| {
+                                        star_rail_manager_tab::show_settings(
+                                            ui,
+                                            l,
+                                            &mut self.app_config.config.star_rail,
+                                            &mut self.star_rail,
+                                            star_rail_manager_running,
+                                        )
+                                    },
+                                )
+                                .inner
+                            },
+                            (Game::StarRail, ToolTab::Manager, layout::Pane::Status) => {
+                                star_rail_manager_tab::show_status(
+                                    ui,
+                                    l,
+                                    &mut self.app_config.config.star_rail,
+                                    &mut self.star_rail,
+                                    genshin_busy
+                                        || star_rail_scan_running
+                                        || star_rail_capture_busy
+                                        || update_in_progress,
+                                    restart_required,
+                                )
+                            },
+                            #[cfg(feature = "capture")]
+                            (Game::Genshin, ToolTab::Capture, layout::Pane::Settings) => {
+                                ui.add_enabled_ui(
+                                    !restart_required
+                                        && !(is_scan_running
                                             || is_server_running
                                             || star_rail_busy
-                                            || update_in_progress,
-                                        restart_required,
-                                    )
-                                },
-                                #[cfg(feature = "capture")]
-                                (Game::StarRail, ToolTab::Capture, layout::Pane::Settings) => {
-                                    ui.add_enabled_ui(
-                                        !restart_required
-                                            && !(genshin_busy
-                                                || star_rail_scan_running
-                                                || star_rail_manager_running
-                                                || update_in_progress)
-                                            && !star_rail_capture_busy,
-                                        |ui| {
-                                            star_rail_capture_tab::show_settings(
-                                                ui,
-                                                l,
-                                                &mut self.app_config.config.star_rail,
-                                                &mut self.star_rail.capture,
-                                                star_rail_capture_busy,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                },
-                                #[cfg(feature = "capture")]
-                                (Game::StarRail, ToolTab::Capture, layout::Pane::Status) => {
-                                    star_rail_capture_tab::show_status(
-                                        ui,
-                                        l,
-                                        &mut self.app_config.config.star_rail,
-                                        &mut self.star_rail.capture,
-                                        genshin_busy
+                                            || update_in_progress)
+                                        && !is_capture_busy,
+                                    |ui| {
+                                        capture_tab::show_settings(
+                                            ui,
+                                            l,
+                                            &mut self.capture_tab,
+                                            is_capture_busy,
+                                        )
+                                    },
+                                )
+                                .inner
+                            },
+                            #[cfg(feature = "capture")]
+                            (Game::Genshin, ToolTab::Capture, layout::Pane::Status) => {
+                                capture_tab::show_status(
+                                    ui,
+                                    l,
+                                    &mut self.capture_tab,
+                                    is_scan_running
+                                        || is_server_running
+                                        || star_rail_busy
+                                        || update_in_progress,
+                                    restart_required,
+                                )
+                            },
+                            #[cfg(feature = "capture")]
+                            (Game::StarRail, ToolTab::Capture, layout::Pane::Settings) => {
+                                ui.add_enabled_ui(
+                                    !restart_required
+                                        && !(genshin_busy
                                             || star_rail_scan_running
                                             || star_rail_manager_running
-                                            || update_in_progress,
-                                        restart_required,
-                                    )
-                                },
-                                _ => unreachable!("navigation is normalized before rendering"),
-                            }
-                        });
-                    },
-                );
+                                            || update_in_progress)
+                                        && !star_rail_capture_busy,
+                                    |ui| {
+                                        star_rail_capture_tab::show_settings(
+                                            ui,
+                                            l,
+                                            &mut self.app_config.config.star_rail,
+                                            &mut self.star_rail.capture,
+                                            star_rail_capture_busy,
+                                        )
+                                    },
+                                )
+                                .inner
+                            },
+                            #[cfg(feature = "capture")]
+                            (Game::StarRail, ToolTab::Capture, layout::Pane::Status) => {
+                                star_rail_capture_tab::show_status(
+                                    ui,
+                                    l,
+                                    &mut self.app_config.config.star_rail,
+                                    &mut self.star_rail.capture,
+                                    genshin_busy
+                                        || star_rail_scan_running
+                                        || star_rail_manager_running
+                                        || update_in_progress,
+                                    restart_required,
+                                )
+                            },
+                            _ => unreachable!("navigation is normalized before rendering"),
+                        }
+                    });
+                });
             });
 
         // Request repaint while tasks or update check are in progress

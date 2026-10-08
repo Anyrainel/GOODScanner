@@ -167,16 +167,7 @@ fn scanner_config(
 }
 
 fn ensure_output_dir(settings: &StarRailSettings) -> Result<PathBuf, UiError> {
-    let output_dir = PathBuf::from(settings.output_dir.trim());
-    if settings.output_dir.trim().is_empty() {
-        return Err(UiError::from_message(
-            UiText::new(
-                "请选择星穹铁道导出的保存文件夹。",
-                "Choose a folder for Star Rail exports.",
-            ),
-            "starRail.outputDir is empty",
-        ));
-    }
+    let output_dir = settings.export_directory();
     fs::create_dir_all(&output_dir).map_err(|error| {
         UiError::from_error(
             UiText::new(

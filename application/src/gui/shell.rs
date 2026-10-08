@@ -132,77 +132,87 @@ pub fn sidebar(ui: &mut egui::Ui, lang: &mut Lang, navigation: &mut GameNavigati
             .id_salt("navigation-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_width(width);
-                ui.visuals_mut().selection.bg_fill = theme::SELECTED;
-                ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
-                ui.visuals_mut().widgets.hovered.bg_stroke = egui::Stroke::NONE;
-                ui.add_space(18.0);
-                let mut tab = navigation.active_tab();
-                let original = tab;
-                for (value, zh, en) in [
-                    (ToolTab::Capture, "抓包器", "Capture"),
-                    (ToolTab::Scanner, "扫描器", "Scanner"),
-                    (ToolTab::Manager, "管理器", "Manager"),
-                ] {
-                    if value == ToolTab::Capture && !cfg!(feature = "capture") {
-                        continue;
+                egui::Frame::none().inner_margin(2.0).show(ui, |ui| {
+                    let width = (width - 4.0).max(1.0);
+                    ui.set_width(width);
+                    ui.visuals_mut().selection.bg_fill = theme::SELECTED;
+                    ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
+                    ui.visuals_mut().widgets.hovered.bg_stroke =
+                        egui::Stroke::new(1.0, theme::ACCENT);
+                    ui.visuals_mut().widgets.active.bg_stroke =
+                        egui::Stroke::new(1.0, theme::ACCENT);
+                    ui.visuals_mut().widgets.hovered.expansion = 0.0;
+                    ui.visuals_mut().widgets.active.expansion = 0.0;
+                    ui.add_space(18.0);
+                    let mut tab = navigation.active_tab();
+                    let original = tab;
+                    for (value, zh, en) in [
+                        (ToolTab::Capture, "抓包器", "Capture"),
+                        (ToolTab::Scanner, "扫描器", "Scanner"),
+                        (ToolTab::Manager, "管理器", "Manager"),
+                    ] {
+                        if value == ToolTab::Capture && !cfg!(feature = "capture") {
+                            continue;
+                        }
+                        let selected = tab == value;
+                        let button = egui::SelectableLabel::new(
+                            selected,
+                            egui::RichText::new(lang.t(zh, en)).color(if selected {
+                                theme::ACCENT
+                            } else {
+                                theme::MUTED
+                            }),
+                        );
+                        if ui
+                            .add_sized([width, 42.0], button)
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            tab = value;
+                        }
                     }
-                    let selected = tab == value;
-                    let button = egui::SelectableLabel::new(
-                        selected,
-                        egui::RichText::new(lang.t(zh, en)).color(if selected {
-                            theme::ACCENT
-                        } else {
-                            theme::MUTED
-                        }),
-                    );
-                    if ui
-                        .add_sized([width, 42.0], button)
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        tab = value;
+                    if tab != original {
+                        navigation.select_tab(tab);
                     }
-                }
-                if tab != original {
-                    navigation.select_tab(tab);
-                }
+                });
             });
     });
     super::layout::region(ui, footer, "sidebar-footer", |ui| {
-        ui.set_width(footer.width() - 4.0);
-        ui.spacing_mut().item_spacing.y = 4.0;
-        if theme::text_button(
-            ui,
-            lang.t("EN", "中"),
-            egui::vec2(ui.available_width(), 30.0),
-            false,
-        )
-        .on_hover_text(lang.t("Switch to English", "切换到中文"))
-        .clicked()
-        {
-            *lang = match lang {
-                Lang::Zh => Lang::En,
-                Lang::En => Lang::Zh,
-            };
-        }
-        if theme::text_button(
-            ui,
-            lang.t("关于", "About"),
-            egui::vec2(ui.available_width(), 30.0),
-            navigation.active_tab() == ToolTab::Credits,
-        )
-        .clicked()
-        {
-            navigation.select_tab(ToolTab::Credits);
-        }
-        let (label, url) = site(navigation.active_game);
-        if theme::text_button(ui, label, egui::vec2(ui.available_width(), 30.0), false)
-            .on_hover_text(url)
+        egui::Frame::none().inner_margin(2.0).show(ui, |ui| {
+            ui.set_width(footer.width() - 4.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            if theme::text_button(
+                ui,
+                lang.t("EN", "中"),
+                egui::vec2(ui.available_width(), 30.0),
+                false,
+            )
+            .on_hover_text(lang.t("Switch to English", "切换到中文"))
             .clicked()
-        {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-        }
+            {
+                *lang = match lang {
+                    Lang::Zh => Lang::En,
+                    Lang::En => Lang::Zh,
+                };
+            }
+            if theme::text_button(
+                ui,
+                lang.t("关于", "About"),
+                egui::vec2(ui.available_width(), 30.0),
+                navigation.active_tab() == ToolTab::Credits,
+            )
+            .clicked()
+            {
+                navigation.select_tab(ToolTab::Credits);
+            }
+            let (label, url) = site(navigation.active_game);
+            if theme::text_button(ui, label, egui::vec2(ui.available_width(), 30.0), false)
+                .on_hover_text(url)
+                .clicked()
+            {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+        });
     });
 }
 

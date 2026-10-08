@@ -8,6 +8,14 @@ pub enum Pane {
     Status,
 }
 
+/// Keep the title inset comfortable without wasting space above the log divider.
+pub fn workspace_bounds(rect: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        rect.min + egui::vec2(12.0, 12.0),
+        rect.max - egui::vec2(12.0, 4.0),
+    )
+}
+
 /// Fractions are session UI state, independent of task state and saved game settings.
 pub struct Splits {
     pub sidebar: f32,
@@ -142,8 +150,9 @@ pub fn workspace(
                         .stroke(egui::Stroke::new(1.0, theme::BORDER))
                         .rounding(14.0)
                         .inner_margin(16.0)
+                        .outer_margin(2.0)
                         .show(ui, |ui| {
-                            ui.set_width((content_width - 32.0).max(1.0));
+                            ui.set_width((content_width - 36.0).max(1.0));
                             render(ui, pane);
                         });
                 });
