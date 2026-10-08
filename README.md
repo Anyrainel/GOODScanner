@@ -29,7 +29,7 @@
 
 发布页提供两个可执行文件；它们都可在窗口顶部切换《原神》和《星穹铁道》：
 
-- `GGScanner.exe` — 两款游戏的抓包、OCR 扫描、导出与管理
+- **`GGScanner.exe`（推荐）** — 两款游戏的抓包、OCR 扫描、导出与管理
 - `GGScannerOCR.exe` — OCR 扫描、导出与管理，不包含抓包代码及依赖
 
 旧的 `GOODCapture.exe` 与 `GOODScanner.exe` 下载名称会继续保留，供已安装的旧版程序自动更新。详见[更名发布流程](docs/RENAME_RELEASE.md)。

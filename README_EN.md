@@ -29,7 +29,7 @@ The same `GGScannerOCR.exe` and `GGScanner.exe` serve both games. Genshin data r
 
 The releases page provides two executables. Both let you switch between Genshin and Star Rail at the top of the window:
 
-- `GGScanner.exe` — capture, OCR scanning, export, and manager flows for both games
+- **`GGScanner.exe` (recommended)** — capture, OCR scanning, export, and manager flows for both games
 - `GGScannerOCR.exe` — OCR scanning, export, and manager flows, without packet capture code or dependencies
 
 The old `GOODCapture.exe` and `GOODScanner.exe` downloads remain available as

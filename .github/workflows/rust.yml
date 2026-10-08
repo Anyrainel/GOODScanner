@@ -109,12 +109,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate bilingual release description
+        run: |
+          # Keep this machine-readable line for legacy and current updaters.
+          "Build revision: ${{ github.run_number }}" | Set-Content -Encoding utf8 release-notes.md
+          Add-Content -Encoding utf8 release-notes.md ""
+          Get-Content -Raw .github/release-description.md | Add-Content -Encoding utf8 release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
           name: ${{ env.VERSION }}
-          body: "Build revision: ${{ github.run_number }}"
+          body_path: release-notes.md
           files: |
             target/release/GGScannerOCR.exe
             target/release/GGScanner.exe
