@@ -6,8 +6,8 @@ Scanner, capture and manager use
 document contains both OCR mappings and the complete packet inventory catalog.
 Normal loads reuse it for two hours and can fall back to a validated local cache
 when updating fails. Forced refresh failures report an error and preserve the
-last valid file. The new filename ignores older separate caches without changing
-user settings or exports.
+last valid file. Loading the new file removes the obsolete separate cache and
+metadata files without changing user settings or exports.
 
 HoyoData generates the file after GenshinTools' OCR mappings are rebuilt. Both
 producer and client validate the format, capture provenance, nonempty OCR mapping

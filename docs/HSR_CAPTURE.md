@@ -14,7 +14,7 @@ All HSR inventory flows download the shared reference from
 at `data/hsr/hsr_scanner_data.json`. It contains OCR names, inventory definitions,
 affix values and packet/form mappings, with no achievement data. Scanner, capture
 and manager reuse this one cache. The old combined filename and the briefly
-separated OCR/capture directories are ignored rather than migrated.
+separated OCR/capture caches are deleted on load, along with empty obsolete directories.
 
 Only capture with Achievements selected loads `/good/hsr_achievement_ids.json`,
 cached independently in `data/hsr/`. The IDs must come from the same source

@@ -37,6 +37,8 @@ src/
 ├── cli.rs                     # CLI entry point, orchestrates all scanning + run_server_core()
 ├── server.rs                  # HTTP server (tiny_http): /manage, /equip, /status, /result, /artifacts
 ├── updater.rs                 # Auto-update: GitHub release check + self-replace
+├── game_data.rs               # Shared non-achievement OCR/capture reference and cache
+├── game_data/                 # Capture types and OCR mapping document types
 ├── manager/                   # Artifact lock/equip manager (server-driven)
 │   ├── orchestrator.rs        # ArtifactManager: top-level execute() and execute_equip()
 │   ├── lock_manager.rs        # LockManager: single-pass backpack scan + per-page lock toggle
@@ -90,7 +92,6 @@ src/capture/
 ├── mod.rs
 ├── packet_capture.rs          # UDP capture via pktmon on ports 22101–22102
 ├── monitor.rs                 # CaptureMonitor: orchestrates capture, decryption, data accumulation
-├── data_cache.rs              # Downloads/caches data_cache.json from ggartifact.com
 ├── data_types.rs              # DataCache types (irminsul/anime-game-data format)
 ├── player_data.rs             # PlayerData: converts captured packets → GOOD v3 export
 └── testdata/                  # Binary test fixtures (items.bin, avatars.bin, noise.bin)

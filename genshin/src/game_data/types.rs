@@ -1,7 +1,4 @@
-/// Types for deserializing `data_cache.json` (irminsul/anime-game-data format).
-///
-/// These replicate the `Database` struct from the `anime-game-data` crate exactly,
-/// so that `data_cache.json` files are interchangeable between yas and irminsul.
+/// Capture-section types in the shared Genshin scanner reference.
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};

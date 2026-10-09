@@ -8,10 +8,10 @@ For characters, we need to read:
 - constellation (0-6) from 命之座 panel
 - A/E/Q talent levels (1-13) from 天赋 panel
 
-We need to convert name to the character ids, element can be helpful for validation. (mappings.json will have element soon.)
+We convert names to character IDs using the shared scanner document's mappings. Elements help validate the match.
 Level cap is helpful to determine the ascension level.
 Constellation is shown as 6 icons with labels, only activated icons have bright glow. If unsure, clicking the icon will also open details on the left where OCR can read "已激活" on already activated constellations (1-N), or a "激活" button on the next constellation to unlock (N+1), or a long text saying you have to unlock previous constellation first (N+2 or above).
-The output talent levels need to be 1-10, we can strip out the +3 talent levels from the parsed constellation, with the data from mappings.json. In addition, tartaglia always has basic attack level +1, so we need to reduce his first talent level by 1 after scanning.
+The output talent levels need to be 1-10. Strip constellation talent bonuses using the shared scanner document's mappings. Tartaglia's basic attack bonus also needs to be removed after scanning.
 The constellation icons and talent levels have fixed position on the screen, and other text just vary slightly due to string length (semi-fixed positions).
 
 ## Weapon Data

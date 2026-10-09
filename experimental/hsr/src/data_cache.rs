@@ -17,9 +17,7 @@ pub const ACHIEVEMENT_IDS_URL: &str = "https://hsr.ggartifact.com/good/hsr_achie
 pub const DATA_CACHE_DIRECTORY: &str = "data/hsr";
 const DATA_FILE: &str = "hsr_scanner_data.json";
 const ACHIEVEMENT_FILE: &str = "hsr_achievement_ids.json";
-// Old combined caches, including the briefly separated ocr/capture caches,
-// carry achievement IDs and formatVersion 1. These derived files are ignored;
-// the new filenames and formatVersion 2 establish one shared inventory cache.
+// Old combined and briefly separated caches are removed at the new boundary.
 const TTL: u64 = 2 * 3600;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
@@ -102,6 +100,7 @@ fn error(code: &'static str, detail: impl Into<String>) -> HsrError {
 pub fn load_data_cache() -> HsrResult<ReferenceCache> {
     match load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, false) {
         Ok(cache) => Ok(cache),
+        Err(error) if error.code() == "HSR-REF-CACHE-CLEANUP" => Err(error),
         Err(error) => match crate::load_embedded_gilore_reference() {
             Ok(cache) => {
                 yas::log_warn!(
@@ -134,6 +133,7 @@ pub fn load_achievement_data(
     );
     match result {
         Ok(cache) => Ok(cache),
+        Err(failure) if failure.code() == "HSR-REF-CACHE-CLEANUP" => Err(failure),
         Err(failure) if !force => {
             let embedded = crate::load_embedded_gilore_reference()?;
             if embedded.revision() != references.revision() {
@@ -185,6 +185,35 @@ fn load_document<T: DeserializeOwned + Serialize, R>(
     let _guard = CACHE_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
+    for directory in [root.to_path_buf(), root.join("ocr"), root.join("capture")] {
+        let old = directory.join("hsr_data_cache.json");
+        match fs::remove_file(&old) {
+            Ok(()) => {},
+            Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {},
+            Err(failure) => {
+                return Err(error(
+                    "HSR-REF-CACHE-CLEANUP",
+                    format!("{}: {failure}", old.display()),
+                ))
+            },
+        }
+    }
+    for directory in [root.join("ocr"), root.join("capture")] {
+        match fs::remove_dir(&directory) {
+            Ok(()) => {},
+            Err(failure)
+                if matches!(
+                    failure.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) => {},
+            Err(failure) => {
+                return Err(error(
+                    "HSR-REF-CACHE-CLEANUP",
+                    format!("{}: {failure}", directory.display()),
+                ))
+            },
+        }
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -313,12 +342,25 @@ mod tests {
                 .as_nanos()
         ));
         let initial = document();
-        // A legacy combined cache is deliberately ignored at the new boundary.
+        // Only known obsolete cache files are removed; other files are preserved.
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("hsr_data_cache.json"), b"legacy cache").unwrap();
+        for directory in ["ocr", "capture"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+            fs::write(
+                root.join(directory).join("hsr_data_cache.json"),
+                b"legacy cache",
+            )
+            .unwrap();
+        }
+        fs::write(root.join("capture/keep.txt"), b"unrelated file").unwrap();
         let (url, task) = server(200, serde_json::to_vec(&initial).unwrap());
         let references = load_from_url(&root, &url, false).unwrap();
         task.join().unwrap();
+        assert!(!root.join("hsr_data_cache.json").exists());
+        assert!(!root.join("ocr").exists());
+        assert!(!root.join("capture/hsr_data_cache.json").exists());
+        assert!(root.join("capture/keep.txt").exists());
         assert_eq!(references.achievement_count(), 0);
         assert!(!root.join(ACHIEVEMENT_FILE).exists());
         // Scanner, manager and capture all reuse this file without another request.

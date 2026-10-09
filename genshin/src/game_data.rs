@@ -79,9 +79,19 @@ pub fn cache_updated_at() -> Option<u64> {
     (metadata.fetched_at > 0).then_some(metadata.fetched_at)
 }
 
-// The new filename invalidates old mappings/capture caches without touching user data.
+// Remove obsolete mappings/capture caches without touching user data.
 pub fn load_from_url(path: &Path, url: &str, force: bool) -> Result<ScannerData> {
     let _guard = LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(root) = path.parent() {
+        for filename in [
+            "mappings.json",
+            "mappings_meta.json",
+            "data_cache.json",
+            "data_cache_meta.json",
+        ] {
+            crate::fs_utils::remove_file_if_exists(root.join(filename))?;
+        }
+    }
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let cached = fs::read(path)
         .ok()
@@ -199,6 +209,8 @@ mod tests {
         let (url, task) = server(serde_json::to_vec(&document()).unwrap());
         let loaded = load_from_url(&path, &url, false).unwrap();
         task.join().unwrap();
+        assert!(!root.join("mappings.json").exists());
+        assert!(!root.join("data_cache.json").exists());
         assert_eq!(loaded.capture.artifact_map.len(), 100);
         // The server has stopped: all modes reuse the same complete cached document.
         assert!(load_from_url(&path, &url, false).is_ok());
