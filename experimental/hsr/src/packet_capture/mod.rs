@@ -207,6 +207,11 @@ impl HsrPacketDecoder {
                 },
             }
         }
+        let captured = self.sniffer.key_exchange_captured(self.conversation);
+        if captured && !self.state.has_key_exchange {
+            yas::log_info!("已捕获登录握手", "Login handshake captured");
+        }
+        self.state.has_key_exchange = captured;
         Ok(())
     }
 
@@ -268,6 +273,8 @@ pub struct HsrCaptureState {
     pub capturing: bool,
     /// True only after all selected categories arrive.
     pub complete: bool,
+    /// Actual token/session-seed capture, independent of decoded command counts.
+    pub has_key_exchange: bool,
     pub packet_count: usize,
     pub command_count: usize,
     pub last_transport_error: Option<String>,
@@ -534,15 +541,15 @@ impl HsrCaptureMonitor {
             .is_some_and(|start| start.elapsed().as_secs() >= CAPTURE_TIMEOUT_SECS)
         {
             let state = self.decoder.state();
-            let detail = format!("capture timed out after {CAPTURE_TIMEOUT_SECS} seconds; packets={}; decryptedCommands={}; characters={}; lightCones={}; relics={}; achievements={}; lastTransportError={}",
-                state.packet_count, state.command_count, state.character_count, state.light_cone_count,
+            let detail = format!("capture timed out after {CAPTURE_TIMEOUT_SECS} seconds; packets={}; decryptedCommands={}; keyExchangeCaptured={}; characters={}; lightCones={}; relics={}; achievements={}; lastTransportError={}",
+                state.packet_count, state.command_count, state.has_key_exchange, state.character_count, state.light_cone_count,
                 state.relic_count, state.achievement_count, state.last_transport_error.as_deref().unwrap_or("none"));
             let hint = if state.packet_count == 0 {
                 LocalizedText::new("未收到星穹铁道流量。请确认游戏正在本机运行，重新抓包后再登录。",
                     "No Star Rail traffic was received. Check that the game is running on this PC, then start capture before logging in.")
-            } else if state.command_count == 0 {
-                LocalizedText::new("已收到网络流量，但未能解密登录数据。请更新 GGScanner，并在登录前开始抓包。",
-                    "Traffic was received, but login data could not be decrypted. Update GGScanner and start capture before logging in.")
+            } else if !state.has_key_exchange {
+                LocalizedText::new("已收到网络流量，但未捕获登录握手。请在启动游戏前开始抓包，再重新登录；若仍失败，请更新 GGScanner。",
+                    "Traffic was received, but the login handshake was not captured. Start capture before launching the game, then log in again. If it still fails, update GGScanner.")
             } else {
                 LocalizedText::new("已读取游戏流量，但数据尚不完整。请重新登录抓包；若仍失败，请复制完整错误。",
                     "Game traffic was decoded, but some data is missing. Capture a new login; if it fails again, copy the full error.")
@@ -840,5 +847,32 @@ mod tests {
         let message = error.localized_message(crate::Language::En);
         assert!(message.contains("packets=12"));
         assert!(message.contains("decryptedCommands=0"));
+    }
+
+    #[test]
+    fn key_exchange_state_tracks_transport_and_resets_without_inventory() {
+        use crate::network::tests::{frame, token};
+        let keys = HashMap::from([(0, vec![0; 4096])]);
+        let mut decoder = HsrPacketDecoder::new(
+            crate::load_embedded_gilore_reference().unwrap(),
+            CaptureTargets::default(),
+        )
+        .unwrap();
+        decoder.dispatch_keys = keys.clone();
+        decoder.sniffer = GameSniffer::new().set_initial_keys(keys);
+        decoder
+            .receive_packet(frame(77, 0, &[8, 42], &[0; 4096]))
+            .unwrap();
+        assert!(decoder.state.command_count > 0);
+        assert!(!decoder.state.has_key_exchange);
+        decoder
+            .receive_packet(frame(77, 1, &token(0x1234567890, 993), &[0; 4096]))
+            .unwrap();
+        assert!(decoder.state.has_key_exchange);
+        assert!(!decoder.state.has_characters);
+        assert!(!decoder.state.has_items);
+        assert!(!decoder.state.complete);
+        decoder.reset();
+        assert!(!decoder.state.has_key_exchange);
     }
 }

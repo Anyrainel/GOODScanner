@@ -249,6 +249,7 @@ impl StarRailCaptureState {
         *lock_shared(&self.shared) = HsrCaptureState {
             capturing: false,
             complete: true,
+            has_key_exchange: true,
             achievement_count,
             completed_ids,
             inventory: Some(inventory),
@@ -343,17 +344,12 @@ pub fn show_status(
     }
     let shared = lock_shared(&state.shared).clone();
     use super::capture_status::{self, Stage};
-    let connected = shared.command_count > 0
-        || shared.has_characters
-        || shared.has_light_cones
-        || shared.has_relics
-        || shared.has_achievements;
     let stage = match &state.phase {
         CapturePhase::Stopped => Stage::Stopped,
         CapturePhase::Idle => Stage::Ready,
         CapturePhase::Initializing => Stage::Starting,
         CapturePhase::Waiting => capture_status::waiting(
-            connected,
+            shared.has_key_exchange,
             (settings.capture_include_characters && !shared.has_characters)
                 || (settings.capture_include_light_cones && !shared.has_light_cones)
                 || (settings.capture_include_relics && !shared.has_relics),
@@ -383,7 +379,7 @@ pub fn show_status(
     };
     super::theme::task_status(ui, lang, feedback.as_ref(), text);
     if capture_targets(settings).any() {
-        capture_status::show_connection(ui, lang, stage, connected);
+        capture_status::show_connection(ui, lang, stage, shared.has_key_exchange);
     }
     for (selected, key, zh, en, complete, count) in [
         (
@@ -426,7 +422,7 @@ pub fn show_status(
                 step.state = super::task_progress::StepState::Complete;
             } else if matches!(state.phase, CapturePhase::Failed(_) | CapturePhase::Stopped) {
                 step.state = super::task_progress::StepState::Interrupted;
-            } else if matches!(state.phase, CapturePhase::Waiting) {
+            } else if matches!(state.phase, CapturePhase::Waiting) && shared.has_key_exchange {
                 step.state = super::task_progress::StepState::Running;
             }
             super::task_progress::row(ui, lang, &step);
@@ -834,9 +830,13 @@ mod feedback_tests {
         let login = texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
         assert!(login.iter().any(|s| s == "Launch the game and log in"));
         lock_shared(&state.shared).command_count = 1;
+        let dispatch =
+            texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
+        assert!(dispatch.iter().any(|s| s == "Launch the game and log in"));
+        lock_shared(&state.shared).has_key_exchange = true;
         let inventory =
             texts(|ui| show_status(ui, Lang::En, &mut settings, &mut state, false, false));
-        assert!(inventory.iter().any(|s| s == "Waiting for remaining data"));
+        assert!(inventory.iter().any(|s| s == "Receiving game data"));
         assert!(!inventory.iter().any(|s| s.contains("Open Achievements")));
         {
             let mut shared = lock_shared(&state.shared);

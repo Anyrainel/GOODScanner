@@ -62,6 +62,8 @@ pub struct CaptureState {
     pub capturing: bool,
     /// All requested packet categories have been received; capture auto-stopped.
     pub complete: bool,
+    /// Actual token response recognized by the transport; independent of inventory.
+    pub has_key_exchange: bool,
     pub has_characters: bool,
     pub has_items: bool,
     pub has_achievements: bool,
@@ -77,6 +79,7 @@ impl Default for CaptureState {
         Self {
             capturing: false,
             complete: false,
+            has_key_exchange: false,
             has_characters: false,
             has_items: false,
             has_achievements: false,
@@ -241,7 +244,15 @@ impl CaptureMonitor {
     }
 
     fn handle_packet(&mut self, packet: Vec<u8>) {
-        let Some(GamePacket::Commands(commands)) = self.sniffer.receive_packet(packet) else {
+        let decoded = self.sniffer.receive_packet(packet);
+        if let Ok(mut state) = self.state.lock() {
+            let captured = self.sniffer.key_exchange_captured();
+            if captured && !state.has_key_exchange {
+                log_info!("已捕获登录握手", "Login handshake captured");
+            }
+            state.has_key_exchange = captured;
+        }
+        let Some(GamePacket::Commands(commands)) = decoded else {
             return;
         };
 

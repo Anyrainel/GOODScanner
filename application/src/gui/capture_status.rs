@@ -27,7 +27,7 @@ impl Stage {
             Self::Ready => lang.t("请先关闭游戏", "Close the game first"),
             Self::Starting => lang.t("正在准备抓包", "Preparing capture"),
             Self::Login => lang.t("请启动游戏并登录", "Launch the game and log in"),
-            Self::Data => lang.t("正在等待剩余类别数据", "Waiting for remaining data"),
+            Self::Data => lang.t("正在接收游戏数据", "Receiving game data"),
             Self::Achievements => lang.t("请在游戏中打开成就", "Open Achievements in the game"),
             Self::Stopping => lang.t("正在停止抓包", "Stopping capture"),
             Self::Exporting => lang.t("正在导出数据", "Exporting data"),
@@ -39,11 +39,11 @@ impl Stage {
 }
 
 pub(super) fn waiting(
-    connected: bool,
+    key_exchange_captured: bool,
     missing_inventory: bool,
     missing_achievements: bool,
 ) -> Stage {
-    if !connected {
+    if !key_exchange_captured {
         Stage::Login
     } else if !missing_inventory && missing_achievements {
         Stage::Achievements
@@ -52,7 +52,12 @@ pub(super) fn waiting(
     }
 }
 
-pub(super) fn show_connection(ui: &mut egui::Ui, lang: Lang, stage: Stage, connected: bool) {
+pub(super) fn show_connection(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    stage: Stage,
+    key_exchange_captured: bool,
+) {
     if stage == Stage::Done {
         widgets::hint(
             ui,
@@ -70,13 +75,13 @@ pub(super) fn show_connection(ui: &mut egui::Ui, lang: Lang, stage: Stage, conne
             ),
         );
     }
-    let mut step = Step::new("login", "登录数据", "Login data");
+    let mut step = Step::new("key_exchange", "登录握手", "Login handshake");
     step.show_count = false;
-    step.state = if connected {
+    step.state = if key_exchange_captured {
         StepState::Complete
     } else if matches!(stage, Stage::Stopped | Stage::Failed) {
         StepState::Interrupted
-    } else if matches!(stage, Stage::Starting | Stage::Login) {
+    } else if stage == Stage::Login {
         StepState::Running
     } else {
         StepState::Pending
@@ -89,16 +94,48 @@ pub(crate) mod feedback_tests {
     use super::*;
 
     #[test]
-    fn login_step_never_shows_a_meaningless_item_count() {
+    fn handshake_step_never_shows_a_meaningless_item_count() {
         let content = texts(|ui| show_connection(ui, Lang::En, Stage::Login, false));
-        assert!(content.iter().any(|text| text == "Login data"));
+        assert!(content.iter().any(|text| text == "Login handshake"));
         assert!(!content.iter().any(|text| text == "0"));
     }
 
-    pub(crate) fn texts(mut draw: impl FnMut(&mut egui::Ui)) -> Vec<String> {
-        fn collect(shape: &egui::Shape, texts: &mut Vec<String>) {
+    #[test]
+    fn only_a_captured_exchange_marks_the_handshake_complete() {
+        for stage in [Stage::Login, Stage::Data, Stage::Done, Stage::Failed] {
+            let missing = colored_texts(|ui| show_connection(ui, Lang::En, stage, false));
+            assert!(missing
+                .iter()
+                .any(|(text, color)| text == "Login handshake"
+                    && *color != super::super::theme::ACCENT));
+            let captured = colored_texts(|ui| show_connection(ui, Lang::En, stage, true));
+            assert!(captured
+                .iter()
+                .any(|(text, color)| text == "Login handshake"
+                    && *color == super::super::theme::ACCENT));
+        }
+    }
+
+    pub(crate) fn texts(draw: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+        colored_texts(draw)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    pub(crate) fn colored_texts(
+        mut draw: impl FnMut(&mut egui::Ui),
+    ) -> Vec<(String, egui::Color32)> {
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Color32)>) {
             match shape {
-                egui::Shape::Text(text) => texts.push(text.galley.job.text.clone()),
+                egui::Shape::Text(text) => {
+                    for section in &text.galley.job.sections {
+                        texts.push((
+                            text.galley.job.text[section.byte_range.clone()].into(),
+                            section.format.color,
+                        ));
+                    }
+                },
                 egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
                 _ => {},
             }

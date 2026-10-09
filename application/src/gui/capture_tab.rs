@@ -242,6 +242,7 @@ impl CaptureTabState {
         });
         *self.capture_state.lock().unwrap() = CaptureState {
             complete: true,
+            has_key_exchange: true,
             ..CaptureState::default()
         };
         self.pending_export = Some(PendingExport { rx: result_rx });
@@ -502,21 +503,13 @@ pub fn show_status(
         .try_lock()
         .map(|s| s.clone())
         .unwrap_or_default();
-    let received = {
-        let s = &shared;
-        s.has_characters
-            || s.has_items
-            || s.has_achievements
-            || s.weapon_count > 0
-            || s.artifact_count > 0
-    };
     use super::capture_status::{self, Stage};
     let stage = match &tab.phase {
         Phase::Stopped => Stage::Stopped,
         Phase::Idle => Stage::Ready,
         Phase::Initializing => Stage::Starting,
         Phase::Waiting => capture_status::waiting(
-            received,
+            shared.has_key_exchange,
             (tab.include_characters && !shared.has_characters)
                 || ((tab.include_weapons || tab.include_artifacts) && !shared.has_items),
             tab.include_achievements && !shared.has_achievements,
@@ -554,7 +547,7 @@ pub fn show_status(
         || tab.include_artifacts
         || tab.include_achievements
     {
-        capture_status::show_connection(ui, l, stage, received);
+        capture_status::show_connection(ui, l, stage, shared.has_key_exchange);
     }
     {
         let cs = &shared;
@@ -599,7 +592,7 @@ pub fn show_status(
                     step.state = super::task_progress::StepState::Complete;
                 } else if matches!(tab.phase, Phase::Failed(_) | Phase::Stopped) {
                     step.state = super::task_progress::StepState::Interrupted;
-                } else if matches!(tab.phase, Phase::Waiting) {
+                } else if matches!(tab.phase, Phase::Waiting) && shared.has_key_exchange {
                     step.state = super::task_progress::StepState::Running;
                 }
                 super::task_progress::row(ui, l, &step);
@@ -818,12 +811,16 @@ mod feedback_tests {
         let login = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
         assert!(login.iter().any(|s| s == "Launch the game and log in"));
         assert!(!login.iter().any(|s| s.contains("Open Achievements")));
+        tab.capture_state.lock().unwrap().has_key_exchange = true;
+        let handshake = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
+        assert!(handshake.iter().any(|s| s == "Receiving game data"));
+        assert!(!tab.capture_state.lock().unwrap().has_characters);
         {
             let mut shared = tab.capture_state.lock().unwrap();
             shared.has_characters = true;
         }
         let inventory = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));
-        assert!(inventory.iter().any(|s| s == "Waiting for remaining data"));
+        assert!(inventory.iter().any(|s| s == "Receiving game data"));
         assert!(!inventory.iter().any(|s| s.contains("Open Achievements")));
         tab.capture_state.lock().unwrap().has_items = true;
         let achievements = texts(|ui| show_status(ui, Lang::En, &mut tab, false, false));

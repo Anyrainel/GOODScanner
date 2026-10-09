@@ -44,10 +44,10 @@ pub enum GamePacket {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn frame(conv: u32, sequence: u32, body: &[u8], key: &[u8]) -> Vec<u8> {
+    pub(crate) fn frame(conv: u32, sequence: u32, body: &[u8], key: &[u8]) -> Vec<u8> {
         let mut command = 0x9D74C714u32.to_be_bytes().to_vec();
         command.extend_from_slice(&65500u16.to_be_bytes()); // intentionally unrelated command ID
         command.extend_from_slice(&0u16.to_be_bytes());
@@ -80,7 +80,7 @@ mod tests {
         packet
     }
 
-    fn token(seed: u64, tag: u32) -> Vec<u8> {
+    pub(crate) fn token(seed: u64, tag: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         let mut out = protobuf::CodedOutputStream::vec(&mut bytes);
         out.write_uint64(tag, seed).unwrap();
@@ -111,14 +111,18 @@ mod tests {
         let mut sniffer = GameSniffer::new().set_initial_keys(HashMap::from([(0, key.clone())]));
         let first = token(0x1234567890, 993);
         let second = token(0x2345678901, 21);
+        assert!(!sniffer.key_exchange_captured(None));
         assert_eq!(
             decoded(&mut sniffer, frame(11, 0, &first, &key)),
             vec![first]
         );
+        assert!(sniffer.key_exchange_captured(Some(11)));
+        assert!(!sniffer.key_exchange_captured(Some(22)));
         assert_eq!(
             decoded(&mut sniffer, frame(22, 0, &second, &key)),
             vec![second]
         );
+        assert!(sniffer.key_exchange_captured(Some(22)));
         let payload = vec![8, 42];
         assert_eq!(
             decoded(
@@ -145,6 +149,7 @@ mod tests {
             decoded(&mut sniffer, frame(33, 0, &[8, 1], &key)),
             vec![vec![8, 1], vec![8, 2]]
         );
+        assert!(!sniffer.key_exchange_captured(None));
         assert!(decoded(&mut sniffer, frame(33, 1, &[8, 2], &key)).is_empty());
     }
 
@@ -333,6 +338,15 @@ impl GameSniffer {
     pub fn set_initial_keys(mut self, initial_keys: HashMap<u32, Vec<u8>>) -> Self {
         self.initial_keys = initial_keys;
         self
+    }
+
+    /// A token response supplied a session seed for the selected conversation.
+    /// Before inventory selects a conversation, report any captured exchange.
+    pub fn key_exchange_captured(&self, selected: Option<u32>) -> bool {
+        match selected {
+            Some(id) => self.conversations.get(&id).is_some_and(|c| c.session_key),
+            None => self.conversations.values().any(|c| c.session_key),
+        }
     }
 
     #[instrument(skip_all, fields(len = bytes.len()))]

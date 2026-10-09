@@ -1,0 +1,21 @@
+[package]
+name = "auto-artifactarium"
+version = "1.4.0"
+edition = "2024"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+base64 = "0.22"
+etherparse = "0.16.0"
+kcp = { git = "https://github.com/hashblen/mhy-kcp" }
+protobuf = "3.7.1"
+rand_mt = "4.2"
+tracing = "0.1"
+rsa = "0.9"
+clap = { version = "4.5.47", features = ["derive"] }
+anyhow = "1.0.99"
+
+[build-dependencies]
+protobuf-codegen = "3.7.1"

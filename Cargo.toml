@@ -6,6 +6,10 @@ members = [
     "application",
     "experimental/hsr",
 ]
+exclude = ["vendor/auto-artifactarium"]
+
+[patch."https://github.com/konkers/auto-artifactarium"]
+auto-artifactarium = { path = "vendor/auto-artifactarium" }
 
 [profile.release]
 lto = true
