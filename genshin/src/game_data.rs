@@ -215,6 +215,25 @@ mod tests {
         // The server has stopped: all modes reuse the same complete cached document.
         assert!(load_from_url(&path, &url, false).is_ok());
         assert!(!root.join("mapping_achievements.json").exists());
+        let mut expired: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        expired["fetchedAt"] = (SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - TTL
+            - 1)
+        .into();
+        fs::write(&path, serde_json::to_vec(&expired).unwrap()).unwrap();
+        let mut next = document();
+        next["sourceRevision"] = "next-revision".into();
+        next["capture"]["git_hash"] = "next-revision".into();
+        let (url, task) = server(serde_json::to_vec(&next).unwrap());
+        assert_eq!(
+            load_from_url(&path, &url, false).unwrap().source_revision,
+            "next-revision"
+        );
+        task.join().unwrap();
         let valid_bytes = fs::read(&path).unwrap();
         let mut wrong_revision = document();
         wrong_revision["sourceRevision"] = "wrong-revision".into();

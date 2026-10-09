@@ -15,5 +15,9 @@ collections, complete capture tables and artifact catalog. Clients no longer
 download a historical artifact catalog to repair incomplete published data.
 
 Achievements remain in `mapping_achievements.json`. Only an achievement scan loads
-this catalog. The Scanner refresh button includes it when achievement scanning
-is selected; Manager and Capture refresh only the shared inventory reference.
+this catalog, checking it before the selected scan phases begin. Its cache lasts
+24 hours. Scanner shows separate base-data and achievement-data refresh buttons,
+download ages and errors, regardless of whether achievements are selected.
+Manager and Capture refresh only the shared inventory reference. The manager
+server rechecks base data and replaces its mappings before every accepted job,
+including jobs submitted after the two-hour base-data cache expires.

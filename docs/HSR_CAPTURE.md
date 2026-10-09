@@ -22,9 +22,10 @@ revision as the inventory reference. Inventory-only capture and all scanner and
 manager operations work without achievement references. The full achievement OCR
 mapping is a separate product and is not downloaded by these inventory flows.
 
-Both downloads use the two-hour cache policy. Refresh data replaces the shared
-inventory cache and, only in Capture with Achievements selected, refreshes the ID
-file too. Failed or malformed replacements preserve the previous cache and report
+Both downloads use the two-hour cache policy. Base data has its own refresh
+button and download age. Capture with Achievements selected shows an independent
+achievement-ID refresh button and age; refreshing base data never refreshes the ID
+file. Failed or malformed replacements preserve the previous cache and report
 the error. Normal loads can use a last valid cache; a cold offline load can use
 the bundled reference. Achievement fallback is allowed only for matching revisions.
 

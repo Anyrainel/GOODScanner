@@ -1,7 +1,7 @@
 //! Achievement name → id catalog from ggartifact `mapping_achievements.json`.
 //!
 //! Isolated from `MappingManager` (characters/weapons/sets). Cache path, TTL,
-//! and stale-cache fallback match `mappings.json`.
+//! and stale-cache fallback are independent of the shared inventory reference.
 //!
 //! Schema v3 uses localized `name` objects and ordered `stages` groups.
 //! Older `n` names and flat `{achievements:[...]}` caches are still accepted.
@@ -167,14 +167,12 @@ impl AchievementCatalog {
     }
 
     pub fn new() -> Result<Self> {
-        fetch_if_needed()?;
+        fetch_if_needed(false)?;
         Self::load_from_cache()
     }
 
     pub fn force_refresh() -> Result<()> {
-        crate::fs_utils::remove_file_if_exists(CATALOG_META_PATH)?;
-        crate::fs_utils::remove_file_if_exists(CATALOG_CACHE_PATH)?;
-        fetch_if_needed()?;
+        fetch_if_needed(true)?;
         Ok(())
     }
 
@@ -602,19 +600,16 @@ fn save_meta(meta: &CatalogMeta) -> Result<()> {
 }
 
 fn is_fresh(last_fetch_time: u64, ttl_secs: u64) -> bool {
-    last_fetch_time > 0 && (now_secs() - last_fetch_time) < ttl_secs
+    last_fetch_time > 0
+        && now_secs()
+            .checked_sub(last_fetch_time)
+            .is_some_and(|age| age < ttl_secs)
 }
 
-fn cache_has_categories() -> bool {
-    fs::read_to_string(CATALOG_CACHE_PATH)
-        .map(|raw| raw.contains("\"categories\""))
-        .unwrap_or(false)
-}
-
-fn fetch_if_needed() -> Result<()> {
+fn fetch_if_needed(force: bool) -> Result<()> {
     let meta = load_meta();
-    let cache_exists = Path::new(CATALOG_CACHE_PATH).exists();
-    if cache_exists && is_fresh(meta.last_fetch_time, CATALOG_TTL_SECS) && cache_has_categories() {
+    let cache_exists = AchievementCatalog::load_from_cache().is_ok();
+    if !force && cache_exists && is_fresh(meta.last_fetch_time, CATALOG_TTL_SECS) {
         return Ok(());
     }
 
@@ -640,14 +635,17 @@ fn fetch_if_needed() -> Result<()> {
                 if parsed.categories.is_empty() && parsed.achievements.is_empty() {
                     bail!("downloaded mapping_achievements.json has no achievements");
                 }
-                fs::write(CATALOG_CACHE_PATH, &body).with_context(|| {
+                AchievementCatalog::from_mapping_file(parsed)?;
+                let temporary = Path::new(CATALOG_CACHE_PATH).with_extension("json.tmp");
+                fs::write(&temporary, &body).with_context(|| {
                     format!("achievement catalog cache could not be written: {CATALOG_CACHE_PATH}")
                 })?;
+                fs::rename(temporary, CATALOG_CACHE_PATH)?;
                 save_meta(&CatalogMeta {
                     last_fetch_time: now_secs(),
                 })?;
                 log_debug!("成就目录已更新", "Achievement catalog updated");
-            } else if cache_exists {
+            } else if cache_exists && !force {
                 log_warn!(
                     "获取数据失败 (HTTP {})，使用本地缓存",
                     "Fetch failed (HTTP {}), using local cache",
@@ -655,15 +653,15 @@ fn fetch_if_needed() -> Result<()> {
                 );
             } else {
                 bail!(
-                    "获取成就目录失败 (HTTP {})，且无本地缓存。请检查网络连接。\n\
-                     / Failed to fetch achievement catalog (HTTP {}), no local cache. Check your network connection.",
+                    "获取成就目录失败 (HTTP {})。请检查网络连接。\n\
+                     / Failed to fetch achievement catalog (HTTP {}). Check your network connection.",
                     response.status(),
                     response.status()
                 );
             }
         },
         Err(e) => {
-            if cache_exists {
+            if cache_exists && !force {
                 log_warn!(
                     "无法下载最新成就目录；将使用本地缓存。完整错误详情: {:#}",
                     "The latest achievement catalog could not be downloaded; the local cache will be used. Full error details: {:#}",
@@ -683,6 +681,15 @@ fn fetch_if_needed() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn achievement_cache_expires_after_a_day_and_rejects_future_timestamps() {
+        let now = now_secs();
+        assert!(is_fresh(now, CATALOG_TTL_SECS));
+        assert!(!is_fresh(now - CATALOG_TTL_SECS - 1, CATALOG_TTL_SECS));
+        assert!(!is_fresh(now + 3600, CATALOG_TTL_SECS));
+        assert!(!is_fresh(0, CATALOG_TTL_SECS));
+    }
 
     fn sample() -> AchievementCatalog {
         AchievementCatalog::from_entries(&[

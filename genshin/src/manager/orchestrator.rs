@@ -65,6 +65,9 @@ impl ArtifactManager {
     pub fn mappings(&self) -> &Arc<MappingManager> {
         &self.mappings
     }
+    pub fn replace_mappings(&mut self, mappings: Arc<MappingManager>) {
+        self.mappings = mappings;
+    }
     pub fn pools(&self) -> &Arc<SharedOcrPools> {
         &self.pools
     }

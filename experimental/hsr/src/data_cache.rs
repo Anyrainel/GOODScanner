@@ -154,12 +154,20 @@ pub fn load_achievement_data(
 
 /// Metadata for the UI. Reading it does not load or refresh the reference data.
 pub fn cache_updated_at() -> Option<u64> {
+    document_updated_at(DATA_FILE)
+}
+
+pub fn achievement_cache_updated_at() -> Option<u64> {
+    document_updated_at(ACHIEVEMENT_FILE)
+}
+
+fn document_updated_at(filename: &str) -> Option<u64> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Metadata {
         fetched_at: u64,
     }
-    let file = fs::File::open(Path::new(DATA_CACHE_DIRECTORY).join(DATA_FILE)).ok()?;
+    let file = fs::File::open(Path::new(DATA_CACHE_DIRECTORY).join(filename)).ok()?;
     let metadata: Metadata = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
     (metadata.fetched_at > 0).then_some(metadata.fetched_at)
 }
@@ -428,8 +436,18 @@ mod tests {
             .push(character);
         // A packet table change must come from the same download too.
         next["packet"]["sub"][0]["base"] = 9.5.into();
+        let mut expired: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        expired["fetchedAt"] = (SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - TTL
+            - 1)
+        .into();
+        fs::write(&path, serde_json::to_vec(&expired).unwrap()).unwrap();
         let (url, task) = server(200, serde_json::to_vec(&next).unwrap());
-        let updated = load_from_url(&root, &url, true).unwrap();
+        let updated = load_from_url(&root, &url, false).unwrap();
         assert!(updated.character(1999).is_some());
         assert_eq!(updated.packet_references().unwrap().sub[0].base, 9.5);
         task.join().unwrap();

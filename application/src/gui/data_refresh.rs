@@ -13,6 +13,8 @@ use std::{
 enum Source {
     Genshin,
     StarRail,
+    GenshinAchievements,
+    StarRailAchievementIds,
 }
 impl Source {
     fn for_page(game: Game, tab: ToolTab) -> Option<Self> {
@@ -28,31 +30,54 @@ impl Source {
         match self {
             Self::Genshin => 0,
             Self::StarRail => 1,
+            Self::GenshinAchievements => 2,
+            Self::StarRailAchievementIds => 3,
         }
     }
     fn updated_at(self) -> Option<u64> {
         match self {
             Self::Genshin => genshin_scanner::game_data::cache_updated_at(),
             Self::StarRail => hsr_scanner::data_cache::cache_updated_at(),
+            Self::GenshinAchievements => {
+                genshin_scanner::scanner::achievement::AchievementCatalog::cache_updated_at()
+            },
+            Self::StarRailAchievementIds => hsr_scanner::data_cache::achievement_cache_updated_at(),
         }
     }
-    fn refresh(self, include_achievements: bool) -> anyhow::Result<()> {
+    fn refresh(self) -> anyhow::Result<()> {
         match self {
             Self::Genshin => {
                 genshin_scanner::game_data::force_refresh()?;
-                if include_achievements {
-                    genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()?;
-                }
                 Ok(())
             },
             Self::StarRail => {
                 hsr_scanner::data_cache::force_refresh()?;
-                if include_achievements {
-                    let references = hsr_scanner::data_cache::load_data_cache()?;
-                    hsr_scanner::data_cache::load_achievement_data(&references, true)?;
-                }
                 Ok(())
             },
+            Self::GenshinAchievements => {
+                genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()
+            },
+            Self::StarRailAchievementIds => {
+                let references = hsr_scanner::data_cache::load_data_cache()?;
+                hsr_scanner::data_cache::load_achievement_data(&references, true)?;
+                Ok(())
+            },
+        }
+    }
+    fn additional_for_page(game: Game, tab: ToolTab, capture_achievements: bool) -> Option<Self> {
+        match (game, tab) {
+            (Game::Genshin, ToolTab::Scanner) => Some(Self::GenshinAchievements),
+            (Game::StarRail, ToolTab::Capture) if capture_achievements => {
+                Some(Self::StarRailAchievementIds)
+            },
+            _ => None,
+        }
+    }
+    fn refresh_label(self, lang: Lang) -> &'static str {
+        match self {
+            Self::Genshin | Self::StarRail => lang.t("刷新基础数据", "Refresh base data"),
+            Self::GenshinAchievements => lang.t("刷新成就数据", "Refresh achievement data"),
+            Self::StarRailAchievementIds => lang.t("刷新成就 ID", "Refresh achievement IDs"),
         }
     }
 }
@@ -106,7 +131,7 @@ impl CachedData {
 
 #[derive(Default)]
 pub struct DataRefresh {
-    caches: [CachedData; 2],
+    caches: [CachedData; 4],
 }
 impl DataRefresh {
     pub fn poll(&mut self) {
@@ -127,7 +152,7 @@ impl DataRefresh {
         game: Game,
         tab: ToolTab,
         enabled: bool,
-        include_achievements: bool,
+        capture_achievements: bool,
     ) {
         let title = match tab {
             ToolTab::Capture => lang.t("抓包器", "Capture"),
@@ -139,6 +164,14 @@ impl DataRefresh {
             ui.heading(title);
             return;
         };
+        ui.heading(title);
+        self.cache_row(ui, lang, source, enabled);
+        if let Some(source) = Source::additional_for_page(game, tab, capture_achievements) {
+            self.cache_row(ui, lang, source, enabled && !self.is_running());
+        }
+    }
+    fn cache_row(&mut self, ui: &mut egui::Ui, lang: Lang, source: Source, enabled: bool) {
+        let enabled = enabled && !self.is_running();
         let cache = &mut self.caches[source.index()];
         cache.read_age(source);
         ui.scope(|ui| {
@@ -154,8 +187,6 @@ impl DataRefresh {
                         + 2.0 * ui.spacing().button_padding.y,
                 );
             ui.horizontal_wrapped(|ui| {
-                ui.heading(title);
-                ui.add_space(8.0);
                 let busy = cache.refresh.is_running();
                 if ui
                     .add_enabled(
@@ -164,7 +195,7 @@ impl DataRefresh {
                             egui::RichText::new(if busy {
                                 lang.t("刷新中…", "Refreshing…")
                             } else {
-                                lang.t("刷新数据", "Refresh data")
+                                source.refresh_label(lang)
                             })
                             .size(12.0),
                         ),
@@ -180,7 +211,7 @@ impl DataRefresh {
                         .name("game-data-refresh".into())
                         .spawn(move || {
                             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                source.refresh(include_achievements)
+                                source.refresh()
                             })) {
                                 Ok(result) => result
                                     .map_err(|error| UiError::from_anyhow(thread_hint, &error)),
@@ -197,8 +228,8 @@ impl DataRefresh {
                         .color(theme::MUTED),
                 )
                 .on_hover_text(lang.t(
-                    "游戏数据上次成功下载的时间；有多个缓存文件时显示最旧的一份。",
-                    "Time since the last successful download; shows the oldest cached data file.",
+                    "这份数据上次成功下载的时间。",
+                    "Time since this data file was last successfully downloaded.",
                 ));
                 if let RefreshState::Failed(error) = &cache.refresh {
                     ui.menu_button(
@@ -305,5 +336,34 @@ mod feedback_tests {
                     .index(),
             );
         }
+    }
+
+    #[test]
+    fn achievement_controls_are_independent_and_do_not_require_scan_selection() {
+        let base = Source::for_page(Game::Genshin, ToolTab::Scanner).unwrap();
+        let achievement =
+            Source::additional_for_page(Game::Genshin, ToolTab::Scanner, false).unwrap();
+        assert_ne!(base.index(), achievement.index());
+        for tab in [ToolTab::Manager, ToolTab::Capture] {
+            assert!(Source::additional_for_page(Game::Genshin, tab, true).is_none());
+        }
+        assert!(Source::additional_for_page(Game::StarRail, ToolTab::Capture, false).is_none());
+        let ids = Source::additional_for_page(Game::StarRail, ToolTab::Capture, true).unwrap();
+        assert_ne!(ids.index(), Source::StarRail.index());
+
+        let mut refresh = DataRefresh::default();
+        refresh.caches[base.index()].updated_at = Some(100);
+        refresh.caches[achievement.index()].updated_at = Some(200);
+        refresh.caches[achievement.index()].refresh = RefreshState::Failed(UiError::from_error(
+            UiText::new("刷新失败", "Refresh failed"),
+            std::io::Error::other("achievement download failed"),
+        ));
+        refresh.poll();
+        assert_eq!(refresh.caches[base.index()].updated_at, Some(100));
+        assert!(matches!(
+            refresh.caches[base.index()].refresh,
+            RefreshState::Idle
+        ));
+        assert_eq!(refresh.caches[achievement.index()].updated_at, Some(200));
     }
 }

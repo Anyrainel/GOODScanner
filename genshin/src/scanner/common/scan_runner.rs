@@ -200,6 +200,12 @@ pub fn run_scan_phases(
     cancel_token: yas::cancel::CancelToken,
     options: ScanRunOptions,
 ) -> Result<ScanRunResult> {
+    // Check optional achievement data before any selected scanning phase starts.
+    let achievement_catalog = if config.scan_achievements {
+        Some(Arc::new(AchievementCatalog::new()?))
+    } else {
+        None
+    };
     let scanner_config = config.to_scanner_config();
 
     ctrl.focus_game_window();
@@ -330,13 +336,8 @@ pub fn run_scan_phases(
         }
         log_info!("扫描成就...", "Scanning achievements...");
         let cfg = GoodScannerApplication::make_achievement_config(&scanner_config, user_config);
-        let scan_result = AchievementCatalog::new().and_then(|catalog| {
-            GoodAchievementScanner::new(cfg, Arc::new(catalog))?.scan(
-                ctrl,
-                &pools,
-                Some(&achievements_progress),
-            )
-        });
+        let scan_result = GoodAchievementScanner::new(cfg, achievement_catalog.unwrap())
+            .and_then(|scanner| scanner.scan(ctrl, &pools, Some(&achievements_progress)));
         phase_result(scan_result, &cancel_token, options, "achievement")?
     };
 
