@@ -9,25 +9,30 @@ requirements. Capture stops and saves one export file after the requested data a
 executable; existing saved output destinations are retained. The result shows
 the actual file path.
 
-All HSR app flows download the current reference from
-`https://hsr.ggartifact.com/good/hsr_data_cache.json`. Like Genshin, the app
-checks again after two hours and keeps a validated local cache, separately at
-`data/hsr/hsr_data_cache.json`. A network failure uses the last valid cache;
-a first download failure reports an error. No installed game-reference bundle
-is used as a fallback. There is no reference-folder or domain setting.
+All HSR inventory flows download the shared reference from
+`https://hsr.ggartifact.com/good/hsr_scanner_data.json` (formatVersion 2), cached
+at `data/hsr/hsr_scanner_data.json`. It contains OCR names, inventory definitions,
+affix values and packet/form mappings, with no achievement data. Scanner, capture
+and manager reuse this one cache. The old combined filename and the briefly
+separated OCR/capture directories are ignored rather than migrated.
 
-**Refresh game data** bypasses the two-hour cache in Capture's Advanced section,
-and is also available in the HSR Scanner and Manager. Failed or malformed refreshes
-preserve the previous cache and report the error. Character, Light Cone, Relic,
-achievement, affix, and character-form mapping updates all arrive together.
+Only capture with Achievements selected loads `/good/hsr_achievement_ids.json`,
+cached independently in `data/hsr/`. The IDs must come from the same source
+revision as the inventory reference. Inventory-only capture and all scanner and
+manager operations work without achievement references. The full achievement OCR
+mapping is a separate product and is not downloaded by these inventory flows.
 
-GIlore's normal `hsr_data reference` command generates `capture_data_cache.json`
-from the same validated source and normalized bundle. GGStarRail's normal
-`npm run data:update` copies it to `public/good/hsr_data_cache.json`; the website
-build checks its revision and catalog coverage against the website data. Publishing
-that file updates installed clients without rebuilding GGScanner. Protocol code
-changes can still require an application update. The old embedded reference API
-remains only for deterministic offline fixtures and historical build tooling.
+Both downloads use the two-hour cache policy. Refresh data replaces the shared
+inventory cache and, only in Capture with Achievements selected, refreshes the ID
+file too. Failed or malformed replacements preserve the previous cache and report
+the error. Normal loads can use a last valid cache; a cold offline load can use
+the bundled reference. Achievement fallback is allowed only for matching revisions.
+
+HoyoData's `uv run hoyodata ggstarrail` generates both new files from the same
+source and publishes them into GGStarRail's `public/good/` directory and its local
+archive. The website build checks revision and field coverage against its catalog.
+Publishing the files updates clients without rebuilding GGScanner. Protocol code
+changes can still require an application update.
 
 Application config v1 migrates to v2 by dropping the obsolete developer
 reference path while preserving scan preferences, output path, and navigation.

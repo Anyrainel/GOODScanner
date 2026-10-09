@@ -579,7 +579,7 @@ fn refresh_heading_borders_fit_the_pane_when_hovered_and_pressed() {
                                 ),
                                 "heading",
                                 |ui| {
-                                    refresh.heading(ui, lang, game, tab, true);
+                                    refresh.heading(ui, lang, game, tab, true, false);
                                 },
                             );
                         });

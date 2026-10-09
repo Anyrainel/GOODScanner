@@ -544,9 +544,13 @@ fn spawn_capture_monitor(
             let native_context =
                 native_guard_active.then(yas::native_crash::inherit_current_task);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let references = match star_rail_worker::load_references(
-                    hsr_scanner::data_cache::CacheSource::Capture,
-                ) {
+                let references = match star_rail_worker::load_references().and_then(|references| {
+                    if targets.achievements {
+                        hsr_scanner::data_cache::load_achievement_data(&references, false)
+                    } else {
+                        Ok(references)
+                    }
+                }) {
                     Ok(references) => references,
                     Err(error) => {
                         lock_shared(&shared_for_thread).error = Some(error);

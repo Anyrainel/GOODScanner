@@ -824,6 +824,20 @@ impl ReferenceCache {
         self.packet_references.as_ref()
     }
 
+    pub fn without_achievements(mut self) -> Self {
+        self.achievement_ids.clear();
+        self
+    }
+
+    pub fn with_achievement_ids(mut self, ids: Vec<u32>) -> HsrResult<Self> {
+        let known: BTreeSet<_> = ids.iter().copied().collect();
+        if known.is_empty() || known.contains(&0) || known.len() != ids.len() {
+            return reference_error("achievement IDs must be nonempty, unique and nonzero".into());
+        }
+        self.achievement_ids = known;
+        Ok(self)
+    }
+
     pub fn schema_version(&self) -> u32 {
         self.schema_version
     }

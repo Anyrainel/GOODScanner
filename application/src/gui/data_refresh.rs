@@ -15,8 +15,6 @@ enum Source {
     StarRail,
     #[cfg(feature = "capture")]
     GenshinCapture,
-    #[cfg(feature = "capture")]
-    StarRailCapture,
 }
 impl Source {
     fn for_page(game: Game, tab: ToolTab) -> Option<Self> {
@@ -26,8 +24,6 @@ impl Source {
         match (game, tab) {
             #[cfg(feature = "capture")]
             (Game::Genshin, ToolTab::Capture) => Some(Self::GenshinCapture),
-            #[cfg(feature = "capture")]
-            (Game::StarRail, ToolTab::Capture) => Some(Self::StarRailCapture),
             (Game::Genshin, _) => Some(Self::Genshin),
             (Game::StarRail, _) => Some(Self::StarRail),
         }
@@ -38,8 +34,6 @@ impl Source {
             Self::StarRail => 1,
             #[cfg(feature = "capture")]
             Self::GenshinCapture => 2,
-            #[cfg(feature = "capture")]
-            Self::StarRailCapture => 3,
         }
     }
     fn updated_at(self) -> Option<u64> {
@@ -53,32 +47,25 @@ impl Source {
                     _ => mappings.or(achievements),
                 }
             },
-            Self::StarRail => hsr_scanner::data_cache::cache_updated_at(
-                hsr_scanner::data_cache::CacheSource::Scanner,
-            ),
-            #[cfg(feature = "capture")]
-            Self::StarRailCapture => hsr_scanner::data_cache::cache_updated_at(
-                hsr_scanner::data_cache::CacheSource::Capture,
-            ),
+            Self::StarRail => hsr_scanner::data_cache::cache_updated_at(),
             #[cfg(feature = "capture")]
             Self::GenshinCapture => genshin_scanner::capture::data_cache::cache_updated_at(),
         }
     }
-    fn refresh(self) -> anyhow::Result<()> {
+    fn refresh(self, include_achievements: bool) -> anyhow::Result<()> {
         match self {
             Self::Genshin => {
                 genshin_scanner::scanner::common::mappings::force_refresh()?;
                 genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()
             },
-            Self::StarRail => hsr_scanner::data_cache::force_refresh(
-                hsr_scanner::data_cache::CacheSource::Scanner,
-            )
-            .map_err(anyhow::Error::new),
-            #[cfg(feature = "capture")]
-            Self::StarRailCapture => hsr_scanner::data_cache::force_refresh(
-                hsr_scanner::data_cache::CacheSource::Capture,
-            )
-            .map_err(anyhow::Error::new),
+            Self::StarRail => {
+                hsr_scanner::data_cache::force_refresh()?;
+                if include_achievements {
+                    let references = hsr_scanner::data_cache::load_data_cache()?;
+                    hsr_scanner::data_cache::load_achievement_data(&references, true)?;
+                }
+                Ok(())
+            },
             #[cfg(feature = "capture")]
             Self::GenshinCapture => genshin_scanner::capture::data_cache::force_refresh(),
         }
@@ -134,7 +121,7 @@ impl CachedData {
 
 #[derive(Default)]
 pub struct DataRefresh {
-    caches: [CachedData; 4],
+    caches: [CachedData; 3],
 }
 impl DataRefresh {
     pub fn poll(&mut self) {
@@ -155,6 +142,7 @@ impl DataRefresh {
         game: Game,
         tab: ToolTab,
         enabled: bool,
+        include_achievements: bool,
     ) {
         let title = match tab {
             ToolTab::Capture => lang.t("抓包器", "Capture"),
@@ -207,7 +195,7 @@ impl DataRefresh {
                         .name("game-data-refresh".into())
                         .spawn(move || {
                             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                source.refresh()
+                                source.refresh(include_achievements)
                             })) {
                                 Ok(result) => result
                                     .map_err(|error| UiError::from_anyhow(thread_hint, &error)),
@@ -323,7 +311,7 @@ mod feedback_tests {
                     .unwrap()
                     .index(),
             );
-            assert_ne!(
+            assert_eq!(
                 Source::for_page(Game::StarRail, ToolTab::Capture)
                     .unwrap()
                     .index(),

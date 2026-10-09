@@ -141,7 +141,11 @@ impl HsrPacketDecoder {
                 "capture requires at least one selected category",
             ));
         }
-        let known_ids = protocol::collect_known_ids(references.achievement_ids())?;
+        let known_ids = if targets.achievements {
+            protocol::collect_known_ids(references.achievement_ids())?
+        } else {
+            BTreeSet::new()
+        };
         let dispatch_keys = load_embedded_dispatch_keys()?;
         let sniffer = GameSniffer::new().set_initial_keys(dispatch_keys.clone());
         Ok(Self {
@@ -752,6 +756,20 @@ mod tests {
     use super::*;
 
     struct PendingPacketSource;
+
+    #[test]
+    fn inventory_capture_does_not_require_achievement_references() {
+        let references = crate::load_embedded_gilore_reference()
+            .unwrap()
+            .without_achievements();
+        let targets = CaptureTargets {
+            achievements: false,
+            ..CaptureTargets::default()
+        };
+        let decoder = HsrPacketDecoder::new(references.clone(), targets).unwrap();
+        assert!(decoder.known_ids.is_empty());
+        assert!(HsrPacketDecoder::new(references, CaptureTargets::default()).is_err());
+    }
 
     impl PacketSource for PendingPacketSource {
         fn next_packet(&mut self) -> Pin<Box<dyn Future<Output = HsrResult<Vec<u8>>> + Send + '_>> {

@@ -5,7 +5,7 @@ use std::{
 };
 
 use hsr_scanner::{
-    data_cache::{load_data_cache, CacheSource},
+    data_cache::load_data_cache,
     export_observations,
     manager::{
         apply_manager_request, load_manager_recovery_plan, validate_manager_envelope_reference,
@@ -169,9 +169,9 @@ fn ensure_output_dir(settings: &StarRailSettings) -> Result<PathBuf, UiError> {
     Ok(output_dir)
 }
 
-/// Use the cache owned by this mode, with OCR shared by scanner and manager.
-pub fn load_references(source: CacheSource) -> Result<ReferenceCache, HsrError> {
-    let references = load_data_cache(source)?;
+/// All inventory flows share the achievement-free hosted reference.
+pub fn load_references() -> Result<ReferenceCache, HsrError> {
+    let references = load_data_cache()?;
     references.validate_live_complete_profile()?;
     Ok(references)
 }
@@ -474,7 +474,7 @@ fn run_scan_observed(
     phase("正在准备 OCR 引擎", "Preparing OCR engine");
     ensure_ocr_runtime_with_status(status)?;
     phase("正在加载游戏数据", "Loading game data");
-    let references = load_references(CacheSource::Scanner).map_err(|error| {
+    let references = load_references().map_err(|error| {
         hsr_ui_error(
             UiText::new(
                 "无法加载星穹铁道游戏数据。请重新下载最新版本的程序后重试。",
@@ -713,7 +713,7 @@ fn run_manager_request(
             envelope.instructions.len()
         ),
     ));
-    let references = load_references(CacheSource::Scanner).map_err(|error| {
+    let references = load_references().map_err(|error| {
         hsr_ui_error(
             UiText::new("无法加载游戏数据", "Could not load game data"),
             error,

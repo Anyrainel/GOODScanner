@@ -3,7 +3,7 @@ use crate::{
     model::ReferenceSnapshot, packet_reference::PacketReferences, reference::ReferenceCache,
     HsrError, HsrResult, LocalizedText,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
@@ -12,41 +12,32 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-pub const DATA_CACHE_URL: &str = "https://hsr.ggartifact.com/good/hsr_data_cache.json";
-/// Scanner and manager share OCR references; capture owns a separate cache.
-/// The previous `data/hsr/hsr_data_cache.json` was shared by all modes. It is
-/// derived data, so each new cache is downloaded independently on first use.
-#[derive(Clone, Copy)]
-pub enum CacheSource {
-    Scanner,
-    Capture,
-}
-
-impl CacheSource {
-    pub fn directory(self) -> &'static str {
-        match self {
-            Self::Scanner => "data/hsr/ocr",
-            Self::Capture => "data/hsr/capture",
-        }
-    }
-}
+pub const DATA_CACHE_URL: &str = "https://hsr.ggartifact.com/good/hsr_scanner_data.json";
+pub const ACHIEVEMENT_IDS_URL: &str = "https://hsr.ggartifact.com/good/hsr_achievement_ids.json";
+pub const DATA_CACHE_DIRECTORY: &str = "data/hsr";
+const DATA_FILE: &str = "hsr_scanner_data.json";
+const ACHIEVEMENT_FILE: &str = "hsr_achievement_ids.json";
+// Old combined caches, including the briefly separated ocr/capture caches,
+// carry achievement IDs and formatVersion 1. These derived files are ignored;
+// the new filenames and formatVersion 2 establish one shared inventory cache.
 const TTL: u64 = 2 * 3600;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CaptureDataDocument {
+pub struct SharedDataDocument {
     pub format_version: u32,
     pub snapshot: ReferenceSnapshot,
     pub packet: PacketReferences,
 }
 
-impl CaptureDataDocument {
+impl SharedDataDocument {
     pub fn validate(&self) -> HsrResult<ReferenceCache> {
-        if self.format_version != 1
+        if self.format_version != 2
             || self.snapshot.provider != "gilore.ggstarrail-reference"
             || self.snapshot.revision != self.packet.source_revision
+            || !self.snapshot.achievement_ids.is_empty()
         {
             return Err(error(
                 "HSR-REF-FORMAT",
@@ -69,21 +60,37 @@ impl CaptureDataDocument {
         }
         let cache = ReferenceCache::from_snapshot(self.snapshot.clone())?;
         cache.validate_live_complete_profile()?;
-        if cache.achievement_count() == 0 {
-            return Err(error(
-                "HSR-REF-INCOMPLETE",
-                "achievement reference is empty",
-            ));
-        }
         cache.with_packet_references(self.packet.clone())
     }
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DiskCache {
+struct DiskCache<T> {
     fetched_at: u64,
-    data: CaptureDataDocument,
+    data: T,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AchievementDocument {
+    format_version: u32,
+    source_revision: String,
+    achievement_ids: Vec<u32>,
+}
+
+impl AchievementDocument {
+    fn attach(&self, references: &ReferenceCache) -> HsrResult<ReferenceCache> {
+        if self.format_version != 1 || self.source_revision != references.revision() {
+            return Err(error(
+                "HSR-REF-ACHIEVEMENT-REVISION",
+                "achievement IDs and inventory reference revisions disagree",
+            ));
+        }
+        references
+            .clone()
+            .with_achievement_ids(self.achievement_ids.clone())
+    }
 }
 
 fn error(code: &'static str, detail: impl Into<String>) -> HsrError {
@@ -92,8 +99,8 @@ fn error(code: &'static str, detail: impl Into<String>) -> HsrError {
         "Star Rail game data could not be updated. Check your connection, then select Refresh game data."), detail)
 }
 
-pub fn load_data_cache(source: CacheSource) -> HsrResult<ReferenceCache> {
-    match load_from_url(Path::new(source.directory()), DATA_CACHE_URL, false) {
+pub fn load_data_cache() -> HsrResult<ReferenceCache> {
+    match load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, false) {
         Ok(cache) => Ok(cache),
         Err(error) => match crate::load_embedded_gilore_reference() {
             Ok(cache) => {
@@ -102,31 +109,79 @@ pub fn load_data_cache(source: CacheSource) -> HsrResult<ReferenceCache> {
                     "Star Rail game data could not be downloaded; using the built-in reference. Full error details: {}",
                     error
                 );
-                Ok(cache)
+                Ok(cache.without_achievements())
             },
             Err(_) => Err(error),
         },
     }
 }
 
-pub fn force_refresh(source: CacheSource) -> HsrResult<()> {
-    load_from_url(Path::new(source.directory()), DATA_CACHE_URL, true).map(|_| ())
+pub fn force_refresh() -> HsrResult<()> {
+    load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, true).map(|_| ())
+}
+
+/// Only achievement capture calls this; inventory operations never download IDs.
+pub fn load_achievement_data(
+    references: &ReferenceCache,
+    force: bool,
+) -> HsrResult<ReferenceCache> {
+    let result = load_document::<AchievementDocument, _>(
+        Path::new(DATA_CACHE_DIRECTORY),
+        ACHIEVEMENT_FILE,
+        ACHIEVEMENT_IDS_URL,
+        force,
+        |data| data.attach(references),
+    );
+    match result {
+        Ok(cache) => Ok(cache),
+        Err(failure) if !force => {
+            let embedded = crate::load_embedded_gilore_reference()?;
+            if embedded.revision() != references.revision() {
+                return Err(failure);
+            }
+            yas::log_warn!(
+                "无法下载星穹铁道成就数据，将使用内置参考数据。完整错误详情: {}",
+                "Star Rail achievement data could not be downloaded; using the built-in reference. Full error details: {}",
+                failure
+            );
+            references
+                .clone()
+                .with_achievement_ids(embedded.achievement_ids().collect())
+        },
+        Err(failure) => Err(failure),
+    }
 }
 
 /// Metadata for the UI. Reading it does not load or refresh the reference data.
-pub fn cache_updated_at(source: CacheSource) -> Option<u64> {
+pub fn cache_updated_at() -> Option<u64> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Metadata {
         fetched_at: u64,
     }
-    let file = fs::File::open(Path::new(source.directory()).join("hsr_data_cache.json")).ok()?;
+    let file = fs::File::open(Path::new(DATA_CACHE_DIRECTORY).join(DATA_FILE)).ok()?;
     let metadata: Metadata = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
     (metadata.fetched_at > 0).then_some(metadata.fetched_at)
 }
 
 /// Also used by the offline HTTP integration harness. App callers always use the fixed HSR host.
 pub fn load_from_url(root: &Path, url: &str, force: bool) -> HsrResult<ReferenceCache> {
+    load_document::<SharedDataDocument, _>(
+        root,
+        DATA_FILE,
+        url,
+        force,
+        SharedDataDocument::validate,
+    )
+}
+
+fn load_document<T: DeserializeOwned + Serialize, R>(
+    root: &Path,
+    filename: &str,
+    url: &str,
+    force: bool,
+    validate: impl Fn(&T) -> HsrResult<R>,
+) -> HsrResult<R> {
     let _guard = CACHE_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
@@ -134,28 +189,28 @@ pub fn load_from_url(root: &Path, url: &str, force: bool) -> HsrResult<Reference
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let path = root.join("hsr_data_cache.json");
+    let path = root.join(filename);
     let cached = fs::read(&path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<DiskCache>(&bytes).ok())
+        .and_then(|bytes| serde_json::from_slice::<DiskCache<T>>(&bytes).ok())
         .and_then(|disk| {
-            disk.data
-                .validate()
+            validate(&disk.data)
                 .ok()
                 .map(|cache| (disk.fetched_at, cache))
         });
     if !force {
-        if let Some((fetched, cache)) = &cached {
-            if *fetched > 0 && *fetched <= now && now - fetched < TTL {
-                return Ok(cache.clone());
-            }
+        if cached
+            .as_ref()
+            .is_some_and(|(fetched, _)| *fetched > 0 && *fetched <= now && now - fetched < TTL)
+        {
+            return Ok(cached.unwrap().1);
         }
     }
     yas::log_info!(
         "正在下载星穹铁道游戏数据...",
         "Downloading Star Rail game data..."
     );
-    let fetched = fetch(url).and_then(|data| data.validate().map(|cache| (data, cache)));
+    let fetched = fetch::<T>(url).and_then(|data| validate(&data).map(|cache| (data, cache)));
     let (data, cache) = match fetched {
         Ok(result) => result,
         Err(failure) => {
@@ -179,7 +234,7 @@ pub fn load_from_url(root: &Path, url: &str, force: bool) -> HsrResult<Reference
         data,
     })
     .map_err(|e| error("HSR-REF-CACHE-WRITE", e.to_string()))?;
-    let temp = root.join(format!("hsr_data_cache.{}.tmp", std::process::id()));
+    let temp = root.join(format!("{filename}.{}.tmp", std::process::id()));
     fs::write(&temp, bytes)
         .and_then(|_| fs::rename(&temp, &path))
         .map_err(|e| error("HSR-REF-CACHE-WRITE", format!("{}: {e}", path.display())))?;
@@ -187,7 +242,7 @@ pub fn load_from_url(root: &Path, url: &str, force: bool) -> HsrResult<Reference
     Ok(cache)
 }
 
-fn fetch(url: &str) -> HsrResult<CaptureDataDocument> {
+fn fetch<T: DeserializeOwned>(url: &str) -> HsrResult<T> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -217,16 +272,20 @@ mod tests {
     use std::{io::Write, net::TcpListener, thread};
 
     fn document() -> serde_json::Value {
-        let embedded: serde_json::Value =
+        let mut embedded: serde_json::Value =
             serde_json::from_slice(include_bytes!("../assets/gilore_reference_v1.json")).unwrap();
-        serde_json::json!({"formatVersion": 1, "snapshot": embedded["snapshot"],
+        embedded["snapshot"]
+            .as_object_mut()
+            .unwrap()
+            .remove("achievementIds");
+        serde_json::json!({"formatVersion": 2, "snapshot": embedded["snapshot"],
             "packet": serde_json::from_slice::<serde_json::Value>(include_bytes!("../assets/packet_affixes.json")).unwrap()})
     }
 
     fn server(status: u16, body: Vec<u8>) -> (String, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!(
-            "http://{}/good/hsr_data_cache.json",
+            "http://{}/good/hsr_scanner_data.json",
             listener.local_addr().unwrap()
         );
         let handle = thread::spawn(move || {
@@ -245,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshing_capture_does_not_replace_scanner_cache() {
+    fn inventory_cache_is_shared_and_achievement_ids_are_optional_and_revision_checked() {
         let root = std::env::temp_dir().join(format!(
             "hsr-mode-cache-{}",
             SystemTime::now()
@@ -253,30 +312,46 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let scanner = root.join(CacheSource::Scanner.directory());
-        let capture = root.join(CacheSource::Capture.directory());
         let initial = document();
-        for directory in [&scanner, &capture] {
-            let (url, task) = server(200, serde_json::to_vec(&initial).unwrap());
-            load_from_url(directory, &url, false).unwrap();
-            task.join().unwrap();
-        }
-        let scanner_path = scanner.join("hsr_data_cache.json");
-        let scanner_bytes = fs::read(&scanner_path).unwrap();
-        let mut next = initial;
-        next["snapshot"]["revision"] = "capture-only-refresh".into();
-        next["packet"]["sourceRevision"] = "capture-only-refresh".into();
-        let (url, task) = server(200, serde_json::to_vec(&next).unwrap());
-        load_from_url(&capture, &url, true).unwrap();
+        // A legacy combined cache is deliberately ignored at the new boundary.
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("hsr_data_cache.json"), b"legacy cache").unwrap();
+        let (url, task) = server(200, serde_json::to_vec(&initial).unwrap());
+        let references = load_from_url(&root, &url, false).unwrap();
         task.join().unwrap();
-        assert_eq!(fs::read(&scanner_path).unwrap(), scanner_bytes);
-        let capture_disk: serde_json::Value =
-            serde_json::from_slice(&fs::read(capture.join("hsr_data_cache.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            capture_disk["data"]["snapshot"]["revision"],
-            "capture-only-refresh"
-        );
+        assert_eq!(references.achievement_count(), 0);
+        assert!(!root.join(ACHIEVEMENT_FILE).exists());
+        // Scanner, manager and capture all reuse this file without another request.
+        assert!(load_from_url(&root, &url, false).is_ok());
+        let inventory_bytes = fs::read(root.join(DATA_FILE)).unwrap();
+        let ids = serde_json::json!({"formatVersion": 1, "sourceRevision": references.revision(), "achievementIds": [4010101]});
+        let (url, task) = server(200, serde_json::to_vec(&ids).unwrap());
+        let loaded =
+            load_document::<AchievementDocument, _>(&root, ACHIEVEMENT_FILE, &url, false, |data| {
+                data.attach(&references)
+            })
+            .unwrap();
+        task.join().unwrap();
+        assert!(loaded.has_achievement(4010101));
+        assert_eq!(fs::read(root.join(DATA_FILE)).unwrap(), inventory_bytes);
+        let good_ids = fs::read(root.join(ACHIEVEMENT_FILE)).unwrap();
+        for invalid in [
+            serde_json::json!({"formatVersion": 1, "sourceRevision": "wrong", "achievementIds": [4010101]}),
+            serde_json::json!({"formatVersion": 1, "sourceRevision": references.revision(), "achievementIds": []}),
+            serde_json::json!({"formatVersion": 1, "sourceRevision": references.revision(), "achievementIds": [4010101, 4010101]}),
+        ] {
+            let (url, task) = server(200, serde_json::to_vec(&invalid).unwrap());
+            assert!(load_document::<AchievementDocument, _>(
+                &root,
+                ACHIEVEMENT_FILE,
+                &url,
+                true,
+                |data| data.attach(&references)
+            )
+            .is_err());
+            task.join().unwrap();
+            assert_eq!(fs::read(root.join(ACHIEVEMENT_FILE)).unwrap(), good_ids);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -289,7 +364,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let path = root.join("hsr_data_cache.json");
+        let path = root.join(DATA_FILE);
         let mut next = document();
         let (url, task) = server(200, serde_json::to_vec(&next).unwrap());
         assert!(load_from_url(&root, &url, false)
@@ -317,11 +392,24 @@ mod tests {
         assert_eq!(updated.packet_references().unwrap().sub[0].base, 9.5);
         task.join().unwrap();
         let good_bytes = fs::read(&path).unwrap();
-        for payload in [b"<html>not data</html>".to_vec(), {
-            let mut incomplete = next.clone();
-            incomplete["packet"]["sub"] = serde_json::json!([]);
-            serde_json::to_vec(&incomplete).unwrap()
-        }] {
+        for payload in [
+            b"<html>not data</html>".to_vec(),
+            {
+                let mut incomplete = next.clone();
+                incomplete["packet"]["sub"] = serde_json::json!([]);
+                serde_json::to_vec(&incomplete).unwrap()
+            },
+            {
+                let mut legacy = next.clone();
+                legacy["formatVersion"] = 1.into();
+                serde_json::to_vec(&legacy).unwrap()
+            },
+            {
+                let mut combined = next.clone();
+                combined["snapshot"]["achievementIds"] = serde_json::json!([4010101]);
+                serde_json::to_vec(&combined).unwrap()
+            },
+        ] {
             let (url, task) = server(200, payload);
             assert!(load_from_url(&root, &url, true).is_err());
             task.join().unwrap();
