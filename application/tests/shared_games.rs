@@ -201,7 +201,14 @@ fn default_star_rail_settings_use_automatic_hosted_reference_without_a_folder() 
         hsr_scanner::data_cache::DATA_CACHE_URL,
         "https://hsr.ggartifact.com/good/hsr_data_cache.json"
     );
-    assert_eq!(hsr_scanner::data_cache::DATA_CACHE_DIRECTORY, "data/hsr");
+    assert_eq!(
+        hsr_scanner::data_cache::CacheSource::Scanner.directory(),
+        "data/hsr/ocr"
+    );
+    assert_eq!(
+        hsr_scanner::data_cache::CacheSource::Capture.directory(),
+        "data/hsr/capture"
+    );
 
     remove_test_tree(&root);
 }

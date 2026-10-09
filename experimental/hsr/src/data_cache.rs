@@ -13,7 +13,23 @@ use std::{
 };
 
 pub const DATA_CACHE_URL: &str = "https://hsr.ggartifact.com/good/hsr_data_cache.json";
-pub const DATA_CACHE_DIRECTORY: &str = "data/hsr";
+/// Scanner and manager share OCR references; capture owns a separate cache.
+/// The previous `data/hsr/hsr_data_cache.json` was shared by all modes. It is
+/// derived data, so each new cache is downloaded independently on first use.
+#[derive(Clone, Copy)]
+pub enum CacheSource {
+    Scanner,
+    Capture,
+}
+
+impl CacheSource {
+    pub fn directory(self) -> &'static str {
+        match self {
+            Self::Scanner => "data/hsr/ocr",
+            Self::Capture => "data/hsr/capture",
+        }
+    }
+}
 const TTL: u64 = 2 * 3600;
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
@@ -76,8 +92,8 @@ fn error(code: &'static str, detail: impl Into<String>) -> HsrError {
         "Star Rail game data could not be updated. Check your connection, then select Refresh game data."), detail)
 }
 
-pub fn load_data_cache() -> HsrResult<ReferenceCache> {
-    match load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, false) {
+pub fn load_data_cache(source: CacheSource) -> HsrResult<ReferenceCache> {
+    match load_from_url(Path::new(source.directory()), DATA_CACHE_URL, false) {
         Ok(cache) => Ok(cache),
         Err(error) => match crate::load_embedded_gilore_reference() {
             Ok(cache) => {
@@ -93,18 +109,18 @@ pub fn load_data_cache() -> HsrResult<ReferenceCache> {
     }
 }
 
-pub fn force_refresh() -> HsrResult<()> {
-    load_from_url(Path::new(DATA_CACHE_DIRECTORY), DATA_CACHE_URL, true).map(|_| ())
+pub fn force_refresh(source: CacheSource) -> HsrResult<()> {
+    load_from_url(Path::new(source.directory()), DATA_CACHE_URL, true).map(|_| ())
 }
 
 /// Metadata for the UI. Reading it does not load or refresh the reference data.
-pub fn cache_updated_at() -> Option<u64> {
+pub fn cache_updated_at(source: CacheSource) -> Option<u64> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Metadata {
         fetched_at: u64,
     }
-    let file = fs::File::open(Path::new(DATA_CACHE_DIRECTORY).join("hsr_data_cache.json")).ok()?;
+    let file = fs::File::open(Path::new(source.directory()).join("hsr_data_cache.json")).ok()?;
     let metadata: Metadata = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
     (metadata.fetched_at > 0).then_some(metadata.fetched_at)
 }
@@ -226,6 +242,42 @@ mod tests {
             stream.write_all(&body).unwrap();
         });
         (url, handle)
+    }
+
+    #[test]
+    fn refreshing_capture_does_not_replace_scanner_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "hsr-mode-cache-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let scanner = root.join(CacheSource::Scanner.directory());
+        let capture = root.join(CacheSource::Capture.directory());
+        let initial = document();
+        for directory in [&scanner, &capture] {
+            let (url, task) = server(200, serde_json::to_vec(&initial).unwrap());
+            load_from_url(directory, &url, false).unwrap();
+            task.join().unwrap();
+        }
+        let scanner_path = scanner.join("hsr_data_cache.json");
+        let scanner_bytes = fs::read(&scanner_path).unwrap();
+        let mut next = initial;
+        next["snapshot"]["revision"] = "capture-only-refresh".into();
+        next["packet"]["sourceRevision"] = "capture-only-refresh".into();
+        let (url, task) = server(200, serde_json::to_vec(&next).unwrap());
+        load_from_url(&capture, &url, true).unwrap();
+        task.join().unwrap();
+        assert_eq!(fs::read(&scanner_path).unwrap(), scanner_bytes);
+        let capture_disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(capture.join("hsr_data_cache.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            capture_disk["data"]["snapshot"]["revision"],
+            "capture-only-refresh"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

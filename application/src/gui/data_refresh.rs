@@ -15,6 +15,8 @@ enum Source {
     StarRail,
     #[cfg(feature = "capture")]
     GenshinCapture,
+    #[cfg(feature = "capture")]
+    StarRailCapture,
 }
 impl Source {
     fn for_page(game: Game, tab: ToolTab) -> Option<Self> {
@@ -24,6 +26,8 @@ impl Source {
         match (game, tab) {
             #[cfg(feature = "capture")]
             (Game::Genshin, ToolTab::Capture) => Some(Self::GenshinCapture),
+            #[cfg(feature = "capture")]
+            (Game::StarRail, ToolTab::Capture) => Some(Self::StarRailCapture),
             (Game::Genshin, _) => Some(Self::Genshin),
             (Game::StarRail, _) => Some(Self::StarRail),
         }
@@ -34,6 +38,8 @@ impl Source {
             Self::StarRail => 1,
             #[cfg(feature = "capture")]
             Self::GenshinCapture => 2,
+            #[cfg(feature = "capture")]
+            Self::StarRailCapture => 3,
         }
     }
     fn updated_at(self) -> Option<u64> {
@@ -47,7 +53,13 @@ impl Source {
                     _ => mappings.or(achievements),
                 }
             },
-            Self::StarRail => hsr_scanner::data_cache::cache_updated_at(),
+            Self::StarRail => hsr_scanner::data_cache::cache_updated_at(
+                hsr_scanner::data_cache::CacheSource::Scanner,
+            ),
+            #[cfg(feature = "capture")]
+            Self::StarRailCapture => hsr_scanner::data_cache::cache_updated_at(
+                hsr_scanner::data_cache::CacheSource::Capture,
+            ),
             #[cfg(feature = "capture")]
             Self::GenshinCapture => genshin_scanner::capture::data_cache::cache_updated_at(),
         }
@@ -58,7 +70,15 @@ impl Source {
                 genshin_scanner::scanner::common::mappings::force_refresh()?;
                 genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()
             },
-            Self::StarRail => hsr_scanner::data_cache::force_refresh().map_err(anyhow::Error::new),
+            Self::StarRail => hsr_scanner::data_cache::force_refresh(
+                hsr_scanner::data_cache::CacheSource::Scanner,
+            )
+            .map_err(anyhow::Error::new),
+            #[cfg(feature = "capture")]
+            Self::StarRailCapture => hsr_scanner::data_cache::force_refresh(
+                hsr_scanner::data_cache::CacheSource::Capture,
+            )
+            .map_err(anyhow::Error::new),
             #[cfg(feature = "capture")]
             Self::GenshinCapture => genshin_scanner::capture::data_cache::force_refresh(),
         }
@@ -114,7 +134,7 @@ impl CachedData {
 
 #[derive(Default)]
 pub struct DataRefresh {
-    caches: [CachedData; 3],
+    caches: [CachedData; 4],
 }
 impl DataRefresh {
     pub fn poll(&mut self) {
@@ -303,7 +323,7 @@ mod feedback_tests {
                     .unwrap()
                     .index(),
             );
-            assert_eq!(
+            assert_ne!(
                 Source::for_page(Game::StarRail, ToolTab::Capture)
                     .unwrap()
                     .index(),
