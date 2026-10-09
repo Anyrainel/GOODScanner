@@ -13,7 +13,7 @@ use crate::scanner::common::models::{
     GoodArtifact, GoodCharacter, GoodExport, GoodSubStat, GoodTalent, GoodWeapon,
 };
 
-use super::data_types::{to_good_key, DataCache, Property, SkillType};
+use crate::game_data::types::{to_good_key, DataCache, Property, SkillType};
 
 // --- Game-internal property IDs (content IDs, stable within a version) ---
 // These come from the game's `AvatarInfo.prop_map` and may shift across major versions.

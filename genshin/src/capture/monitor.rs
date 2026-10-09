@@ -32,7 +32,6 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use yas::{log_debug, log_error, log_info, log_warn};
 
-use super::data_cache::load_data_cache;
 use super::packet_capture::{CaptureError, PacketCapture};
 use super::player_data::{CaptureExportSettings, PlayerData};
 
@@ -115,7 +114,7 @@ impl CaptureMonitor {
             yas::utils::ensure_admin()?;
         }
 
-        let data_cache = load_data_cache()?;
+        let data_cache = crate::game_data::load()?.capture;
         let player_data = PlayerData::new(data_cache);
         let keys = load_keys()?;
         let sniffer = GameSniffer::new().set_initial_keys(keys);

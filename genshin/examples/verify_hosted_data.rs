@@ -6,6 +6,17 @@ use genshin_scanner::scanner::{
 };
 
 fn main() -> anyhow::Result<()> {
+    if let Some(path) = std::env::args().nth(1) {
+        let data: genshin_scanner::game_data::ScannerData =
+            serde_json::from_slice(&std::fs::read(path)?)?;
+        data.validate()?;
+        println!(
+            "Validated shared scanner data: revision={}, artifacts={}",
+            data.source_revision,
+            data.capture.artifact_map.len()
+        );
+        return Ok(());
+    }
     let mappings = MappingManager::new(&NameOverrides::default())?;
     println!(
         "Loaded mappings: characters={}, weapons={}, artifact sets={}",
@@ -21,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     );
     #[cfg(feature = "capture")]
     {
-        let capture = genshin_scanner::capture::data_cache::load_data_cache()?;
+        let capture = genshin_scanner::game_data::load()?.capture;
         println!(
             "Loaded capture data: artifacts={}, sets={}, characters={}, weapons={}",
             capture.artifact_map.len(),

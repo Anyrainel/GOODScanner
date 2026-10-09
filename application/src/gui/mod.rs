@@ -427,13 +427,16 @@ impl eframe::App for GuiApp {
                         active_game,
                         active_tab,
                         !game_task_busy && !update_in_progress && !restart_required,
-                        active_game == Game::StarRail
-                            && active_tab == ToolTab::Capture
-                            && self
-                                .app_config
-                                .config
-                                .star_rail
-                                .capture_include_achievements,
+                        (active_game == Game::Genshin
+                            && active_tab == ToolTab::Scanner
+                            && self.state.scan_achievements)
+                            || (active_game == Game::StarRail
+                                && active_tab == ToolTab::Capture
+                                && self
+                                    .app_config
+                                    .config
+                                    .star_rail
+                                    .capture_include_achievements),
                     );
                     let data_refreshing = self.data_refresh.is_running();
                     let game_task_busy = genshin_busy || star_rail_busy || data_refreshing;

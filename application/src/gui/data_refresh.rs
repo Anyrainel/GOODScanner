@@ -13,8 +13,6 @@ use std::{
 enum Source {
     Genshin,
     StarRail,
-    #[cfg(feature = "capture")]
-    GenshinCapture,
 }
 impl Source {
     fn for_page(game: Game, tab: ToolTab) -> Option<Self> {
@@ -22,8 +20,6 @@ impl Source {
             return None;
         }
         match (game, tab) {
-            #[cfg(feature = "capture")]
-            (Game::Genshin, ToolTab::Capture) => Some(Self::GenshinCapture),
             (Game::Genshin, _) => Some(Self::Genshin),
             (Game::StarRail, _) => Some(Self::StarRail),
         }
@@ -32,31 +28,22 @@ impl Source {
         match self {
             Self::Genshin => 0,
             Self::StarRail => 1,
-            #[cfg(feature = "capture")]
-            Self::GenshinCapture => 2,
         }
     }
     fn updated_at(self) -> Option<u64> {
         match self {
-            Self::Genshin => {
-                let mappings = genshin_scanner::scanner::common::mappings::cache_updated_at();
-                let achievements =
-                    genshin_scanner::scanner::achievement::AchievementCatalog::cache_updated_at();
-                match (mappings, achievements) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    _ => mappings.or(achievements),
-                }
-            },
+            Self::Genshin => genshin_scanner::game_data::cache_updated_at(),
             Self::StarRail => hsr_scanner::data_cache::cache_updated_at(),
-            #[cfg(feature = "capture")]
-            Self::GenshinCapture => genshin_scanner::capture::data_cache::cache_updated_at(),
         }
     }
     fn refresh(self, include_achievements: bool) -> anyhow::Result<()> {
         match self {
             Self::Genshin => {
-                genshin_scanner::scanner::common::mappings::force_refresh()?;
-                genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()
+                genshin_scanner::game_data::force_refresh()?;
+                if include_achievements {
+                    genshin_scanner::scanner::achievement::AchievementCatalog::force_refresh()?;
+                }
+                Ok(())
             },
             Self::StarRail => {
                 hsr_scanner::data_cache::force_refresh()?;
@@ -66,8 +53,6 @@ impl Source {
                 }
                 Ok(())
             },
-            #[cfg(feature = "capture")]
-            Self::GenshinCapture => genshin_scanner::capture::data_cache::force_refresh(),
         }
     }
 }
@@ -121,7 +106,7 @@ impl CachedData {
 
 #[derive(Default)]
 pub struct DataRefresh {
-    caches: [CachedData; 3],
+    caches: [CachedData; 2],
 }
 impl DataRefresh {
     pub fn poll(&mut self) {
@@ -303,7 +288,7 @@ mod feedback_tests {
         }
         #[cfg(feature = "capture")]
         {
-            assert_ne!(
+            assert_eq!(
                 Source::for_page(Game::Genshin, ToolTab::Capture)
                     .unwrap()
                     .index(),

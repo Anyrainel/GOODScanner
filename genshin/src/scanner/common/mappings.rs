@@ -1,94 +1,6 @@
+use crate::game_data::mappings::MappingsFile;
+use anyhow::Result;
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
-use yas::{log_debug, log_info, log_warn};
-
-const MAPPINGS_URL: &str = "https://ggartifact.com/good/mappings.json";
-const MAPPINGS_CACHE_PATH: &str = "data/mappings.json";
-const MAPPINGS_META_PATH: &str = "data/mappings_meta.json";
-
-const MAPPINGS_TTL_SECS: u64 = 24 * 3600; // 1 day
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-struct MappingsMeta {
-    #[serde(rename = "lastFetchTime")]
-    last_fetch_time: u64,
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn load_meta() -> MappingsMeta {
-    let content = match fs::read_to_string(MAPPINGS_META_PATH) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return MappingsMeta::default()
-        },
-        Err(error) => {
-            log_warn!(
-                "无法读取游戏数据缓存状态；将重新检查远程数据。完整错误详情: {:#}",
-                "Game-data cache metadata could not be read; remote data will be checked again. Full error details: {:#}",
-                error,
-            );
-            return MappingsMeta::default();
-        },
-    };
-    match serde_json::from_str::<MappingsMeta>(&content) {
-        Ok(meta) => meta,
-        Err(error) => {
-            log_warn!(
-                "游戏数据缓存状态文件已损坏；将重新检查远程数据。完整错误详情: {:#}",
-                "Game-data cache metadata is invalid; remote data will be checked again. Full error details: {:#}",
-                error,
-            );
-            MappingsMeta::default()
-        },
-    }
-}
-
-fn save_meta(meta: &MappingsMeta) -> Result<()> {
-    if let Some(parent) = Path::new(MAPPINGS_META_PATH).parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "game-data cache directory could not be created: {}",
-                parent.display()
-            )
-        })?;
-    }
-    let json =
-        serde_json::to_string(meta).context("game-data cache metadata serialization failed")?;
-    fs::write(MAPPINGS_META_PATH, json).with_context(|| {
-        format!("game-data cache metadata could not be written: {MAPPINGS_META_PATH}")
-    })
-}
-
-/// Last successful cache fetch, without downloading or modifying game data.
-pub fn cache_updated_at() -> Option<u64> {
-    if !Path::new(MAPPINGS_CACHE_PATH).is_file() {
-        return None;
-    }
-    let fetched = load_meta().last_fetch_time;
-    (fetched > 0).then_some(fetched)
-}
-
-/// Delete cached files and re-download immediately.
-pub fn force_refresh() -> Result<()> {
-    crate::fs_utils::remove_file_if_exists(MAPPINGS_META_PATH)?;
-    crate::fs_utils::remove_file_if_exists(MAPPINGS_CACHE_PATH)?;
-    fetch_if_needed()
-}
-
-fn is_fresh(last_fetch_time: u64, ttl_secs: u64) -> bool {
-    last_fetch_time > 0 && (now_secs() - last_fetch_time) < ttl_secs
-}
 
 /// Constellation bonus info for a character
 #[derive(Debug, Clone)]
@@ -119,47 +31,6 @@ pub struct MappingManager {
     pub artifact_set_max_rarity: HashMap<String, i32>,
 }
 
-// --- JSON deserialization types for the remote mappings.json ---
-
-#[derive(Deserialize)]
-struct MappingsFile {
-    characters: Vec<CharacterEntry>,
-    weapons: Vec<WeaponEntry>,
-    #[serde(rename = "artifactSets")]
-    artifact_sets: Vec<ArtifactSetEntry>,
-}
-
-#[derive(Deserialize)]
-struct CharacterEntry {
-    id: String,
-    #[serde(alias = "names")]
-    n: LocalizedNames,
-    e: Option<String>,
-    c3: Option<String>,
-    c5: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct WeaponEntry {
-    id: String,
-    #[serde(alias = "names")]
-    n: LocalizedNames,
-}
-
-#[derive(Deserialize)]
-struct ArtifactSetEntry {
-    id: String,
-    #[serde(alias = "names")]
-    n: LocalizedNames,
-    #[serde(alias = "rarity")]
-    r: Option<i32>,
-}
-
-#[derive(Deserialize)]
-struct LocalizedNames {
-    zh: Option<String>,
-}
-
 /// Name override config for characters with customizable in-game names
 pub struct NameOverrides {
     pub traveler_name: Option<String>,
@@ -179,92 +50,15 @@ impl Default for NameOverrides {
     }
 }
 
-/// Check cache freshness and fetch from remote if needed.
-fn fetch_if_needed() -> Result<()> {
-    let meta = load_meta();
-    let cache_exists = Path::new(MAPPINGS_CACHE_PATH).exists();
-
-    // Skip fetch if cache is fresh
-    if cache_exists && is_fresh(meta.last_fetch_time, MAPPINGS_TTL_SECS) {
-        return Ok(());
-    }
-
-    log_info!("正在获取游戏数据映射...", "Fetching game data mappings...");
-
-    // Ensure data directory exists
-    if let Some(parent) = Path::new(MAPPINGS_CACHE_PATH).parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "game-data cache directory could not be created: {}",
-                parent.display()
-            )
-        })?;
-    }
-
-    match crate::data_http::client().and_then(|client| client.get(MAPPINGS_URL).send()) {
-        Ok(response) => {
-            if response.status().is_success() {
-                let body = response
-                    .text()
-                    .context("game-data mapping response body could not be read")?;
-                // Validate JSON
-                let _: serde_json::Value = serde_json::from_str(&body)
-                    .context("downloaded game-data mapping JSON is invalid")?;
-                std::fs::write(MAPPINGS_CACHE_PATH, &body).with_context(|| {
-                    format!("game-data mapping cache could not be written: {MAPPINGS_CACHE_PATH}")
-                })?;
-                save_meta(&MappingsMeta {
-                    last_fetch_time: now_secs(),
-                })?;
-                log_debug!("游戏数据映射已更新", "Game data mappings updated");
-            } else {
-                if cache_exists {
-                    log_warn!(
-                        "获取数据失败 (HTTP {})，使用本地缓存",
-                        "Fetch failed (HTTP {}), using local cache",
-                        response.status()
-                    );
-                } else {
-                    bail!(
-                        "获取游戏数据失败 (HTTP {})，且无本地缓存。请检查网络连接。\n\
-                         / Failed to fetch game data (HTTP {}), no local cache. Check your network connection.",
-                        response.status(), response.status()
-                    );
-                }
-            }
-        },
-        Err(e) => {
-            if cache_exists {
-                log_warn!(
-                    "无法下载最新游戏数据；将使用本地缓存。完整错误详情: {:#}",
-                    "The latest game data could not be downloaded; the local cache will be used. Full error details: {:#}",
-                    e
-                );
-            } else {
-                return Err(e).context(format!(
-                    "game data could not be downloaded and no local cache exists; source: {MAPPINGS_URL}"
-                ));
-            }
-        },
-    }
-
-    Ok(())
-}
-
 impl MappingManager {
     /// Fetch mappings if needed (cache expired or missing), then load and initialize.
     ///
     /// Port of `fetchMappingsIfNeeded()` + `initMappings()` from GOODScanner
     pub fn new(overrides: &NameOverrides) -> Result<Self> {
-        fetch_if_needed()?;
-        Self::load_from_cache(overrides)
-    }
-
-    /// Load mappings from the local cache file.
-    fn load_from_cache(overrides: &NameOverrides) -> Result<Self> {
-        let raw = std::fs::read_to_string(MAPPINGS_CACHE_PATH)?;
-        let data: MappingsFile = serde_json::from_str(&raw)?;
-        Ok(Self::from_mappings_data(data, overrides))
+        Ok(Self::from_mappings_data(
+            crate::game_data::load()?.mappings,
+            overrides,
+        ))
     }
 
     fn from_mappings_data(data: MappingsFile, overrides: &NameOverrides) -> Self {
