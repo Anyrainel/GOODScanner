@@ -1058,7 +1058,8 @@ pub fn spawn_server(state: &AppState) -> TaskHandle {
     let port = state.server_port;
     let enabled = state.server_enabled.clone();
     let filter_involved_sets = state.filter_involved_sets;
-    let stop_on_all_matched = !state.update_inventory || filter_involved_sets;
+    // Management changes flags only; inventory refresh is a separate scan.
+    let stop_on_all_matched = true;
     let dump_images = state.dump_images;
     let dump_job_data = state.dump_job_data;
     let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));

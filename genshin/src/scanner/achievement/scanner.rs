@@ -453,7 +453,7 @@ impl GoodAchievementScanner {
                 if is_progress_banner(&row) {
                     if !force_done {
                         let ocr = rec.get();
-                        if let Ok(text) = ocr.image_to_text(&row, false) {
+                        if let Ok(text) = logged_achievement_ocr(&ocr, &row) {
                             if category_looks_complete(&text) {
                                 force_done = true;
                                 progress_log(&format!(
@@ -473,20 +473,39 @@ impl GoodAchievementScanner {
             ));
             let catalog = Arc::clone(&self.catalog);
             let category_owned = category_name.map(|s| s.to_string());
-            let recognized: Vec<(usize, RgbImage, super::recognize::RecognizedRow)> = rows
+            let recognized: Vec<
+                anyhow::Result<(usize, RgbImage, super::recognize::RecognizedRow)>,
+            > = rows
                 .into_par_iter()
-                .filter_map(|(i, row)| {
+                .map(|(i, row)| {
                     let ocr = rec.get();
-                    match recognize_row(&ocr, &row, &catalog, category_owned.as_deref()) {
-                        Ok(recognized) => Some((i, row, recognized)),
-                        Err(_) => None,
-                    }
+                    recognize_row(&ocr, &row, &catalog, category_owned.as_deref())
+                        .map(|recognized| (i, row, recognized))
+                        .map_err(|error| {
+                            error.context(format!(
+                                "achievement category {category_label}, frame {frame_idx}, row {i}"
+                            ))
+                        })
                 })
                 .collect();
             let ocr_ms = t_ocr.elapsed().as_millis();
             ocr_ms_total += ocr_ms;
 
-            for (_i, row, recognized) in recognized {
+            for outcome in recognized {
+                let (_i, row, recognized) = match outcome {
+                    Ok(row) => row,
+                    Err(error) => {
+                        yas::log_error!(
+                            "成就识别失败：{:#}",
+                            "Achievement OCR failed: {:#}",
+                            error
+                        );
+                        if !self.config.continue_on_failure {
+                            return Err(error);
+                        }
+                        continue;
+                    },
+                };
                 if !is_plausible_row_title(&recognized.title) {
                     continue;
                 }
@@ -833,7 +852,7 @@ impl GoodAchievementScanner {
             }
             let ocr = rec.get();
             if let Some(crop) = crop_title(&row) {
-                if let Ok(text) = ocr.image_to_text(&crop, false) {
+                if let Ok(text) = logged_achievement_ocr(&ocr, &crop) {
                     let text = text.trim().to_string();
                     if !text.is_empty() {
                         titles.push(text);
@@ -899,7 +918,7 @@ impl GoodAchievementScanner {
             return (None, false);
         };
         let ocr = rec.get();
-        let Ok(text) = ocr.image_to_text(&crop, false) else {
+        let Ok(text) = logged_achievement_ocr(&ocr, &crop) else {
             return (None, false);
         };
         let mut complete = category_looks_complete(&text);
@@ -909,7 +928,7 @@ impl GoodAchievementScanner {
             let y = h / 2;
             if h > y {
                 let bottom = crop.view(0, y, crop.width(), h - y).to_image();
-                if let Ok(bottom_text) = ocr.image_to_text(&bottom, false) {
+                if let Ok(bottom_text) = logged_achievement_ocr(&ocr, &bottom) {
                     complete = category_looks_complete(&bottom_text);
                 }
             }
@@ -930,6 +949,20 @@ fn is_plausible_category_name(name: &str) -> bool {
         .filter(|c| !c.is_ascii_digit() && *c != '%' && *c != ' ')
         .count();
     letters >= 2
+}
+
+fn logged_achievement_ocr(
+    ocr: &dyn ImageToText<RgbImage>,
+    image: &RgbImage,
+) -> anyhow::Result<String> {
+    ocr.image_to_text(image, false).map_err(|error| {
+        yas::log_error!(
+            "成就界面 OCR 失败：{:#}",
+            "Achievement screen OCR failed: {:#}",
+            error
+        );
+        error
+    })
 }
 
 fn is_plausible_row_title(title: &str) -> bool {

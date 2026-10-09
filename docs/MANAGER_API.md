@@ -2,6 +2,10 @@
 
 Server: `http://127.0.0.1:{port}` (default 8765)
 
+The application defaults to filtering the requested artifact sets and stops
+management once all targets are matched. Management does not refresh full
+inventory; use `POST /scan` (including the recent-artifacts mode) to read data.
+
 ## Security
 
 **Origin-based CORS**: The server only accepts requests from allowed origins.

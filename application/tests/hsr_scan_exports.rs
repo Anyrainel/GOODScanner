@@ -14,13 +14,15 @@ use hsr_scanner::{
 use std::{fs, path::PathBuf};
 
 fn temp_dir() -> PathBuf {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-        "hsr-scan-export-test-{}-{}",
+        "hsr-scan-export-test-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     fs::create_dir(&path).unwrap();
     path

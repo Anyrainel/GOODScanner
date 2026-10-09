@@ -97,6 +97,39 @@ pub fn scan_export_options(
     );
 }
 
+pub fn scan_debug_options(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    verbose: &mut bool,
+    stop_on_failure: &mut bool,
+    dump_images: &mut bool,
+) {
+    ui.checkbox(verbose, lang.t("详细日志", "Detailed logs"));
+    ui.checkbox(
+        stop_on_failure,
+        lang.t("识别失败时停止", "Stop on OCR errors"),
+    )
+    .on_hover_text(lang.t(
+        "调试时在失败条目处停止。关闭时跳过失败条目，日志会保留失败原因。",
+        "Stop at a failed entry for debugging. When off, skip failed entries and log their causes.",
+    ));
+    ui.checkbox(dump_images, lang.t("保存 OCR 截图", "Save OCR screenshots"));
+}
+
+pub fn manager_debug_options(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    verbose: &mut bool,
+    dump_images: &mut bool,
+    dump_job_data: &mut bool,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(verbose, lang.t("详细日志", "Detailed logs"));
+        ui.checkbox(dump_images, lang.t("保存 OCR 截图", "Save OCR screenshots"));
+        ui.checkbox(dump_job_data, lang.t("保存请求数据", "Save request data"));
+    });
+}
+
 /// Render every user-visible failure with the same information hierarchy:
 /// a localized hint first, then copyable diagnostics behind a native disclosure.
 pub fn error_card(ui: &mut egui::Ui, l: Lang, error: &UiError) {

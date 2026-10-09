@@ -22,11 +22,6 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_server_running:
         ui.add_enabled_ui(!is_server_running, |ui| {
             ui.checkbox(&mut state.filter_involved_sets, l.t("仅筛选涉及的套装", "Filter target sets only"))
                 .on_hover_text(l.t("加解锁时只扫描涉及的套装，速度更快；不会更新完整背包。", "Scan only the requested artifact sets for faster lock changes. The full inventory will not be updated."));
-            if state.filter_involved_sets { state.update_inventory = false; }
-            ui.add_enabled_ui(!state.filter_involved_sets, |ui| {
-                ui.checkbox(&mut state.update_inventory, l.t("操作后更新圣遗物列表", "Update inventory after scan"))
-                    .on_hover_text(l.t("关闭可加快扫描。", "Disable for faster scans."));
-            });
             ui.checkbox(&mut state.hdr_mode, l.t("游戏使用 HDR", "Game uses HDR"));
         });
     });
@@ -71,17 +66,13 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_server_running:
     // === Advanced Options (shared with scanner tab) ===
     widgets::fold(ui, l.t("高级选项", "Advanced"), |ui| {
         ui.add_enabled_ui(!is_server_running, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut state.verbose, l.t("详细信息", "Verbose"));
-                ui.checkbox(
-                    &mut state.dump_images,
-                    l.t("保存 OCR 截图", "Save OCR screenshots"),
-                );
-                ui.checkbox(
-                    &mut state.dump_job_data,
-                    l.t("保存请求数据", "Dump request data"),
-                );
-            });
+            widgets::manager_debug_options(
+                ui,
+                l,
+                &mut state.verbose,
+                &mut state.dump_images,
+                &mut state.dump_job_data,
+            );
         });
     });
 }

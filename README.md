@@ -86,7 +86,7 @@ GGScannerOCR.exe --characters --weapons  # 组合扫描
 | 参数 | 说明 |
 |------|------|
 | `-v, --verbose` | 显示详细扫描信息 |
-| `--continue-on-failure` | 单项失败时继续扫描 |
+| `--stop-on-failure` | 识别失败时停止（默认跳过失败条目并记录原因） |
 | `--log-progress` | 逐项显示扫描进度 |
 | `--output-dir <DIR>` | 输出目录（默认当前目录） |
 | `--ocr-backend <NAME>` | 覆盖所有类别的辅助 OCR 后端（角色名/等级校验、武器装备回退、圣遗物等级） |

@@ -129,6 +129,7 @@ fn handle(
     sequence: &mut u64,
     progress: &impl Fn() -> Value,
     cancel: &CancelToken,
+    dump_job_data: bool,
 ) {
     let origin = request
         .headers()
@@ -225,6 +226,18 @@ fn handle(
         reply(request, 413, json!({"error":"request_too_large"}), origin);
         return;
     }
+    if dump_job_data {
+        let endpoint = if manage { "hsr_manage" } else { "hsr_scan" };
+        if let Err(error) =
+            yas::utils::request_log::save_request_log(std::path::Path::new("log"), endpoint, &bytes)
+        {
+            yas::log_error!(
+                "无法保存星铁请求数据：{:#}",
+                "Could not save Star Rail request data: {:#}",
+                error
+            );
+        }
+    }
     let job = if manage {
         std::str::from_utf8(&bytes)
             .ok()
@@ -295,6 +308,7 @@ pub fn serve(
     server: Server,
     cancel: CancelToken,
     state: Arc<Mutex<JobState>>,
+    dump_job_data: bool,
     execute: impl FnMut(Job, CancelToken) -> Result<Value, Value>,
     progress: impl Fn() -> Value + Send + Sync,
 ) -> anyhow::Result<()> {
@@ -326,6 +340,7 @@ pub fn serve(
                         &mut sequence,
                         &progress,
                         &cancel_http,
+                        dump_job_data,
                     ),
                     Ok(None) => {},
                     Err(error) => return Err(anyhow::anyhow!(error)),

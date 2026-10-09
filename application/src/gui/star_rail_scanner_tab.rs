@@ -154,6 +154,7 @@ pub fn show_settings(
     timing_settings(ui, lang, settings, is_running);
     widgets::fold(ui, lang.t("高级选项", "Advanced"), |ui| {
         ui.add_enabled_ui(!is_running && !game_busy, |ui| {
+            widgets::scan_debug_options(ui, lang, &mut settings.verbose, &mut settings.stop_on_failure, &mut settings.dump_images);
             widgets::field_row(ui, lang.t("截图方式", "Capture"), |ui| {
                 egui::ComboBox::from_id_salt("star_rail_capture_method")
                     .width(ui.available_width() - 16.0)
@@ -183,10 +184,6 @@ pub fn show_settings(
                             "最大扫描数：0 = 全部。达到上限时仅导出已扫描条目。",
                             "Max scan count: 0 = all. Reaching a cap saves partial results.",
                         ));
-                        ui.checkbox(
-                            &mut settings.dump_images,
-                            lang.t("保存 OCR 截图", "Save OCR screenshots"),
-                        );
 
                     });
     });

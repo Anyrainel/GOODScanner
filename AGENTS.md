@@ -76,7 +76,7 @@ src/
     ├── mod.rs                 # eframe App impl, tab routing
     ├── state.rs               # AppState: all GUI state fields
     ├── worker.rs              # spawn_scan(), spawn_server() — background thread launchers
-    ├── manager_tab.rs         # Manager tab UI: server start/stop, update_inventory checkbox
+    ├── manager_tab.rs         # Manager tab UI: server start/stop and requested-set filtering
     ├── scan_tab.rs            # Scan tab UI: scan target checkboxes, options
     ├── capture_tab.rs         # Capture tab UI: start/stop packet capture, export
     ├── settings_tab.rs        # Settings tab: config editing
@@ -159,7 +159,7 @@ All help text is bilingual (Chinese + English). Flags are grouped into four sect
 
 ### Global Options
 - `-v, --verbose` — detailed scan info
-- `--continue-on-failure` — keep scanning when individual items fail
+- `--stop-on-failure` — stop at the first OCR failure; default skips unreadable entries and logs the cause
 - `--log-progress` — log each scanned item
 - `--output-dir <DIR>` — output directory (default: `.`)
 - `--ocr-backend <NAME>` — override every category's secondary (v5-slot) backend: character name/level check, weapon equip fallback, artifact level (also achievements)
@@ -241,7 +241,11 @@ Each data type (characters, weapons, artifacts) has an independent `ScanDataCach
 
 ### Key config flow
 
-GUI `state.update_inventory` (bool, default true) + `state.filter_involved_sets` (bool, default false) → `stop_on_all_matched` / set-filter mode → passed through `cli.rs::run_server_core()` → `ArtifactManager::new()` → `LockManager::execute()`.
+GUI `state.filter_involved_sets` defaults true. Management always stops once
+targets are matched; it does not refresh full inventory. The independent scan
+actions supply inventory data. These choices pass through `cli.rs::run_server_core()`
+to `ArtifactManager::new()` and `LockManager::execute()`. See
+`docs/SCANNER_OPTION_PARITY.md` for shared options and remaining Star Rail work.
 
 ### Matching (matching.rs)
 
@@ -253,7 +257,9 @@ Per-page: scan all items via pipelined OCR → match against targets → re-clic
 
 ### Snapshot (orchestrator.rs)
 
-After a complete manage scan, builds an artifact snapshot reflecting post-toggle state: updates `lock` and clears `astral_mark` on unlock (game forces this). Served via `GET /artifacts?jobId=xxx`.
+The internal complete-scan path can build a post-toggle snapshot, but current
+management always stops after matching and does not publish a full inventory
+snapshot. Use `POST /scan` to populate `GET /artifacts?jobId=xxx`.
 
 ## Fuzzy Matching (`fuzzy_match.rs`)
 

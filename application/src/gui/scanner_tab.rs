@@ -72,14 +72,12 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_scanning: bool)
     // === Advanced Options ===
     widgets::fold(ui, l.t("高级选项", "Advanced"), |ui| {
         ui.add_enabled_ui(!is_scanning, |ui| {
-            ui.checkbox(&mut state.verbose, l.t("详细日志", "Detailed logs"));
-            ui.checkbox(
-                &mut state.continue_on_failure,
-                l.t("识别失败时继续", "Continue on OCR errors"),
-            );
-            ui.checkbox(
+            widgets::scan_debug_options(
+                ui,
+                l,
+                &mut state.verbose,
+                &mut state.stop_on_failure,
                 &mut state.dump_images,
-                l.t("保存 OCR 截图", "Save OCR screenshots"),
             );
             ui.separator();
             ui.strong(l.t("扫描上限", "Scan limits"));
@@ -97,21 +95,6 @@ pub fn show_settings(ui: &mut egui::Ui, state: &mut AppState, is_scanning: bool)
                     max_count_field(ui, value);
                 });
             }
-            ui.separator();
-            ui.strong(l.t("OCR 并发", "OCR workers"));
-            widgets::hint(
-                ui,
-                l.t(
-                    "0 = 按内存自动分配，下次扫描生效",
-                    "0 = automatic. Applies on next scan.",
-                ),
-            );
-            widgets::field_row(ui, "v5", |ui| {
-                pool_size_field(ui, &mut state.user_config.ocr_pool_v5_override);
-            });
-            widgets::field_row(ui, "v4", |ui| {
-                pool_size_field(ui, &mut state.user_config.ocr_pool_v4_override);
-            });
         });
     });
 }
@@ -218,8 +201,4 @@ pub fn show_status(
 
 fn max_count_field(ui: &mut egui::Ui, value: &mut usize) {
     ui.add(egui::DragValue::new(value).range(0..=2000).speed(0.0));
-}
-
-fn pool_size_field(ui: &mut egui::Ui, value: &mut usize) {
-    ui.add(egui::DragValue::new(value).range(0..=8).speed(0.0));
 }

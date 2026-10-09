@@ -150,6 +150,7 @@ fn scanner_config(
         trailblazer,
         dump_images: settings.dump_images,
         save_on_cancel: settings.scan_save_on_cancel,
+        stop_on_failure: settings.stop_on_failure,
         ..ScanConfig::default()
     })
 }
@@ -597,6 +598,10 @@ fn manager_scan_config(settings: &StarRailSettings) -> Result<ScanConfig, UiErro
     // inventory and must not inherit a user's diagnostic sample preference.
     config.max_gear = 0;
     config.save_on_cancel = false;
+    // TODO(hsr-manager-set-filter): narrow traversal to requested Relic sets
+    // once game-side set filtering is implemented and coverage can be proven
+    // within that filter. Until then matching requires a complete inventory.
+    config.stop_on_failure = true;
     Ok(config)
 }
 
@@ -628,7 +633,7 @@ pub fn spawn_manager_server(
                 })?;
             *status_worker.lock().unwrap() =
                 TaskStatus::Running(UiText::new("等待网站请求", "Waiting for a website request"));
-            crate::hsr_server::serve(server, cancel, job,
+            crate::hsr_server::serve(server, cancel, job, settings.dump_job_data,
                 move |request, job_cancel| {
                     progress.lock().unwrap().steps.clear();
                     *status_worker.lock().unwrap() = TaskStatus::Running(UiText::new("正在启动任务", "Starting task"));
@@ -866,6 +871,7 @@ mod feedback_tests {
             ..Default::default()
         };
         let config = manager_scan_config(&settings).unwrap();
+        assert!(config.stop_on_failure);
         assert!(!config.save_on_cancel);
         assert_eq!(config.max_gear, 0);
         assert!(!config.targets.characters);

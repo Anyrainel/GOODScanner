@@ -560,6 +560,30 @@ fn sanitize_config_json(val: &mut serde_json::Value) {
         Some(o) => o,
         None => return,
     };
+    // Unversioned files saved continue_on_failure (the inverse of the new
+    // stop_on_failure). Preserve explicit choices; absent fields use defaults.
+    if !obj.contains_key("schema_version") {
+        if !obj.contains_key("stop_on_failure") {
+            if let Some(continue_scanning) = obj
+                .get("continue_on_failure")
+                .and_then(serde_json::Value::as_bool)
+            {
+                obj.insert("stop_on_failure".to_owned(), (!continue_scanning).into());
+            }
+        }
+        obj.insert(
+            "schema_version".to_owned(),
+            good_config_schema_version().into(),
+        );
+    }
+    for key in [
+        "continue_on_failure",
+        "update_inventory",
+        "ocr_pool_v4_override",
+        "ocr_pool_v5_override",
+    ] {
+        obj.remove(key);
+    }
     // Legacy unversioned good_config.json could store capture_method="print_window".
     // Both config-loading paths sanitize before deserialization. Replace only
     // this retired backend with the normal HDR-derived choice.
@@ -590,6 +614,22 @@ fn sanitize_config_json(val: &mut serde_json::Value) {
     }
 }
 
+fn good_config_schema_version() -> u32 {
+    1
+}
+
+pub fn parse_user_config(contents: &str) -> Result<GoodUserConfig> {
+    let mut value: serde_json::Value = serde_json::from_str(contents)?;
+    sanitize_config_json(&mut value);
+    let config: GoodUserConfig = serde_json::from_value(value)?;
+    anyhow::ensure!(
+        config.schema_version == good_config_schema_version(),
+        "unsupported good_config schema version: {}",
+        config.schema_version
+    );
+    Ok(config)
+}
+
 /// User config stored in `data/good_config.json`.
 ///
 /// Holds user-specific in-game names and scanner timing settings.
@@ -597,6 +637,8 @@ fn sanitize_config_json(val: &mut serde_json::Value) {
 /// New fields are added with serde defaults so old config files still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoodUserConfig {
+    #[serde(default = "good_config_schema_version")]
+    pub schema_version: u32,
     /// In-game Traveler name (leave empty if not renamed)
     #[serde(default)]
     pub traveler_name: String,
@@ -760,7 +802,7 @@ pub struct GoodUserConfig {
     #[serde(default)]
     pub verbose: bool,
     #[serde(default)]
-    pub continue_on_failure: bool,
+    pub stop_on_failure: bool,
     #[serde(default)]
     pub dump_images: bool,
     #[serde(default)]
@@ -785,9 +827,7 @@ pub struct GoodUserConfig {
     pub achievement_max_count: usize,
     #[serde(default = "default_server_port")]
     pub server_port: u16,
-    #[serde(default = "default_true")]
-    pub update_inventory: bool,
-    #[serde(default, alias = "manage_recent_artifacts")]
+    #[serde(default = "default_true", alias = "manage_recent_artifacts")]
     pub filter_involved_sets: bool,
 
     // --- GGScanner capture GUI settings ---
@@ -803,13 +843,6 @@ pub struct GoodUserConfig {
     pub capture_dump_packets: bool,
     #[serde(default = "default_true")]
     pub capture_only_keep_latest_export: bool,
-
-    /// Advanced: force OCR v5 pool size. 0 = auto-detect from RAM. Non-zero forces that size.
-    #[serde(default)]
-    pub ocr_pool_v5_override: usize,
-    /// Advanced: force OCR v4 pool size. 0 = auto-detect from RAM. Non-zero forces that size.
-    #[serde(default)]
-    pub ocr_pool_v4_override: usize,
 }
 
 impl GoodUserConfig {
@@ -830,34 +863,16 @@ impl GoodUserConfig {
         }
     }
 
-    /// Resolve OCR pool sizes: auto-detect from RAM, then apply any non-zero user overrides.
+    /// OCR concurrency follows available memory; there are no user overrides.
     pub fn resolve_ocr_pool_config(&self) -> OcrPoolConfig {
-        let mut cfg = OcrPoolConfig::detect();
-        if self.ocr_pool_v5_override > 0 {
-            log_info!(
-                "OCR v5 池大小手动覆盖: {} → {}",
-                "OCR v5 pool size manually overridden: {} → {}",
-                cfg.v5_count,
-                self.ocr_pool_v5_override,
-            );
-            cfg.v5_count = self.ocr_pool_v5_override;
-        }
-        if self.ocr_pool_v4_override > 0 {
-            log_info!(
-                "OCR v4 池大小手动覆盖: {} → {}",
-                "OCR v4 pool size manually overridden: {} → {}",
-                cfg.v4_count,
-                self.ocr_pool_v4_override,
-            );
-            cfg.v4_count = self.ocr_pool_v4_override;
-        }
-        cfg
+        OcrPoolConfig::detect()
     }
 }
 
 impl Default for GoodUserConfig {
     fn default() -> Self {
         Self {
+            schema_version: good_config_schema_version(),
             traveler_name: String::new(),
             wanderer_name: String::new(),
             manekin_name: String::new(),
@@ -886,7 +901,7 @@ impl Default for GoodUserConfig {
             scan_artifacts: true,
             scan_achievements: false,
             verbose: false,
-            continue_on_failure: false,
+            stop_on_failure: false,
             dump_images: false,
             hdr_mode: false,
             hdr_white_point: default_hdr_white_point(),
@@ -899,16 +914,13 @@ impl Default for GoodUserConfig {
             artifact_max_count: 0,
             achievement_max_count: 0,
             server_port: default_server_port(),
-            update_inventory: true,
-            filter_involved_sets: false,
+            filter_involved_sets: true,
             capture_include_characters: true,
             capture_include_weapons: true,
             capture_include_artifacts: true,
             capture_include_achievements: true,
             capture_dump_packets: false,
             capture_only_keep_latest_export: true,
-            ocr_pool_v5_override: 0,
-            ocr_pool_v4_override: 0,
         }
     }
 }
@@ -924,14 +936,7 @@ pub fn load_config_or_default() -> GoodUserConfig {
         Ok(contents) => {
             // Parse as generic JSON first so we can sanitize invalid field types
             // (e.g. empty strings in u64 fields from old config versions).
-            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&contents);
-            let config_result = match parsed {
-                Ok(mut val) => {
-                    sanitize_config_json(&mut val);
-                    serde_json::from_value::<GoodUserConfig>(val)
-                },
-                Err(e) => Err(e),
-            };
+            let config_result = parse_user_config(&contents);
             match config_result {
                 Ok(config) => config,
                 Err(e) => {
@@ -960,6 +965,27 @@ pub fn load_config_or_default() -> GoodUserConfig {
 /// Save the user config to data/good_config.json.
 pub fn save_config(config: &GoodUserConfig) -> Result<()> {
     let path = config_path();
+    save_user_config_to_path(config, &path)
+}
+
+pub fn save_user_config_to_path(config: &GoodUserConfig, path: &std::path::Path) -> Result<()> {
+    anyhow::ensure!(
+        config.schema_version == good_config_schema_version(),
+        "unsupported good_config schema version: {}",
+        config.schema_version
+    );
+    if path.exists() {
+        let existing: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+        if let Some(version) = existing
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+        {
+            anyhow::ensure!(
+                version <= u64::from(good_config_schema_version()),
+                "refusing to overwrite newer good_config schema version: {version}"
+            );
+        }
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -992,11 +1018,8 @@ fn load_or_create_config() -> Result<GoodUserConfig> {
     let contents = std::fs::read_to_string(&path)?;
     // Parse as generic JSON first so we can sanitize invalid field types
     // (e.g. empty strings in u64 fields from old config versions).
-    let mut val: serde_json::Value = serde_json::from_str(&contents)
-        .map_err(|e| anyhow!("配置解析失败 / Failed to parse {}: {}", path.display(), e))?;
-    sanitize_config_json(&mut val);
-    let config: GoodUserConfig = serde_json::from_value(val)
-        .map_err(|e| anyhow!("配置解析失败 / Failed to parse {}: {}", path.display(), e))?;
+    let config = parse_user_config(&contents)
+        .with_context(|| format!("配置解析失败 / Failed to parse {}", path.display()))?;
     log_debug!("已加载配置: {}", "Loaded config from {}", path.display());
 
     // Re-save to strip invalid/default entries and add any new default fields
@@ -1128,13 +1151,13 @@ pub struct GoodScannerConfig {
     )]
     pub verbose: bool,
 
-    /// 单项失败时继续扫描 / Continue when items fail
+    /// 识别失败时停止 / Stop on OCR errors
     #[arg(
-        long = "continue-on-failure",
-        help = "单项失败时继续扫描\nContinue scanning when individual items fail",
+        long = "stop-on-failure",
+        help = "识别失败时停止\nStop scanning on the first OCR error",
         help_heading = "通用选项 / Global Options"
     )]
-    pub continue_on_failure: bool,
+    pub stop_on_failure: bool,
 
     /// 逐项显示扫描进度 / Log each scanned item
     #[arg(
@@ -1282,7 +1305,7 @@ impl GoodScannerApplication {
             next_delay: user_config.char_next_delay,
             open_delay: user_config.char_open_delay,
             close_delay: user_config.char_close_delay,
-            continue_on_failure: config.continue_on_failure,
+            continue_on_failure: !config.stop_on_failure,
             log_progress: config.log_progress,
             dump_images: config.dump_images,
             max_count: config.char_max_count,
@@ -1301,7 +1324,7 @@ impl GoodScannerApplication {
             delay_scroll: user_config.inv_scroll_delay,
             delay_tab: user_config.inv_tab_delay,
             open_delay: user_config.inv_open_delay,
-            continue_on_failure: config.continue_on_failure,
+            continue_on_failure: !config.stop_on_failure,
             log_progress: config.log_progress,
             dump_images: config.dump_images,
             max_count: config.weapon_max_count,
@@ -1323,7 +1346,7 @@ impl GoodScannerApplication {
             delay_scroll: user_config.inv_scroll_delay,
             delay_tab: user_config.inv_tab_delay,
             open_delay: user_config.inv_open_delay,
-            continue_on_failure: config.continue_on_failure,
+            continue_on_failure: !config.stop_on_failure,
             log_progress: config.log_progress,
             dump_images: config.dump_images,
             max_count: config.artifact_max_count,
@@ -1349,7 +1372,7 @@ impl GoodScannerApplication {
             scroll_delay: user_config.achievement_scroll_delay,
             category_delay: user_config.achievement_category_delay,
             open_delay: user_config.achievement_open_delay,
-            continue_on_failure: config.continue_on_failure,
+            continue_on_failure: !config.stop_on_failure,
             log_progress: config.log_progress,
             dump_images: config.dump_images,
             max_count: config.achievement_max_count,
@@ -1403,7 +1426,7 @@ impl GoodScannerApplication {
             weapon_min_rarity: config.weapon_min_rarity,
             artifact_min_rarity: config.artifact_min_rarity,
             verbose: config.verbose,
-            continue_on_failure: config.continue_on_failure,
+            stop_on_failure: config.stop_on_failure,
             log_progress: config.log_progress,
             dump_images: config.dump_images || config.debug_ach_scroll,
             hdr_mode: config.hdr_mode || user_config.hdr_mode,
@@ -1524,7 +1547,7 @@ pub struct ScanCoreConfig {
     pub weapon_min_rarity: i32,
     pub artifact_min_rarity: i32,
     pub verbose: bool,
-    pub continue_on_failure: bool,
+    pub stop_on_failure: bool,
     pub log_progress: bool,
     pub dump_images: bool,
     pub hdr_mode: bool,
@@ -1554,7 +1577,7 @@ impl Default for ScanCoreConfig {
             weapon_min_rarity: 3,
             artifact_min_rarity: 4,
             verbose: false,
-            continue_on_failure: false,
+            stop_on_failure: false,
             log_progress: false,
             dump_images: false,
             hdr_mode: false,
@@ -1583,7 +1606,7 @@ impl ScanCoreConfig {
             scan_achievements: self.scan_achievements,
             scan_all: false,
             verbose: self.verbose,
-            continue_on_failure: self.continue_on_failure,
+            stop_on_failure: self.stop_on_failure,
             log_progress: self.log_progress,
             output_dir: self.output_dir.clone(),
             ocr: self.ocr.clone(),
@@ -1944,6 +1967,31 @@ pub fn run_manage_json(
 mod tests {
     use super::*;
     use crate::scanner::common::ocr_pool::OcrSlotBackends;
+
+    #[test]
+    fn stop_on_failure_controls_every_scanner_and_defaults_to_continue() {
+        for (args, stop) in [(vec![], false), (vec!["--stop-on-failure"], true)] {
+            let config = parse_scanner_args(&args);
+            assert_eq!(config.stop_on_failure, stop);
+            let user = GoodUserConfig::default();
+            assert_eq!(
+                GoodScannerApplication::make_char_config(&config, &user).continue_on_failure,
+                !stop
+            );
+            assert_eq!(
+                GoodScannerApplication::make_weapon_config(&config, &user).continue_on_failure,
+                !stop
+            );
+            assert_eq!(
+                GoodScannerApplication::make_artifact_config(&config, &user).continue_on_failure,
+                !stop
+            );
+            assert_eq!(
+                GoodScannerApplication::make_achievement_config(&config, &user).continue_on_failure,
+                !stop
+            );
+        }
+    }
     use clap::{Args, Command, FromArgMatches};
 
     fn parse_scanner_args(args: &[&str]) -> GoodScannerConfig {

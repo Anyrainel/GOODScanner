@@ -157,6 +157,12 @@ pub struct StarRailSettings {
     pub trailblazer_gender: Option<TrailblazerGender>,
     #[serde(default)]
     pub dump_images: bool,
+    #[serde(default)]
+    pub verbose: bool,
+    #[serde(default)]
+    pub stop_on_failure: bool,
+    #[serde(default)]
+    pub dump_job_data: bool,
     #[serde(default = "default_true")]
     pub scan_only_keep_latest_export: bool,
     #[serde(default)]
@@ -177,7 +183,7 @@ pub struct StarRailSettings {
     pub capture_include_relics: bool,
     #[serde(default)]
     pub capture_dump_packets: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub capture_only_keep_latest_export: bool,
 }
 
@@ -197,6 +203,9 @@ impl Default for StarRailSettings {
             trailblazer_name: String::new(),
             trailblazer_gender: None,
             dump_images: false,
+            verbose: false,
+            stop_on_failure: false,
+            dump_job_data: false,
             scan_only_keep_latest_export: true,
             scan_save_on_cancel: false,
             manager_instructions_path: String::new(),
@@ -207,7 +216,7 @@ impl Default for StarRailSettings {
             capture_include_light_cones: true,
             capture_include_relics: true,
             capture_dump_packets: false,
-            capture_only_keep_latest_export: false,
+            capture_only_keep_latest_export: true,
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use yas::{log_error, log_info};
 
@@ -16,12 +16,49 @@ pub struct WorkItem<M: Send> {
     pub grid_annotation: Option<GridAnnotation>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn individual_ocr_errors_continue_or_fail_the_scan_according_to_policy() {
+        for stop in [false, true] {
+            let (sender, worker) = start_worker(stop, |item: WorkItem<()>| {
+                if item.index == 1 {
+                    anyhow::bail!("failed field: main stat / OCR_MARKER");
+                }
+                Ok(Some(item.index))
+            });
+            for index in 0..3 {
+                sender
+                    .send(WorkItem {
+                        index,
+                        frame: CaptureFrame::full(image::RgbImage::new(1, 1)),
+                        metadata: (),
+                        grid_annotation: None,
+                    })
+                    .unwrap();
+            }
+            drop(sender);
+            let result = worker.join();
+            if stop {
+                assert!(result.unwrap_err().to_string().contains("OCR_MARKER"));
+            } else {
+                let (items, indices) = result.unwrap();
+                assert_eq!(items, [0, 2]);
+                assert_eq!(indices, [0, 2]);
+            }
+        }
+    }
+}
+
 /// Handle to a running worker. Call `join()` to wait for results.
 pub struct WorkerHandle<R> {
     handle: std::thread::JoinHandle<(Vec<R>, Vec<usize>)>,
     /// Set to true by the worker when it detects problems (e.g., consecutive
     /// duplicates). The capture thread should check this periodically and stop.
     pub should_stop: Arc<AtomicBool>,
+    failure: Arc<Mutex<Option<String>>>,
 }
 
 impl<R> WorkerHandle<R> {
@@ -30,10 +67,15 @@ impl<R> WorkerHandle<R> {
     /// Returns `(items, index_map)` where `index_map[i]` is the original
     /// work item index that produced `items[i]`. This allows correlating
     /// output positions with debug image folder names.
-    pub fn join(self) -> (Vec<R>, Vec<usize>) {
-        self.handle
+    pub fn join(self) -> anyhow::Result<(Vec<R>, Vec<usize>)> {
+        let output = self
+            .handle
             .join()
-            .expect("工作线程崩溃 / Worker thread panicked")
+            .expect("工作线程崩溃 / Worker thread panicked");
+        if let Some(error) = self.failure.lock().unwrap().take() {
+            anyhow::bail!("识别失败时停止 / Stopped on OCR error: {error}");
+        }
+        Ok(output)
     }
 
     /// Check if the worker has signaled that scanning should stop.
@@ -94,6 +136,7 @@ pub fn log_ocr_progress(processed: usize, total: usize) {
 /// progress and can signal the capture thread to stop via
 /// `WorkerHandle::should_stop`.
 pub fn start_worker<M, R, F>(
+    stop_on_failure: bool,
     process_fn: F,
 ) -> (crossbeam_channel::Sender<WorkItem<M>>, WorkerHandle<R>)
 where
@@ -106,10 +149,13 @@ where
     let (item_tx, item_rx) = crossbeam_channel::bounded::<WorkItem<M>>(16);
     let should_stop = Arc::new(AtomicBool::new(false));
     let should_stop_clone = should_stop.clone();
+    let failure = Arc::new(Mutex::new(None));
+    let worker_failure = failure.clone();
 
     let handle = std::thread::spawn(move || {
         let _native_crash_context = yas::native_crash::inherit_current_task();
         let process_fn = Arc::new(process_fn);
+        let dispatch_stop = should_stop_clone.clone();
 
         // Result channel: rayon tasks send completed items here. The dispatch
         // thread sends CaptureFinished only after the screenshot sender closes,
@@ -126,9 +172,18 @@ where
                 let process_fn = process_fn.clone();
                 let tx = dispatch_result_tx.clone();
                 let index = item.index;
+                let dispatch_stop = dispatch_stop.clone();
                 rayon::spawn(move || {
                     let _native_crash_context = yas::native_crash::inherit_current_task();
-                    let result = process_fn(item);
+                    let result = if stop_on_failure && dispatch_stop.load(Ordering::Relaxed) {
+                        Ok(None)
+                    } else {
+                        let result = process_fn(item);
+                        if stop_on_failure && result.is_err() {
+                            dispatch_stop.store(true, Ordering::Relaxed);
+                        }
+                        result
+                    };
                     let _ = tx.send(WorkerEvent::ItemProcessed(index, result));
                 });
             }
@@ -175,12 +230,18 @@ where
                             },
                             Err(e) => {
                                 log_error!(
-                                    "[worker] 第{}项错误: {}",
-                                    "[worker] item {} error: {}",
+                                    "[worker] 第{}项错误: {:#}",
+                                    "[worker] item {} error: {:#}",
                                     current_index,
                                     e
                                 );
                                 consecutive_errors += 1;
+                                if stop_on_failure {
+                                    worker_failure.lock().unwrap().get_or_insert_with(|| {
+                                        format!("item {current_index}: {e:#}")
+                                    });
+                                    should_stop_clone.store(true, Ordering::Relaxed);
+                                }
                                 if consecutive_errors >= 10 {
                                     log_error!(
                                         "[worker] 连续{}个错误，发送停止信号",
@@ -220,6 +281,7 @@ where
         WorkerHandle {
             handle,
             should_stop,
+            failure,
         },
     )
 }

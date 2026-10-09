@@ -52,29 +52,12 @@ fn timestamp_string() -> String {
 
 /// Save a request body as a timestamped JSON file in the log/ directory.
 fn save_request(endpoint: &str, body: &str) {
-    let log_dir = std::path::PathBuf::from("log");
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        let zh_hint = format!(
-            "无法保存请求日志，因为无法创建日志文件夹 {}。",
-            log_dir.display()
-        );
-        let en_hint = format!(
-            "The request log could not be saved because its log directory could not be created: {}.",
-            log_dir.display()
-        );
-        log_error_with_diagnostic(&zh_hint, &en_hint, e);
-        return;
-    }
-    let ts = timestamp_string();
-    let filename = format!("{}_{}.json", endpoint, ts);
-    let path = log_dir.join(&filename);
-    if let Err(e) = std::fs::write(&path, body) {
-        let zh_hint = format!("无法保存请求日志文件 {}。", path.display());
-        let en_hint = format!(
-            "The request log file could not be saved: {}.",
-            path.display()
-        );
-        log_error_with_diagnostic(&zh_hint, &en_hint, e);
+    if let Err(error) = yas::utils::request_log::save_request_log(
+        std::path::Path::new("log"),
+        endpoint,
+        body.as_bytes(),
+    ) {
+        log_error_with_diagnostic("无法保存请求日志。", "Could not save request log.", error);
     }
 }
 
@@ -825,15 +808,36 @@ where
 
             match (method, url.as_str()) {
                 (Method::Post, "/manage") => {
-                    handle_manage(request, &http_enabled, &http_state, &http_job_tx, cors_ref);
+                    handle_manage(
+                        request,
+                        &http_enabled,
+                        &http_state,
+                        &http_job_tx,
+                        cors_ref,
+                        dump_job_data,
+                    );
                 },
 
                 (Method::Post, "/equip") => {
-                    handle_equip(request, &http_enabled, &http_state, &http_job_tx, cors_ref);
+                    handle_equip(
+                        request,
+                        &http_enabled,
+                        &http_state,
+                        &http_job_tx,
+                        cors_ref,
+                        dump_job_data,
+                    );
                 },
 
                 (Method::Post, "/scan") => {
-                    handle_scan(request, &http_enabled, &http_state, &http_job_tx, cors_ref);
+                    handle_scan(
+                        request,
+                        &http_enabled,
+                        &http_state,
+                        &http_job_tx,
+                        cors_ref,
+                        dump_job_data,
+                    );
                 },
 
                 // Lightweight poll — no result payload.
@@ -1618,6 +1622,7 @@ fn handle_manage(
     state: &Arc<Mutex<JobState>>,
     job_tx: &mpsc::Sender<(String, JobRequest)>,
     cors_origin: Option<&str>,
+    dump_job_data: bool,
 ) {
     // Check if manager is enabled
     if !enabled.load(Ordering::Relaxed) {
@@ -1681,7 +1686,9 @@ fn handle_manage(
     }
 
     // Log request body to file
-    save_request("manage", &body);
+    if dump_job_data {
+        save_request("manage", &body);
+    }
 
     // Enforce size limit for chunked transfers (no Content-Length)
     if body.len() > MAX_BODY_SIZE {
@@ -1796,6 +1803,7 @@ fn handle_equip(
     state: &Arc<Mutex<JobState>>,
     job_tx: &mpsc::Sender<(String, JobRequest)>,
     cors_origin: Option<&str>,
+    dump_job_data: bool,
 ) {
     if !enabled.load(Ordering::Relaxed) {
         log_warn!(
@@ -1855,7 +1863,9 @@ fn handle_equip(
     }
 
     // Log request body to file
-    save_request("equip", &body);
+    if dump_job_data {
+        save_request("equip", &body);
+    }
 
     if body.len() > MAX_BODY_SIZE {
         let message = if yas::lang::is_en() {
@@ -1955,6 +1965,7 @@ fn handle_scan(
     state: &Arc<Mutex<JobState>>,
     job_tx: &mpsc::Sender<(String, JobRequest)>,
     cors_origin: Option<&str>,
+    dump_job_data: bool,
 ) {
     if !enabled.load(Ordering::Relaxed) {
         log_warn!(
@@ -1998,7 +2009,9 @@ fn handle_scan(
         return;
     }
 
-    save_request("scan", &body);
+    if dump_job_data {
+        save_request("scan", &body);
+    }
 
     let scan_request: ScanRequest = match serde_json::from_str(&body) {
         Ok(r) => r,

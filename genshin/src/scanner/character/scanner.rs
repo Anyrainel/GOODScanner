@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use anyhow::{bail, Result};
@@ -93,6 +93,7 @@ enum CharacterWork {
 
 /// Worker output.
 enum CharacterResult {
+    Failed(String),
     Scanned {
         viewed_index: usize,
         character: Option<GoodCharacter>,
@@ -378,7 +379,15 @@ impl GoodCharacterScanner {
         }
 
         let sub = image.view(x, y, w, h).to_image();
-        let text = ocr.image_to_text(&sub, false)?;
+        let text = ocr.image_to_text(&sub, false).map_err(|error| {
+            log_error!(
+                "角色 OCR 区域 {:?} 识别失败：{:#}",
+                "Character OCR region {:?} failed: {:#}",
+                rect,
+                error
+            );
+            error
+        })?;
         Ok(text.trim().to_string())
     }
 
@@ -805,7 +814,12 @@ impl GoodCharacterScanner {
     ) -> (i32, bool, String) {
         let text = match Self::ocr_image_region(ocr, image, CHAR_LEVEL_RECT, scaler) {
             Ok(t) => t,
-            Err(_) => {
+            Err(error) => {
+                log_error!(
+                    "角色等级 OCR 失败：{:#}",
+                    "Character level OCR failed: {:#}",
+                    error
+                );
                 annotator::record_ocr("level", CHAR_LEVEL_RECT, "(ocr error)");
                 annotator::set_final("level", "1");
                 return (1, false, String::new());
@@ -1070,7 +1084,13 @@ impl GoodCharacterScanner {
         annotator::add_image(label, image);
         let text = match Self::ocr_image_region(ocr, image, CHAR_TALENT_LEVEL_RECT, scaler) {
             Ok(t) => t,
-            Err(_) => {
+            Err(error) => {
+                log_error!(
+                    "角色天赋详情 OCR 失败（{}）：{:#}",
+                    "Character talent-detail OCR failed ({}): {:#}",
+                    label,
+                    error
+                );
                 annotator::record_ocr(label, CHAR_TALENT_LEVEL_RECT, "(ocr error)");
                 annotator::set_final(label, "0");
                 return 0;
@@ -1149,6 +1169,19 @@ impl GoodCharacterScanner {
         let ocr = ocr_pool.get();
         let (level, ascended, raw_level) = Self::read_level_from_image(&ocr, &attrs_image, scaler);
         let level_ocr_failed = raw_level.trim().is_empty();
+        if level_ocr_failed {
+            log_warn!(
+                "[character] {} 等级无法识别，将重读。原始文字：{}",
+                "[character] {} level unreadable; will retry. Raw text: {}",
+                name,
+                raw_level
+            );
+            if !self.config.continue_on_failure {
+                return CharacterResult::Failed(format!(
+                    "{name}: level OCR failed; raw={raw_level:?}"
+                ));
+            }
+        }
 
         if Self::is_level_suspicious(level, ascended) {
             log_debug!(
@@ -1202,11 +1235,14 @@ impl GoodCharacterScanner {
             if burst_lv == 0 {
                 missing.push("burst");
             }
-            log_debug!(
+            log_warn!(
                 "[character] 天赋概览失败: {}，将在第二轮使用点击回退",
                 "[character] talent overview failed for: {}, will use click fallback in phase 2",
                 missing.join("/")
             );
+            if !self.config.continue_on_failure {
+                return CharacterResult::Failed(format!("{name}: talent overview failed; auto={raw_auto:?}, skill={raw_skill:?}, burst={raw_burst:?}"));
+            }
         }
 
         // Record talent annotations with raw OCR text
@@ -1308,7 +1344,11 @@ impl GoodCharacterScanner {
         let ocr = ocr_pool.get();
 
         // -- Level --
-        let (new_level, new_ascended, _) = Self::read_level_from_image(&ocr, &attrs_image, scaler);
+        let (new_level, new_ascended, raw_level) =
+            Self::read_level_from_image(&ocr, &attrs_image, scaler);
+        if raw_level.trim().is_empty() && !self.config.continue_on_failure {
+            return CharacterResult::Failed(format!("{name}: level reread failed"));
+        }
         let new_ascension = level_to_ascension(new_level, new_ascended);
 
         // -- Constellation: click tree if phase 1 pixels were invalid;
@@ -1612,6 +1652,8 @@ impl GoodCharacterScanner {
         let worker_mappings = self.mappings.clone();
         let worker_scaler = ctrl.scaler.clone();
         let worker_config = self.config.clone();
+        let ocr_failure = Arc::new(Mutex::new(None::<String>));
+        let worker_failure = ocr_failure.clone();
 
         let worker_handle = std::thread::spawn(move || {
             let _native_crash_context = yas::native_crash::inherit_current_task();
@@ -1621,6 +1663,10 @@ impl GoodCharacterScanner {
                 mappings: worker_mappings,
             };
             for work in work_rx {
+                if worker_failure.lock().unwrap().is_some() && !matches!(&work, CharacterWork::Done)
+                {
+                    continue;
+                }
                 match work {
                     CharacterWork::Scan(captures) => {
                         let result = scanner.process_scan_captures(
@@ -1628,7 +1674,16 @@ impl GoodCharacterScanner {
                             &worker_ocr_pool,
                             &worker_scaler,
                         );
-                        let _ = result_tx.send(result);
+                        if let CharacterResult::Failed(error) = result {
+                            log_error!(
+                                "角色识别失败时停止：{}",
+                                "Stopped on Character OCR error: {}",
+                                error
+                            );
+                            *worker_failure.lock().unwrap() = Some(error);
+                        } else {
+                            let _ = result_tx.send(result);
+                        }
                     },
                     CharacterWork::Rescan(captures) => {
                         let result = scanner.process_rescan_captures(
@@ -1636,7 +1691,16 @@ impl GoodCharacterScanner {
                             &worker_ocr_pool,
                             &worker_scaler,
                         );
-                        let _ = result_tx.send(result);
+                        if let CharacterResult::Failed(error) = result {
+                            log_error!(
+                                "角色重读失败时停止：{}",
+                                "Stopped on Character reread error: {}",
+                                error
+                            );
+                            *worker_failure.lock().unwrap() = Some(error);
+                        } else {
+                            let _ = result_tx.send(result);
+                        }
                     },
                     CharacterWork::Done => {
                         let _ = result_tx.send(CharacterResult::PhaseDone);
@@ -1667,6 +1731,9 @@ impl GoodCharacterScanner {
         pb.set_message("0 characters scanned");
 
         loop {
+            if let Some(error) = ocr_failure.lock().unwrap().as_ref() {
+                bail!("识别失败时停止 / Stopped on OCR error: {error}");
+            }
             if ctrl.check_rmb() {
                 log_info!(
                     "[character] 用户中断扫描",
@@ -1933,6 +2000,9 @@ impl GoodCharacterScanner {
         utils::sleep(self.config.close_delay as u32);
 
         // ── Phase 2: Rescan suspicious characters ───────────────────────────
+        if let Some(error) = ocr_failure.lock().unwrap().as_ref() {
+            bail!("识别失败时停止 / Stopped on OCR error: {error}");
+        }
 
         let suspicious: Vec<(usize, usize)> = characters
             .iter()
@@ -1978,6 +2048,9 @@ impl GoodCharacterScanner {
         // Signal worker to exit
         drop(work_tx);
         let _ = worker_handle.join();
+        if let Some(error) = ocr_failure.lock().unwrap().as_ref() {
+            bail!("识别失败时停止 / Stopped on OCR error: {error}");
+        }
 
         // Final sanitize: snap impossible levels
         let mut had_impossible_level = false;
@@ -2082,6 +2155,7 @@ impl GoodCharacterScanner {
         progress_total: Option<usize>,
     ) -> bool {
         match result {
+            CharacterResult::Failed(_) => false,
             CharacterResult::Rescanned {
                 char_index,
                 character,

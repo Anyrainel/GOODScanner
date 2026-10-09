@@ -47,9 +47,6 @@ const CHARACTER_IDENTITY_REGION: NormRect = layout::CHARACTER_NAME;
 /// stay identical for two copies; the selection still moves when `d` works.
 const INVENTORY_GRID_REGION: NormRect = NormRect::new(0.015, 0.14, 0.70, 0.80);
 
-/// One misread panel is skipped; several in a row mean the scan is not on a
-/// readable Character screen at all.
-const MAX_UNREADABLE_CHARACTERS: usize = 3;
 const MENU_OPEN_POLLS: usize = 8;
 /// Half a backpack row: a larger vertical jump of the selection frame is a
 /// row step, a smaller one is cross-fade jitter.
@@ -130,6 +127,9 @@ pub struct ScanConfig {
     /// Retain fully parsed entries on an explicit device cancellation. Manager
     /// scans always leave this off: incomplete inventories cannot authorize actions.
     pub save_on_cancel: bool,
+    /// Stop on the first unreadable entry for debugging. Normal export scans
+    /// skip individual OCR failures; manager matching always enables this.
+    pub stop_on_failure: bool,
 }
 
 impl Default for ScanConfig {
@@ -150,6 +150,7 @@ impl Default for ScanConfig {
             trailblazer: None,
             dump_images: false,
             save_on_cancel: false,
+            stop_on_failure: false,
         }
     }
 }
@@ -189,6 +190,7 @@ pub struct HsrScanner<D, R> {
     config: ScanConfig,
     uid: Option<u64>,
     uid_candidate: Option<u64>,
+    uid_error_logged: bool,
     observer: Option<crate::scan_progress::ScanObserver>,
 }
 
@@ -223,6 +225,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             config,
             uid: None,
             uid_candidate: None,
+            uid_error_logged: false,
             observer: None,
         }
     }
@@ -414,11 +417,18 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             Ok(Some(uid)) if self.uid_candidate == Some(uid) => self.uid = Some(uid),
             Ok(Some(uid)) => self.uid_candidate = Some(uid),
             Ok(None) => {},
-            Err(error) => yas::log_debug!(
-                "读取 UID 失败，将在下一个画面重试。完整错误详情：{}",
-                "Reading the UID failed; retrying on the next screen. Full error details: {}",
-                error
-            ),
+            Err(error) => {
+                if !self.uid_error_logged {
+                    yas::log_warn!(
+                        "读取 UID 失败，将在后续画面重试。完整错误详情：{}",
+                        "Reading the UID failed; retrying on later screens. Full error details: {}",
+                        error
+                    );
+                    self.uid_error_logged = true;
+                } else {
+                    yas::log_debug!("重读 UID 失败：{}", "UID retry failed: {}", error);
+                }
+            },
         }
     }
 
@@ -529,7 +539,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     },
                 ) {
                     Ok(item) => items.push(item),
-                    Err(error) if is_omittable_scan_error(error.code()) => {
+                    Err(error)
+                        if !self.config.stop_on_failure
+                            && is_omittable_scan_error(error.code()) =>
+                    {
                         incomplete_reason.get_or_insert_with(|| {
                             format!("one or more entries were omitted; firstCause={error}")
                         });
@@ -539,7 +552,15 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                         error
                     );
                     },
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        yas::log_error!(
+                            "库存第 {} 项识别失败。完整错误详情：{}",
+                            "Inventory entry {} failed. Full error details: {}",
+                            ordinal + 1,
+                            error
+                        );
+                        return Err(error);
+                    },
                 }
                 self.report(
                     progress_category,
@@ -1158,6 +1179,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                         "The terminal inventory quantity was outside the trusted range; coverage will be marked unknown and the manager will not mutate. Full error details: {}",
                         error
                     );
+                    if self.config.stop_on_failure {
+                        return Err(error);
+                    }
                     None
                 },
             },
@@ -1167,6 +1191,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     "The inventory quantity could not be read again at the terminal boundary; coverage will be marked unknown and the manager will not mutate. Full error details: {}",
                     error
                 );
+                if self.config.stop_on_failure {
+                    return Err(error);
+                }
                 None
             },
         };
@@ -1237,7 +1264,6 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
 
             let limit = self.config.max_characters;
             let mut seen = BTreeSet::new();
-            let mut unreadable_streak = 0_usize;
             let mut terminal_proven = false;
             let mut coverage_degraded = false;
             // Bound a malfunctioning traversal by the reference roster, allowing
@@ -1273,7 +1299,10 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     )
                 }) {
                     Ok(parsed) => Some(parsed),
-                    Err(error) if error.code() == "HSR-OCR-CHARACTER-AMBIGUOUS" => {
+                    Err(error)
+                        if !self.config.stop_on_failure
+                            && error.code() == "HSR-OCR-CHARACTER-AMBIGUOUS" =>
+                    {
                         coverage_degraded = true;
                         yas::log_warn!(
                         "当前角色名称对应多个公开角色模板，且画面没有足够的命途或变体证据；已省略该角色并将角色覆盖率标记为未知。完整错误详情：{}",
@@ -1283,10 +1312,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                         None
                     },
                     Err(error)
-                        if is_omittable_scan_error(error.code())
-                            && unreadable_streak + 1 < MAX_UNREADABLE_CHARACTERS =>
+                        if !self.config.stop_on_failure
+                            && is_omittable_scan_error(error.code()) =>
                     {
-                        unreadable_streak += 1;
                         coverage_degraded = true;
                         yas::log_warn!(
                         "角色面板有字段无法识别，已省略该角色并将角色覆盖率标记为未知。完整错误详情：{}",
@@ -1295,10 +1323,17 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     );
                         None
                     },
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        yas::log_error!(
+                            "角色第 {} 项识别失败。完整错误详情：{}",
+                            "Character entry {} failed. Full error details: {}",
+                            index + 1,
+                            error
+                        );
+                        return Err(error);
+                    },
                 };
                 if let Some(parsed) = parsed {
-                    unreadable_streak = 0;
                     // A final drag clamps to the end and overlaps the previous
                     // page. Revisited identities are expected and are not exported
                     // twice; continue clicking through the rest of that page.
@@ -1519,7 +1554,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             self.parser.parse_character_traces(&frame, path)
         }) {
             Ok(details) => Ok(Some(details)),
-            Err(error) if traces_unreadable(&error) => {
+            Err(error) if !self.config.stop_on_failure && traces_unreadable(&error) => {
                 yas::log_warn!(
                     "行迹等级无法从画面读出，已省略该角色的 skills/traces。完整错误详情：{}",
                     "Trace levels could not be read from the screen; skills/traces for this character were omitted. Full error details: {}",
@@ -3276,6 +3311,62 @@ mod tests {
     }
 
     #[test]
+    fn inventory_ocr_policy_skips_unreadable_entries_or_stops_but_never_masks_navigation_failures()
+    {
+        for kind in [InventoryKind::LightCone, InventoryKind::Gear] {
+            for stop in [false, true] {
+                for code in ["HSR-OCR-TEST", "HSR-NAV-TEST"] {
+                    let frame = page_frame(&backpack_grid(kind), 0, 3, Some(0));
+                    let snapshot: ReferenceSnapshot = serde_json::from_str(include_str!(
+                        "../tests/fixtures/reference_cache.json"
+                    ))
+                    .unwrap();
+                    let name_field = if kind == InventoryKind::LightCone {
+                        OcrField::LightConeName
+                    } else {
+                        OcrField::GearName
+                    };
+                    let title = if kind == InventoryKind::LightCone {
+                        "制胜的瞬间"
+                    } else {
+                        "过客的逢春木簪"
+                    };
+                    let mut scanner = HsrScanner::new(
+                        ReplayDevice::new(1280, 720, vec![frame; 7]),
+                        ScriptedOcrReader::default()
+                            .with(OcrField::MenuTitle, ["背包"])
+                            .with(name_field, [title])
+                            .with(OcrField::InventoryQuantity, ["3/2000", "3/2000"]),
+                        ReferenceCache::from_snapshot(snapshot).unwrap(),
+                        ScanConfig {
+                            stop_on_failure: stop,
+                            max_light_cones: 1,
+                            max_gear: 1,
+                            ..Default::default()
+                        },
+                    );
+                    let result = scanner.scan_inventory::<usize>(kind, |_, _, _, _, _| {
+                        Err(HsrError::new(
+                            code,
+                            hints::FOCUS_REQUIRED,
+                            "OCR_POLICY_MARKER",
+                        ))
+                    });
+                    if stop || code == "HSR-NAV-TEST" {
+                        let error = result.err().expect("debug or navigation error must stop");
+                        assert_eq!(error.code(), code);
+                        assert!(error.to_string().contains("OCR_POLICY_MARKER"));
+                    } else {
+                        let result = result.unwrap();
+                        assert!(result.items.is_empty());
+                        assert_eq!(result.coverage, CoverageLevel::Unknown);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn user_stop_keeps_inventory_entries_only_when_requested_and_never_masks_focus_loss() {
         for kind in [InventoryKind::LightCone, InventoryKind::Gear] {
             let make = |cap, save_on_cancel| {
@@ -3766,20 +3857,29 @@ mod tests {
             max_characters: 1,
             ..ScanConfig::default()
         };
-        let mut scanner = HsrScanner::new(
-            ReplayDevice::new(
-                1280,
-                720,
-                std::iter::repeat_with(|| frame.clone()).take(24).collect(),
-            ),
-            ScriptedOcrReader::default()
-                .with(OcrField::MenuTitle, ["角色详情"])
-                .with(OcrField::CharacterName, ["三月七"]),
-            references,
-            config,
-        );
-        let scan = scanner.scan_characters().unwrap();
-        assert!(scan.items.is_empty());
-        assert_eq!(scan.coverage, CoverageLevel::Unknown);
+        for stop in [false, true] {
+            let mut scanner = HsrScanner::new(
+                ReplayDevice::new(1280, 720, vec![frame.clone(); 24]),
+                ScriptedOcrReader::default()
+                    .with(OcrField::MenuTitle, ["角色详情"])
+                    .with(OcrField::CharacterName, ["三月七"]),
+                references.clone(),
+                ScanConfig {
+                    stop_on_failure: stop,
+                    ..config.clone()
+                },
+            );
+            let scan = scanner.scan_characters();
+            if stop {
+                assert_eq!(
+                    scan.err().expect("strict OCR policy must stop").code(),
+                    "HSR-OCR-CHARACTER-AMBIGUOUS"
+                );
+            } else {
+                let scan = scan.unwrap();
+                assert!(scan.items.is_empty());
+                assert_eq!(scan.coverage, CoverageLevel::Unknown);
+            }
+        }
     }
 }

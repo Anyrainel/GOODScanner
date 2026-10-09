@@ -25,6 +25,69 @@ fn request(address: &str, method: &str, path: &str, body: &str, origin: &str) ->
 }
 
 #[test]
+fn request_logging_obeys_the_switch_and_retains_invalid_request_details() {
+    for enabled in [false, true] {
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let address = server.server_addr().to_string();
+        let cancel = CancelToken::new();
+        let stop = cancel.clone();
+        let thread = std::thread::spawn(move || {
+            serve(
+                server,
+                stop,
+                Arc::new(Mutex::new(JobState::default())),
+                enabled,
+                |_, _| Ok(json!({})),
+                || json!({}),
+            )
+            .unwrap()
+        });
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let body = format!(
+            r#"{{"invalid":"REQUEST_LOG_MARKER_{}_{}_{enabled}"}}"#,
+            std::process::id(),
+            stamp
+        );
+        assert_eq!(
+            request(
+                &address,
+                "POST",
+                "/manage",
+                &body,
+                "https://hsr.ggartifact.com"
+            )
+            .0,
+            400
+        );
+        cancel.cancel(StopReason::UserAbort);
+        thread.join().unwrap();
+        let logs: Vec<_> = std::fs::read_dir("log")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("hsr_manage_"))
+            })
+            .filter(|path| {
+                std::fs::read(path)
+                    .ok()
+                    .is_some_and(|bytes| bytes == body.as_bytes())
+            })
+            .collect();
+        assert_eq!(logs.len(), usize::from(enabled));
+        for path in logs {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+}
+
+#[test]
 fn loopback_jobs_keep_status_responsive_cancel_safely_and_deduplicate_results() {
     let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
     let address = server.server_addr().to_string();
@@ -37,6 +100,7 @@ fn loopback_jobs_keep_status_responsive_cancel_safely_and_deduplicate_results() 
             server,
             stop,
             Arc::new(Mutex::new(JobState::default())),
+            false,
             move |_, job_cancel| {
                 let run = runs.fetch_add(1, Ordering::SeqCst);
                 if run == 0 {

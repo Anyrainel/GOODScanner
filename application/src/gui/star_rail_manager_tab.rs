@@ -127,9 +127,12 @@ pub fn show_settings(
         });
         super::star_rail_scanner_tab::timing_settings(ui, lang, settings, false);
         widgets::fold(ui, lang.t("高级设置", "Advanced"), |ui| {
-            ui.checkbox(
+            widgets::manager_debug_options(
+                ui,
+                lang,
+                &mut settings.verbose,
                 &mut settings.dump_images,
-                lang.t("保存识别截图", "Save OCR screenshots"),
+                &mut settings.dump_job_data,
             );
         });
     });

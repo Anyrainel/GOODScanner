@@ -266,6 +266,7 @@ impl eframe::App for GuiApp {
             return;
         }
         // Debounced auto-save: check if config changed and save after 300ms
+        log_bridge::set_game_verbose(self.state.verbose, self.app_config.config.star_rail.verbose);
         if self.save_settings {
             #[cfg(feature = "capture")]
             self.capture_tab.sync_to_config(&mut self.state.user_config);

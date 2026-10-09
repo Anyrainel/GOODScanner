@@ -19,6 +19,68 @@ use hsr_scanner::manager::{
 const MANAGER_INSTRUCTIONS: &str =
     include_str!("../../experimental/hsr/tests/fixtures/manager_instructions_v1.json");
 
+#[test]
+fn debugging_options_default_off_and_saved_choices_survive_both_config_loaders() {
+    let root = temp_root("debug-policy");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("good_config.json");
+    for continue_on_failure in [true, false] {
+        let fixture = serde_json::json!({"continue_on_failure":continue_on_failure, "filter_involved_sets":false, "update_inventory":true, "ocr_pool_v4_override":3, "traveler_name":"Player", "verbose":true});
+        fs::write(&path, fixture.to_string()).unwrap();
+        let config =
+            genshin_scanner::cli::parse_user_config(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config.stop_on_failure, !continue_on_failure);
+        assert!(!config.filter_involved_sets);
+        assert!(config.verbose);
+        assert_eq!(config.traveler_name, "Player");
+        genshin_scanner::cli::save_user_config_to_path(&config, &path).unwrap();
+        assert_eq!(
+            genshin_scanner::cli::parse_user_config(&fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .stop_on_failure,
+            config.stop_on_failure
+        );
+        let saved = serde_json::to_string(&config).unwrap();
+        for retired in [
+            "continue_on_failure",
+            "update_inventory",
+            "ocr_pool_v4_override",
+            "ocr_pool_v5_override",
+        ] {
+            assert!(!saved.contains(retired));
+        }
+        assert_eq!(
+            genshin_scanner::cli::parse_user_config(&saved)
+                .unwrap()
+                .stop_on_failure,
+            config.stop_on_failure
+        );
+    }
+    let defaults = genshin_scanner::cli::parse_user_config("{}").unwrap();
+    assert!(!defaults.stop_on_failure);
+    assert!(defaults.filter_involved_sets);
+    assert!(defaults.capture_only_keep_latest_export);
+    let future = r#"{"schema_version":999,"traveler_name":"future"}"#;
+    fs::write(&path, future).unwrap();
+    assert!(genshin_scanner::cli::parse_user_config(future).is_err());
+    assert!(genshin_scanner::cli::save_user_config_to_path(&defaults, &path).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), future);
+    let hsr_path = root.join("ui_config.json");
+    fs::write(&hsr_path, r#"{"schemaVersion":3,"starRail":{"scanCharacters":false,"captureOnlyKeepLatestExport":false}}"#).unwrap();
+    let mut store = ApplicationConfigStore::load(&hsr_path).unwrap();
+    assert!(!store.config.star_rail.stop_on_failure);
+    assert!(!store.config.star_rail.verbose);
+    assert!(!store.config.star_rail.dump_job_data);
+    assert!(!store.config.star_rail.capture_only_keep_latest_export);
+    store.config.star_rail.stop_on_failure = true;
+    store.config.star_rail.verbose = true;
+    store.config.star_rail.dump_job_data = true;
+    store.persist_now().unwrap();
+    let loaded = ApplicationConfigStore::load(&hsr_path).unwrap();
+    assert_eq!(loaded.config, store.config);
+    remove_test_tree(&root);
+}
+
 #[derive(Default)]
 struct MemoryJournalStore {
     journal: Option<ManagerJournal>,
@@ -429,6 +491,9 @@ fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() 
             saved["starRail"]["managerPort"] = 8765.into();
             saved["starRail"]["scanOnlyKeepLatestExport"] = true.into();
             saved["starRail"]["scanSaveOnCancel"] = false.into();
+            saved["starRail"]["verbose"] = false.into();
+            saved["starRail"]["stopOnFailure"] = false.into();
+            saved["starRail"]["dumpJobData"] = false.into();
             saved["starRail"]["captureMethod"] = "auto".into();
             assert_eq!(persisted, saved);
             let reloaded = ApplicationConfigStore::load(&path).unwrap();
@@ -927,7 +992,7 @@ fn capture_selection_defaults_and_saved_choices_are_independent_of_ocr() {
             && settings.capture_include_relics
     );
     assert!(!settings.capture_include_achievements);
-    assert!(!settings.capture_dump_packets && !settings.capture_only_keep_latest_export);
+    assert!(!settings.capture_dump_packets && settings.capture_only_keep_latest_export);
     settings.capture_dump_packets = true;
     settings.capture_only_keep_latest_export = true;
     settings.capture_include_characters = false;

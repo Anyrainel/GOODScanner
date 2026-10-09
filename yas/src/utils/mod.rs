@@ -25,6 +25,7 @@ pub fn available_memory_bytes() -> Option<u64> {
 
 mod misc;
 pub mod packet_capture;
+pub mod request_log;
 
 pub fn sleep(ms: u32) {
     thread::sleep(Duration::from_millis(ms as u64));

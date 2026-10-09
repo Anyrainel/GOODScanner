@@ -599,6 +599,7 @@ impl GoodWeaponScanner {
 
         let (item_tx, worker_handle) =
             scan_worker::start_worker::<Option<GridIconResult>, GoodWeapon, _>(
+                !self.config.continue_on_failure,
                 move |work_item: WorkItem<Option<GridIconResult>>| {
                     // Skip queued work if the run was cancelled mid-scan.
                     if worker_cancel.is_cancelled() {
@@ -725,7 +726,7 @@ impl GoodWeaponScanner {
         let _ = emit_ready(leftover, &item_tx);
 
         drop(item_tx);
-        let (weapons, index_map) = worker_handle.join();
+        let (weapons, index_map) = worker_handle.join()?;
 
         // Write index map for debug image correlation (output position → folder name)
         if self.config.dump_images {

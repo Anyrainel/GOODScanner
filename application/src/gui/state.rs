@@ -646,7 +646,7 @@ pub struct AppState {
     pub scan_artifacts: bool,
     pub scan_achievements: bool,
     pub verbose: bool,
-    pub continue_on_failure: bool,
+    pub stop_on_failure: bool,
     pub dump_images: bool,
     pub hdr_mode: bool,
     pub dump_job_data: bool,
@@ -676,9 +676,6 @@ pub struct AppState {
     /// Controls whether POST /manage requests are executed or rejected (503).
     /// Shared with the server thread via Arc.
     pub server_enabled: Arc<AtomicBool>,
-    /// If true, continue scanning the full inventory after all targets are matched,
-    /// providing a complete artifact snapshot via GET /artifacts (slower).
-    pub update_inventory: bool,
     /// If true, narrow lock/unlock management to the artifact sets involved in the request.
     pub filter_involved_sets: bool,
     pub server_status: Arc<Mutex<TaskStatus>>,
@@ -696,10 +693,7 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let mut user_config = genshin_scanner::cli::load_config_or_default();
-        if user_config.filter_involved_sets {
-            user_config.update_inventory = false;
-        }
+        let user_config = genshin_scanner::cli::load_config_or_default();
         let lang = Lang::from_config_str(&user_config.lang);
         let config_snapshot = serde_json::to_string(&user_config).unwrap_or_default();
         Self {
@@ -709,7 +703,7 @@ impl AppState {
             scan_artifacts: user_config.scan_artifacts,
             scan_achievements: user_config.scan_achievements,
             verbose: user_config.verbose,
-            continue_on_failure: user_config.continue_on_failure,
+            stop_on_failure: user_config.stop_on_failure,
             dump_images: user_config.dump_images,
             hdr_mode: user_config.hdr_mode,
             dump_job_data: user_config.dump_job_data,
@@ -720,7 +714,6 @@ impl AppState {
             artifact_max_count: user_config.artifact_max_count,
             achievement_max_count: user_config.achievement_max_count,
             server_port: user_config.server_port,
-            update_inventory: user_config.update_inventory,
             filter_involved_sets: user_config.filter_involved_sets,
             user_config,
             update_state: Arc::new(Mutex::new(UpdateState::Checking)),
@@ -758,8 +751,7 @@ impl AppState {
         self.user_config.scan_artifacts = self.scan_artifacts;
         self.user_config.scan_achievements = self.scan_achievements;
         self.user_config.verbose = self.verbose;
-        super::log_bridge::set_verbose(self.verbose);
-        self.user_config.continue_on_failure = self.continue_on_failure;
+        self.user_config.stop_on_failure = self.stop_on_failure;
         self.user_config.dump_images = self.dump_images;
         self.user_config.hdr_mode = self.hdr_mode;
         self.user_config.hdr_white_point = yas::capture::constants::DEFAULT_HDR_WHITE_POINT;
@@ -772,10 +764,6 @@ impl AppState {
         self.user_config.artifact_max_count = self.artifact_max_count;
         self.user_config.achievement_max_count = self.achievement_max_count;
         self.user_config.server_port = self.server_port;
-        if self.filter_involved_sets {
-            self.update_inventory = false;
-        }
-        self.user_config.update_inventory = self.update_inventory;
         self.user_config.filter_involved_sets = self.filter_involved_sets;
     }
 
@@ -810,7 +798,7 @@ impl AppState {
             weapon_min_rarity: 3,
             artifact_min_rarity: 4,
             verbose: self.verbose,
-            continue_on_failure: self.continue_on_failure,
+            stop_on_failure: self.stop_on_failure,
             log_progress: true,
             dump_images: self.dump_images,
             hdr_mode: self.hdr_mode,
