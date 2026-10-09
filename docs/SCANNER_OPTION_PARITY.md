@@ -16,6 +16,24 @@ inventory; use the separate scan action, including recently acquired artifacts.
 Old `update_inventory` config values are retired. Normal inventory scan APIs
 and their complete snapshots remain available.
 
+## Star Rail character scan timing
+
+Characters alternate Details → Traces → Eidolons and Eidolons → Traces →
+Details. The next portrait is selected on the final tab, so each character
+needs only two tab switches and one screenshot per tab. Header, level and
+Traces OCR run on a scoped worker while the device switches and captures
+subsequent tabs. The header is read once on the first tab to identify the
+Traces layout in both directions. Every tab's header must match before the
+screenshots can be combined.
+
+New timing defaults are 500 ms for Details/Eidolons and Traces, and 200 ms
+before checking a portrait selection. Selection still requires a changed,
+stable name region; the wait alone never proves a successful character switch.
+Existing saved tab waits are preserved. Reset **Panel switch** and **Open
+Traces** in the timing settings to adopt the new defaults. **Character switch**
+is a separate setting and defaults to 200 ms when absent in old configs.
+Ambient menu animation is diagnostic-only and no longer emits repeated warnings.
+
 ## Remaining Star Rail work
 
 - TODO(hsr-manager-set-filter): implement game-side Relic set filtering, then

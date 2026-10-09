@@ -284,6 +284,7 @@ pub(super) fn timing_settings(
                                 (lang.t("详情面板切换", "Panel switch"), &mut timings.panel_switch_ms, defaults.panel_switch_ms, lang.t("角色详情、星魂以及首次选中背包物品共用此等待", "Shared wait for Character details, Eidolons and the first inventory selection")),
                                 (lang.t("打开行迹", "Open Traces"), &mut timings.traces_open_ms, defaults.traces_open_ms, lang.t("行迹界面加载后的等待时间", "Wait for the Traces screen to load")),
                                 (lang.t("角色栏翻页", "Character page"), &mut timings.character_page_ms, defaults.character_page_ms, lang.t("角色栏拖动后的等待，扫描和拖动诊断共用", "Wait after dragging the Character bar, shared with the drag diagnostic")),
+                                (lang.t("切换角色", "Character switch"), &mut timings.character_switch_ms, defaults.character_switch_ms, lang.t("点击下一名角色后，开始检查名字变化前的等待", "Wait after clicking the next Character before checking the name change")),
                             ]);
                             widgets::delay_group(ui, "hsr_timing_1", lang.t("截图与验证", "Capture & Verification"), lang, &mut [
                                 (lang.t("截图间隔", "Capture interval"), &mut timings.capture_interval_ms, defaults.capture_interval_ms, lang.t("比较稳定画面或选中框的两次截图之间的等待", "Wait between screenshots used to confirm a stable panel or selection")),

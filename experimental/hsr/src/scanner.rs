@@ -23,7 +23,7 @@ use crate::{
     observation::ValidatedObservationSnapshot,
     ocr::{
         detect_discard_state, detect_icon_state, InventoryKind, OcrField, OcrReader,
-        PaddleOcrReader, PanelParser, ParsedGearPanel, StatsPanelLayout,
+        PaddleOcrReader, PanelParser, ParsedCharacterPanel, ParsedGearPanel, StatsPanelLayout,
         MANAGED_ICON_CONFIDENCE_THRESHOLD,
     },
     reference::ReferenceCache,
@@ -181,6 +181,38 @@ pub struct ScanResult {
 struct InventoryScan<T> {
     items: Vec<T>,
     coverage: CoverageLevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CharacterTab {
+    Details,
+    Traces,
+    Eidolons,
+}
+
+impl CharacterTab {
+    fn order(reverse: bool) -> [Self; 3] {
+        if reverse {
+            [Self::Eidolons, Self::Traces, Self::Details]
+        } else {
+            [Self::Details, Self::Traces, Self::Eidolons]
+        }
+    }
+
+    fn button(self) -> Point {
+        match self {
+            Self::Details => layout::DETAILS_BUTTON,
+            Self::Traces => layout::TRACES_BUTTON,
+            Self::Eidolons => layout::EIDOLONS_BUTTON,
+        }
+    }
+}
+
+struct CharacterPages {
+    parsed: HsrResult<ParsedCharacterPanel>,
+    traces: Option<HsrResult<crate::scanner_export::CharacterDetails>>,
+    details: RgbImage,
+    last: RgbImage,
 }
 
 pub struct HsrScanner<D, R> {
@@ -1259,7 +1291,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
             self.reset_character_bar()?;
             self.issue_input(InputCommand::Click(layout::character_portrait(0)))?;
-            self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
+            self.wait_attended(Duration::from_millis(
+                self.config.timings.character_switch_ms,
+            ))?;
             let mut slot = 0;
 
             let limit = self.config.max_characters;
@@ -1271,33 +1305,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             // terminal evidence, never from this bound or an entered total.
             let visit_bound = self.references.character_count() * 2 + layout::CHARACTER_PAGE_SIZE;
             for index in 0..visit_bound {
-                let (eidolon, eidolon_frame) = self.read_eidolon_count(index)?;
-                self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-                self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-                // Parse the panel seen right after the eidolon screen, and check
-                // both show one breadcrumb, so a delayed click cannot pair
-                // one Character's eidolons with another's details.
-                let fresh = self.capture_stable()?;
-                if !glyphs_match(
-                    &CHARACTER_IDENTITY_REGION.crop(&eidolon_frame)?,
-                    &CHARACTER_IDENTITY_REGION.crop(&fresh)?,
-                ) {
-                    coverage_degraded = true;
-                    yas::log_warn!(
-                    "角色在读取星魂时发生了切换，可能漏掉了一名角色；覆盖率将标记为未知。",
-                    "The selected Character changed while eidolons were read, so one Character may have been skipped; coverage will be marked unknown."
-                );
-                }
-                let mut details = fresh;
-                self.observe_uid(&details);
-                let parsed = match dump_parsed_item("characters", index, &details, || {
-                    self.parser.parse_character_details(
-                        &details,
-                        &self.references,
-                        self.config.trailblazer.as_ref(),
-                        eidolon,
-                    )
-                }) {
+                let pages = self.read_character_pages(index, index % 2 == 1)?;
+                self.observe_uid(&pages.details);
+                let parsed = match pages.parsed {
                     Ok(parsed) => Some(parsed),
                     Err(error)
                         if !self.config.stop_on_failure
@@ -1338,9 +1348,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                     // page. Revisited identities are expected and are not exported
                     // twice; continue clicking through the rest of that page.
                     if seen.insert(parsed.observation.character_id) {
-                        if let Some(trace_details) =
-                            self.read_character_traces(index, &parsed.reference.path)?
-                        {
+                        if let Some(trace_details) = self.accept_character_traces(pages.traces)? {
                             export_details
                                 .characters
                                 .insert(parsed.observation.character_id, trace_details);
@@ -1361,18 +1369,12 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
                         yas::log_info!("角色进度：{}。", "Character progress: {}.", items.len());
                     }
                 }
-                // Traces replace the details panel. Returning first keeps the
-                // identity baseline on the same character; otherwise the traces
-                // screen is read as the next roster entry and the scan stops.
                 if limit > 0 && items.len() >= limit {
                     break;
                 }
-                self.issue_input(InputCommand::Click(layout::DETAILS_BUTTON))?;
-                self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-                details = self.capture_stable()?;
-                // The next iteration parses the panel captured after its eidolon
-                // read, so the frame that proved the advance is not kept.
-                match self.advance_character(&details, &mut slot, index) {
+                // Keep the final tab selected; the next character walks back
+                // through the same tabs without a redundant return to Details.
+                match self.advance_character(&pages.last, &mut slot, index) {
                     Ok(_) => {},
                     Err(error) if error.code() == "HSR-CHAR-END" => {
                         terminal_proven = true;
@@ -1506,7 +1508,9 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         ordinal: usize,
         timeout: Duration,
     ) -> HsrResult<RgbImage> {
-        self.wait_attended(Duration::from_millis(self.config.timings.key_settle_ms))?;
+        self.wait_attended(Duration::from_millis(
+            self.config.timings.character_switch_ms,
+        ))?;
         let deadline_steps = (timeout.as_millis()
             / u128::from(self.config.timings.poll_interval_ms.max(1)))
         .max(2) as usize;
@@ -1542,17 +1546,133 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         ))
     }
 
-    fn read_character_traces(
+    /// Only the OCR parser crosses threads. The device (including its Win32
+    /// capture resources) stays on the caller thread. A three-frame channel
+    /// bounds memory and lets forward OCR overlap both subsequent tab waits.
+    fn read_character_pages(&mut self, index: usize, reverse: bool) -> HsrResult<CharacterPages> {
+        let parser = &mut self.parser;
+        let device = &mut self.device;
+        let references = &self.references;
+        let trailblazer = self.config.trailblazer.as_ref();
+        let timings = &self.config.timings;
+        std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::sync_channel::<(CharacterTab, RgbImage)>(3);
+            let worker = scope.spawn(move || {
+                let mut parsed = None;
+                let mut identity = None;
+                let mut traces_frame = None;
+                let mut traces = None;
+                let mut eidolon = 0;
+                for (tab, frame) in receiver {
+                    // The common header is present on every tab. Resolve it on
+                    // the first screenshot so reverse-order Traces OCR can run
+                    // during the switch to Details, without reading the name twice.
+                    if identity.is_none() {
+                        identity = Some(dump_parsed_item(
+                            "character_identity",
+                            index,
+                            &frame,
+                            || parser.parse_character_identity(&frame, references, trailblazer),
+                        ));
+                    }
+                    match tab {
+                        CharacterTab::Details => {
+                            parsed = Some(match identity.as_ref().unwrap() {
+                                Ok(reference) => {
+                                    dump_parsed_item("characters", index, &frame, || {
+                                        parser.parse_character_level(&frame, reference.clone(), 0)
+                                    })
+                                },
+                                Err(error) => Err(error.clone()),
+                            });
+                        },
+                        CharacterTab::Traces => traces_frame = Some(frame),
+                        CharacterTab::Eidolons => {
+                            annotator::begin_item("character_eidolons", index, &frame);
+                            annotator::add_image("eidolons", &frame);
+                            eidolon = layout::EIDOLON_NODES
+                                .iter()
+                                .take_while(|&&node| eidolon_node_unlocked(&frame, node))
+                                .count() as u8;
+                            annotator::finalize_success(&format!("eidolon={eidolon}"));
+                        },
+                    }
+                    // Header OCR identifies the path before parsing Traces in either
+                    // direction; retain the frame until that reference is available.
+                    if let (Some(Ok(reference)), Some(frame)) = (&identity, &traces_frame) {
+                        traces = Some(dump_parsed_item("character_traces", index, frame, || {
+                            parser.parse_character_traces(frame, &reference.path)
+                        }));
+                        traces_frame = None;
+                    }
+                }
+                if let Some(Ok(character)) = &mut parsed {
+                    character.observation.eidolon = eidolon;
+                }
+                (parsed, traces)
+            });
+            let capture = (|| {
+                let mut details = None;
+                let mut last = None;
+                let mut identity = None;
+                for (position, tab) in CharacterTab::order(reverse).into_iter().enumerate() {
+                    // The previous character already left us on the first tab.
+                    if position > 0 {
+                        ensure_device_attended(device)?;
+                        device.input(InputCommand::Click(tab.button()))?;
+                        ensure_device_attended(device)?;
+                        let delay = if tab == CharacterTab::Traces {
+                            timings.traces_open_ms
+                        } else {
+                            timings.panel_switch_ms
+                        };
+                        device.wait(Duration::from_millis(delay))?;
+                    }
+                    ensure_device_attended(device)?;
+                    let frame = device.capture_client()?;
+                    ensure_device_attended(device)?;
+                    let current_identity = CHARACTER_IDENTITY_REGION.crop(&frame)?;
+                    if identity
+                        .as_ref()
+                        .is_some_and(|previous| !glyphs_match(previous, &current_identity))
+                    {
+                        return Err(HsrError::new("HSR-CHAR-PANEL-IDENTITY", hints::SCREEN_INVALID,
+                            "character identity changed between tabs; refusing to combine different characters"));
+                    }
+                    identity = Some(current_identity);
+                    if tab == CharacterTab::Details {
+                        details = Some(frame.clone());
+                    }
+                    last = Some(frame.clone());
+                    sender
+                        .send((tab, frame))
+                        .expect("OCR worker remains alive until capture finishes");
+                }
+                Ok((details.unwrap(), last.unwrap()))
+            })();
+            drop(sender);
+            // Join even when navigation fails, before exposing a cancellation or
+            // focus error. Partial frames never become a completed character.
+            let result = worker.join();
+            let (details, last) = capture?;
+            let (parsed, traces) = result.expect("character OCR worker panicked");
+            Ok(CharacterPages {
+                parsed: parsed.expect("completed character capture includes Details"),
+                traces,
+                details,
+                last,
+            })
+        })
+    }
+
+    fn accept_character_traces(
         &mut self,
-        index: usize,
-        path: &str,
+        result: Option<HsrResult<crate::scanner_export::CharacterDetails>>,
     ) -> HsrResult<Option<crate::scanner_export::CharacterDetails>> {
-        self.issue_input(InputCommand::Click(layout::TRACES_BUTTON))?;
-        self.wait_attended(Duration::from_millis(self.config.timings.traces_open_ms))?;
-        let frame = self.capture_stable()?;
-        match dump_parsed_item("character_traces", index, &frame, || {
-            self.parser.parse_character_traces(&frame, path)
-        }) {
+        let Some(result) = result else {
+            return Ok(None);
+        };
+        match result {
             Ok(details) => Ok(Some(details)),
             Err(error) if !self.config.stop_on_failure && traces_unreadable(&error) => {
                 yas::log_warn!(
@@ -1564,20 +1684,6 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
             },
             Err(error) => Err(error),
         }
-    }
-
-    fn read_eidolon_count(&mut self, index: usize) -> HsrResult<(u8, RgbImage)> {
-        self.issue_input(InputCommand::Click(layout::EIDOLONS_BUTTON))?;
-        self.wait_attended(Duration::from_millis(self.config.timings.panel_switch_ms))?;
-        let frame = self.capture_stable()?;
-        annotator::begin_item("character_eidolons", index, &frame);
-        annotator::add_image("eidolons", &frame);
-        let unlocked = layout::EIDOLON_NODES
-            .iter()
-            .take_while(|&&node| eidolon_node_unlocked(&frame, node))
-            .count();
-        annotator::finalize_success(&format!("eidolon={unlocked}"));
-        Ok((unlocked as u8, frame))
     }
 
     fn capture_stable(&mut self) -> HsrResult<RgbImage> {
@@ -1593,10 +1699,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         if chrome_settled(&first, &second) {
             return Ok(second);
         }
-        yas::log_warn!(
-            "菜单画面在等待后仍有动画，将使用最后一帧继续扫描。",
-            "The menu was still animating after the wait; continuing with the last frame."
-        );
+        log::debug!("Menu chrome differs between captures; using the latest frame (ambient animation is expected).");
         Ok(second)
     }
 
@@ -1664,21 +1767,7 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
     }
 
     fn ensure_attended(&self) -> HsrResult<()> {
-        if self.device.is_cancelled() {
-            return Err(HsrError::new(
-                "HSR-SCAN-CANCELLED",
-                hints::CANCELLED,
-                "cancellation became active during an attended scanner operation",
-            ));
-        }
-        if !self.device.is_foreground() {
-            return Err(HsrError::new(
-                "HSR-SCAN-FOCUS",
-                hints::FOCUS_REQUIRED,
-                "foreground ownership was lost during an attended scanner operation",
-            ));
-        }
-        Ok(())
+        ensure_device_attended(&self.device)
     }
 
     fn issue_input(&mut self, command: InputCommand) -> HsrResult<()> {
@@ -1692,6 +1781,24 @@ impl<D: HsrDevice, R: OcrReader> HsrScanner<D, R> {
         self.device.wait(duration)?;
         self.ensure_attended()
     }
+}
+
+fn ensure_device_attended<D: HsrDevice>(device: &D) -> HsrResult<()> {
+    if device.is_cancelled() {
+        return Err(HsrError::new(
+            "HSR-SCAN-CANCELLED",
+            hints::CANCELLED,
+            "cancellation became active during an attended scanner operation",
+        ));
+    }
+    if !device.is_foreground() {
+        return Err(HsrError::new(
+            "HSR-SCAN-FOCUS",
+            hints::FOCUS_REQUIRED,
+            "foreground ownership was lost during an attended scanner operation",
+        ));
+    }
+    Ok(())
 }
 
 /// Owned count from an inventory header. A missing slash concatenates the
@@ -3139,12 +3246,151 @@ mod tests {
     }
 
     #[test]
+    fn character_pages_capture_once_and_overlap_ocr_in_both_directions() {
+        struct PipelineDevice {
+            replay: ReplayDevice,
+            release: std::sync::mpsc::Sender<()>,
+            captures: usize,
+            waits: Vec<Duration>,
+        }
+        impl HsrDevice for PipelineDevice {
+            fn identity(&self) -> &crate::device::WindowIdentity {
+                self.replay.identity()
+            }
+            fn capture_client(&mut self) -> HsrResult<RgbImage> {
+                self.captures += 1;
+                if self.captures == 2 {
+                    self.release.send(()).unwrap();
+                }
+                self.replay.capture_client()
+            }
+            fn focus_and_verify(&mut self) -> HsrResult<()> {
+                self.replay.focus_and_verify()
+            }
+            fn is_foreground(&self) -> bool {
+                self.replay.is_foreground()
+            }
+            fn input(&mut self, command: InputCommand) -> HsrResult<()> {
+                self.replay.input(command)
+            }
+            fn wait(&mut self, duration: Duration) -> HsrResult<()> {
+                self.waits.push(duration);
+                self.replay.wait(duration)
+            }
+            fn is_cancelled(&self) -> bool {
+                self.replay.is_cancelled()
+            }
+        }
+        struct WaitingReader {
+            reader: ScriptedOcrReader,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl OcrReader for WaitingReader {
+            fn read(&mut self, field: OcrField, image: &RgbImage) -> HsrResult<String> {
+                if field == OcrField::CharacterName {
+                    // Serial OCR would time out: only the next tab's capture
+                    // releases this first page read. No sleep or speed assertion.
+                    self.release.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+                self.reader.read(field, image)
+            }
+        }
+        for reverse in [false, true] {
+            let frame = character_frame(Rgb([90, 120, 170]));
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let device = PipelineDevice {
+                replay: ReplayDevice::new(1280, 720, vec![frame; 3]),
+                release: sender,
+                captures: 0,
+                waits: Vec::new(),
+            };
+            let mut reader = ScriptedOcrReader::default()
+                .with(OcrField::CharacterName, ["三月七"])
+                .with(OcrField::CharacterLevel, ["等级 80/80"]);
+            for key in ["basic", "skill", "ult", "talent"] {
+                reader = reader.with(
+                    OcrField::CharacterSkill(key),
+                    [if key == "basic" { "1/6" } else { "1/10" }],
+                );
+            }
+            let mut scanner = HsrScanner::new(
+                device,
+                WaitingReader {
+                    reader,
+                    release: receiver,
+                },
+                two_character_references(),
+                ScanConfig::default(),
+            );
+            let pages = scanner.read_character_pages(0, reverse).unwrap();
+            let character = pages.parsed.unwrap();
+            assert_eq!(character.observation.character_id, 1001);
+            assert_eq!(character.observation.level, 80);
+            assert_eq!(character.observation.eidolon, 0);
+            assert!(pages.traces.unwrap().is_ok());
+            assert_eq!(scanner.device.captures, 3);
+            assert_eq!(
+                scanner.device.replay.commands(),
+                &[
+                    InputCommand::Click(layout::TRACES_BUTTON),
+                    InputCommand::Click(if reverse {
+                        layout::DETAILS_BUTTON
+                    } else {
+                        layout::EIDOLONS_BUTTON
+                    }),
+                ]
+            );
+            assert_eq!(scanner.device.waits, vec![Duration::from_millis(500); 2]);
+        }
+    }
+
+    #[test]
+    fn character_tab_identity_drift_never_combines_pages() {
+        let mut first = character_frame(Rgb([90, 120, 170]));
+        let mut changed = first.clone();
+        for y in 45..55 {
+            for x in 90..110 {
+                first.put_pixel(x, y, Rgb([240, 240, 240]));
+            }
+            for x in 140..160 {
+                changed.put_pixel(x, y, Rgb([240, 240, 240]));
+            }
+        }
+        for reverse in [false, true] {
+            let mut scanner =
+                scanner_with_frames(vec![first.clone(), changed.clone()], ScanConfig::default());
+            let error = scanner.read_character_pages(0, reverse).err().unwrap();
+            assert_eq!(error.code(), "HSR-CHAR-PANEL-IDENTITY");
+            assert_eq!(
+                scanner.device.commands(),
+                &[InputCommand::Click(layout::TRACES_BUTTON)]
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_during_character_tabs_joins_worker_and_stops_input() {
+        for reverse in [false, true] {
+            let frame = character_frame(Rgb([90, 120, 170]));
+            let mut scanner = scanner_with_frames(vec![frame; 3], ScanConfig::default());
+            scanner.device.cancel_after_commands(1);
+            let error = scanner.read_character_pages(0, reverse).err().unwrap();
+            assert_eq!(error.code(), "HSR-SCAN-CANCELLED");
+            assert_eq!(scanner.device.remaining_frames(), 2);
+            assert_eq!(
+                scanner.device.commands(),
+                &[InputCommand::Click(layout::TRACES_BUTTON)]
+            );
+        }
+    }
+
+    #[test]
     fn character_repetition_without_expected_count_remains_unknown() {
         let first = character_frame(Rgb([90, 120, 170]));
         let visually_changed_same_id = character_frame(Rgb([170, 90, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(12));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(7));
             frames.extend(std::iter::repeat_with(|| visually_changed_same_id.clone()).take(40));
             frames
         };
@@ -3157,8 +3403,10 @@ mod tests {
     fn stationary_roster_end_proves_completion_without_an_entered_total() {
         let first = character_frame(Rgb([90, 120, 170]));
         let second = character_frame(Rgb([170, 90, 120]));
-        let mut frames = vec![first.clone(); 12];
-        frames.extend(vec![second.clone(); 10]);
+        // Four reset captures + three tabs; subsequent entries need two
+        // identity-change captures + three tabs, with no return to Details.
+        let mut frames = vec![first.clone(); 7];
+        frames.extend(vec![second.clone(); 5]);
         // Model overlap: every visible position is visited, but identities
         // already seen on a clamped page are exported only once.
         for slot in 2..9 {
@@ -3168,7 +3416,7 @@ mod tests {
                 } else {
                     second.clone()
                 };
-                8
+                5
             ]);
         }
         frames.extend(vec![first; 2]);
@@ -3491,8 +3739,8 @@ mod tests {
         let extra = character_frame(Rgb([90, 170, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(12));
-            frames.extend(std::iter::repeat_with(|| second.clone()).take(10));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(7));
+            frames.extend(std::iter::repeat_with(|| second.clone()).take(5));
             frames.extend(std::iter::repeat_with(|| extra.clone()).take(2));
             frames
         };
@@ -3507,8 +3755,8 @@ mod tests {
         let second = character_frame(Rgb([170, 90, 120]));
         let frames = {
             let mut frames = Vec::new();
-            frames.extend(std::iter::repeat_with(|| first.clone()).take(12));
-            frames.extend(std::iter::repeat_with(|| second.clone()).take(10));
+            frames.extend(std::iter::repeat_with(|| first.clone()).take(7));
+            frames.extend(std::iter::repeat_with(|| second.clone()).take(5));
             frames.extend(std::iter::repeat_with(|| first.clone()).take(40));
             frames
         };

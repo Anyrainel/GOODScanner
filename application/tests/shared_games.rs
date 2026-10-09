@@ -481,7 +481,7 @@ fn obsolete_archive_import_path_is_removed_without_changing_saved_preferences() 
             saved["starRail"]["timings"] = serde_json::json!({
                 "menuOpenMs": 2100, "menuCloseMs": 1600, "inputSettleMs": 180,
                 "inventoryTabMs": 2100, "panelSwitchMs": 1100, "tracesOpenMs": 2600,
-                "characterPageMs": 700, "captureIntervalMs": 80, "keySettleMs": 18,
+                "characterPageMs": 700, "characterSwitchMs": 200, "captureIntervalMs": 80, "keySettleMs": 18,
                 "pollIntervalMs": 20, "selectionSettleMs": 280, "panelTimeoutMs": 2500,
                 "menuPollIntervalMs": 300, "statusToggleMs": 600
             });

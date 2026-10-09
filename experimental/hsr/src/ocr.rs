@@ -63,7 +63,7 @@ impl OcrField {
     }
 }
 
-pub trait OcrReader {
+pub trait OcrReader: Send {
     fn read(&mut self, field: OcrField, image: &RgbImage) -> HsrResult<String>;
 }
 
@@ -151,7 +151,7 @@ impl<M: OcrModels> PaddleOcrReader<M> {
     }
 }
 
-impl<M: OcrModels> OcrReader for PaddleOcrReader<M> {
+impl<M: OcrModels + Send> OcrReader for PaddleOcrReader<M> {
     fn read(&mut self, field: OcrField, image: &RgbImage) -> HsrResult<String> {
         let model = self.models.model(field);
         let infer = |image: &RgbImage| {
@@ -620,6 +620,16 @@ impl<R: OcrReader> PanelParser<R> {
         trailblazer: Option<&TrailblazerIdentity>,
         eidolon: u8,
     ) -> HsrResult<ParsedCharacterPanel> {
+        let reference = self.parse_character_identity(frame, references, trailblazer)?;
+        self.parse_character_level(frame, reference, eidolon)
+    }
+
+    pub fn parse_character_identity(
+        &mut self,
+        frame: &RgbImage,
+        references: &ReferenceCache,
+        trailblazer: Option<&TrailblazerIdentity>,
+    ) -> HsrResult<CharacterReference> {
         let name_crop = layout::CHARACTER_NAME.crop(frame)?;
         let name_text = self.reader.read(OcrField::CharacterName, &name_crop)?;
         annotator::record_ocr(
@@ -641,6 +651,15 @@ impl<R: OcrReader> PanelParser<R> {
             OcrField::CharacterName.dump_name().as_str(),
             &reference.game_id.to_string(),
         );
+        Ok(reference)
+    }
+
+    pub fn parse_character_level(
+        &mut self,
+        frame: &RgbImage,
+        reference: CharacterReference,
+        eidolon: u8,
+    ) -> HsrResult<ParsedCharacterPanel> {
         let level_crop = layout::CHARACTER_LEVEL.crop(frame)?;
         let level_text = self.reader.read(OcrField::CharacterLevel, &level_crop)?;
         annotator::record_ocr(
