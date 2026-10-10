@@ -23,16 +23,31 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
             ref latest_version,
             ref download_url,
         } => {
+            let current = genshin_scanner::updater::current_version_display();
+            let message = egui::RichText::new(l.t(
+                &format!("发现新版本: {} → {}", current, latest_version),
+                &format!("Update available: {} → {}", current, latest_version),
+            ))
+            .strong()
+            .family(egui::FontFamily::Name("bold".into()))
+            .color(egui::Color32::from_rgb(255, 200, 50));
+            let download = l.t("下载更新", "Download Update");
+            let skip = l.t("跳过", "Skip");
+            let text_width = |text: egui::WidgetText, style| {
+                text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
+                    .size()
+                    .x
+            };
+            let row_width = text_width(message.clone().into(), egui::TextStyle::Body)
+                + text_width(download.into(), egui::TextStyle::Button)
+                + text_width(skip.into(), egui::TextStyle::Button)
+                + 4.0 * ui.spacing().button_padding.x
+                + 2.0 * ui.spacing().item_spacing.x;
+            let leading_space = ((ui.available_width() - row_width) / 2.0).max(0.0);
             ui.horizontal(|ui| {
-                let current = genshin_scanner::updater::current_version_display();
-                ui.label(
-                    egui::RichText::new(l.t(
-                        &format!("发现新版本: {} → {}", current, latest_version),
-                        &format!("Update available: {} → {}", current, latest_version),
-                    ))
-                    .color(egui::Color32::from_rgb(255, 200, 50)),
-                );
-                if ui.add_enabled(!game_busy, egui::Button::new(l.t("下载更新", "Download Update")))
+                ui.add_space(leading_space);
+                ui.label(message);
+                if ui.add_enabled(!game_busy, egui::Button::new(download))
                     .on_disabled_hover_text(l.t("请先停止当前任务。", "Stop the current task first."))
                     .clicked() {
                     let arc = update_state.clone();
@@ -84,7 +99,7 @@ pub fn show(ctx: &egui::Context, l: Lang, update_state: &Arc<Mutex<UpdateState>>
                         ));
                     }
                 }
-                if ui.button(l.t("跳过", "Skip")).clicked() {
+                if ui.button(skip).clicked() {
                     *update_state.lock().unwrap() = UpdateState::None;
                 }
             });

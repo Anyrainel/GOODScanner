@@ -767,5 +767,22 @@ fn setup_fonts(ctx: &egui::Context) {
         }
     }
 
+    let mut bold_fonts = Vec::new();
+    for (name, path) in [
+        ("system_bold", "C:\\Windows\\Fonts\\segoeuib.ttf"),
+        ("system_cjk_bold", "C:\\Windows\\Fonts\\msyhbd.ttc"),
+    ] {
+        if let Ok(data) = std::fs::read(path) {
+            fonts.font_data.insert(
+                name.to_owned(),
+                std::sync::Arc::new(egui::FontData::from_owned(data)),
+            );
+            bold_fonts.push(name.to_owned());
+        }
+    }
+    bold_fonts.extend(fonts.families[&egui::FontFamily::Proportional].iter().cloned());
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("bold".into()), bold_fonts);
     ctx.set_fonts(fonts);
 }
