@@ -37,6 +37,12 @@ pub fn run(
             state.user_config.traveler_name = "旅行者".into();
             state.names_need_attention = false;
             *state.update_state.lock().unwrap() = UpdateState::None;
+            if scenario == "update" {
+                *state.update_state.lock().unwrap() = UpdateState::Available {
+                    latest_version: "v99.0.0".into(),
+                    download_url: "https://example.invalid/preview-only".into(),
+                };
+            }
             let (mut config, _) = ApplicationConfigStore::for_executable_dir(
                 &std::env::temp_dir().join("ggscanner-ui-preview"),
             );
@@ -137,11 +143,11 @@ pub fn run(
                     *status.lock().unwrap() =
                         TaskStatus::Running(UiText::new("正在导出数据", "Saving export"))
                 },
-                "ready" | "login" => {},
+                "ready" | "login" | "update" => {},
                 _ => panic!("unsupported preview scenario"),
             }
             #[cfg(feature = "capture")]
-            if tab == ToolTab::Capture && scenario != "ready" {
+            if tab == ToolTab::Capture && !matches!(scenario.as_str(), "ready" | "update") {
                 match game {
                     Game::Genshin => app.capture_tab.preview_feedback(&scenario),
                     Game::StarRail => app.star_rail.capture.preview_feedback(&scenario),

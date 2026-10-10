@@ -15,7 +15,7 @@ pub fn product_name() -> &'static str {
 pub fn site(game: Game) -> (&'static str, &'static str) {
     match game {
         Game::Genshin => ("GGArtifact", "https://ggartifact.com"),
-        Game::StarRail => ("GGStarRail", "https://hsr.ggartifact.com"),
+        Game::StarRail => ("GGArtifact", "https://hsr.ggartifact.com"),
     }
 }
 
@@ -204,9 +204,14 @@ pub fn sidebar(ui: &mut egui::Ui, lang: &mut Lang, navigation: &mut GameNavigati
                 navigation.select_tab(ToolTab::Credits);
             }
             let (label, url) = site(navigation.active_game);
-            if theme::text_button(ui, label, egui::vec2(ui.available_width(), 30.0), false)
-                .on_hover_text(url)
-                .clicked()
+            if theme::text_button(
+                ui,
+                &format!("{label} ↗"),
+                egui::vec2(ui.available_width(), 30.0),
+                false,
+            )
+            .on_hover_text(url)
+            .clicked()
             {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(url));
             }
