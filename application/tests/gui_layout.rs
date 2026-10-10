@@ -590,7 +590,7 @@ fn refresh_heading_borders_fit_the_pane_when_hovered_and_pressed() {
             let initial = draw(vec![]);
             let point = painted_text(&initial.shapes)
                 .into_iter()
-                .find(|(text, _)| text == lang.t("刷新数据", "Refresh data"))
+                .find(|(text, _)| text == lang.t("刷新基础数据", "Refresh base data"))
                 .unwrap()
                 .1;
             for events in [
