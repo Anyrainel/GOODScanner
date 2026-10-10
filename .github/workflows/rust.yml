@@ -78,8 +78,8 @@ jobs:
             tag = $env:VERSION
             revision = [int]${{ github.run_number }}
             assets = @{
-              scanner = "GOODScanner-${{ github.run_number }}.exe"
-              capture = "GOODCapture-${{ github.run_number }}.exe"
+              scanner = "GOODScanner.exe"
+              capture = "GOODCapture.exe"
             }
           } |
             ConvertTo-Json | Set-Content -Encoding utf8 update.json
@@ -102,7 +102,6 @@ jobs:
           foreach ($edition in $editions) {
             $source = "target/release/$($edition.Canonical).exe"
             Copy-Item $source "target/release/$($edition.Legacy).exe"
-            Copy-Item $source "target/release/$($edition.Legacy)-${{ github.run_number }}.exe"
           }
 
       - name: Upload Build Artifacts
@@ -139,6 +138,4 @@ jobs:
             target/release/GOODScanner.exe
             target/release/GOODCapture.exe
             update.json
-            target/release/GOODScanner-${{ github.run_number }}.exe
-            target/release/GOODCapture-${{ github.run_number }}.exe
           make_latest: true

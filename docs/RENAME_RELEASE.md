@@ -21,14 +21,15 @@ repository-rename redirect chains, and uses stable edition roles in `update.json
   "tag": "v2026.10.07",
   "revision": 125,
   "assets": {
-    "scanner": "GOODScanner-125.exe",
-    "capture": "GOODCapture-125.exe"
+    "scanner": "GOODScanner.exe",
+    "capture": "GOODCapture.exe"
   }
 }
 ```
 
 The example revision is illustrative; CI writes its actual run number. These
-filenames are complete uploaded asset names, including their revision suffix.
+filenames are complete uploaded asset names. Build revisions stay in metadata;
+each edition is uploaded once, without a revision suffix.
 Old manifests without `assets` remain supported. Existing updaters ignore the
 additional fields.
 
@@ -39,9 +40,9 @@ local remotes to `https://github.com/Anyrainel/GGScanner.git`. Do not reuse the 
 repository name: GitHub's redirect is needed by older installed versions.
 
 At that cutoff, change CI's manifest roles to
-`scanner: GGScannerOCR-<revision>.exe` and `capture: GGScanner-<revision>.exe`.
+`scanner: GGScannerOCR.exe` and `capture: GGScanner.exe`.
 Every release must continue uploading copies under both old names
-(`GOODScanner.exe`, `GOODCapture.exe`) and their revision-specific names. Users
+(`GOODScanner.exe`, `GOODCapture.exe`). Users
 can skip the bridge release, so a one-release alias window is insufficient.
 Aliases must preserve edition: old GOODScanner receives the OCR build; old
 GOODCapture receives the capture build.

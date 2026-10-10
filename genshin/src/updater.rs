@@ -113,6 +113,8 @@ impl ResolvedRelease {
         // inventory also allows a renamed client to update from legacy releases.
         candidates.push(revision_asset_name(legacy, self.revision));
         candidates.push(revision_asset_name(renamed, self.revision));
+        candidates.push(legacy.to_owned());
+        candidates.push(renamed.to_owned());
         let filename = match &self.published_assets {
             Some(assets) => candidates
                 .iter()
@@ -716,6 +718,41 @@ mod tests {
                     .collect(),
             ),
         }
+    }
+
+    #[test]
+    fn revision_metadata_does_not_require_numbered_downloads() {
+        let build: ReleaseBuild = serde_json::from_str(
+            r#"{"tag":"v2026.10.10","revision":81,"assets":{"scanner":"GOODScanner.exe","capture":"GOODCapture.exe"}}"#,
+        )
+        .unwrap();
+        let mut release = release_with_inventory(&["GOODScanner.exe", "GOODCapture.exe"]);
+        release.tag = build.tag;
+        release.revision = build.revision;
+        release.assets = build.assets;
+        for inventory_available in [true, false] {
+            if !inventory_available {
+                release.published_assets = None;
+            }
+            for (edition, filename) in [
+                (ASSET_SCANNER, "GOODScanner.exe"),
+                (ASSET_CAPTURE, "GOODCapture.exe"),
+            ] {
+                assert!(release
+                    .download_url(edition)
+                    .unwrap()
+                    .unwrap()
+                    .ends_with(filename));
+            }
+        }
+        release.published_assets =
+            release_with_inventory(&["GOODScanner.exe", "GOODCapture.exe"]).published_assets;
+        release.assets = ReleaseAssets::default();
+        assert!(release
+            .download_url(ASSET_CAPTURE)
+            .unwrap()
+            .unwrap()
+            .ends_with("/GOODCapture.exe"));
     }
 
     #[test]
